@@ -1,4 +1,4 @@
-import { defineBlockSchema, type SchemaToModel } from '@blocksuite/store'
+import { defineBlockSchema, type SchemaToModel } from '@/lib/blocksuite-store'
 
 // Pure `@blocksuite/store` schema — see `teable-database/schema.ts` for why
 // the flavour is `affine:embed-*` (required to satisfy `affine:note`'s

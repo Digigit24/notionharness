@@ -1,5 +1,5 @@
-import { ConfigExtension, type ExtensionType } from '@blocksuite/block-std'
-import { InlineSpecExtension } from '@blocksuite/affine-components/rich-text'
+import { ConfigExtension, type ExtensionType } from '@/lib/blocksuite-block-std'
+import { InlineSpecExtension } from '@/lib/blocksuite-affine-components'
 import { html } from 'lit'
 import { getMenusWithMentions } from './menu'
 import { MentionAttributeSchema } from './schema'

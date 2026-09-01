@@ -1,5 +1,5 @@
-import { DocCollection, Schema, Text, type Doc } from '@blocksuite/store'
-import { AffineSchemas } from '@blocksuite/blocks/schemas'
+import { DocCollection, Schema, Text, type Doc } from '@/lib/blocksuite-store'
+import { AffineSchemas } from '@/lib/blocksuite-blocks'
 import { TeableDatabaseBlockSchema } from '@/components/editor/blocks/teable-database/schema'
 import { TeableNativeBlockSchema } from '@/components/editor/blocks/teable-native/schema'
 import type { Payload } from 'payload'

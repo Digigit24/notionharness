@@ -1,4 +1,4 @@
-import { BlockViewExtension, FlavourExtension, type ExtensionType } from '@blocksuite/block-std'
+import { BlockViewExtension, FlavourExtension, type ExtensionType } from '@/lib/blocksuite-block-std'
 import { literal } from 'lit/static-html.js'
 
 export const TeableDatabaseBlockSpec: ExtensionType[] = [

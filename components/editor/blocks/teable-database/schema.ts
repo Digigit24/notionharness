@@ -1,4 +1,4 @@
-import { defineBlockSchema, type SchemaToModel } from '@blocksuite/store'
+import { defineBlockSchema, type SchemaToModel } from '@/lib/blocksuite-store'
 
 // Pure `@blocksuite/store` schema definition — no `lit`/DOM imports — so it can be
 // registered from both the browser (BlockSuiteEditor.tsx) and the headless

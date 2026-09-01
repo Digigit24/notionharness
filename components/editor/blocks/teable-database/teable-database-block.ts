@@ -1,4 +1,4 @@
-import { BlockComponent } from '@blocksuite/block-std'
+import { BlockComponent } from '@/lib/blocksuite-block-std'
 import { html } from 'lit'
 import type { TeableDatabaseBlockModel } from './schema'
 import { smallButtonClass, type ConnectionOption, type TeableViewController, type TeableViewHost } from './teable-types'

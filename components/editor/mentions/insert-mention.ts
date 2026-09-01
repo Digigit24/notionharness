@@ -1,4 +1,4 @@
-import type { AffineInlineEditor } from '@blocksuite/affine-components/rich-text'
+import type { AffineInlineEditor } from '@/lib/blocksuite-affine-components'
 import type { MentionAttribute } from './schema'
 
 // A literal single space, mirroring REFERENCE_NODE — the delta needs some

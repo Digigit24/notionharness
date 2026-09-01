@@ -1,7 +1,7 @@
 import { html, render } from 'lit'
 import { createElement, type ReactElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { createRecordDetail, type DetailSlotProps, type SingleView, type UniComponent } from '@blocksuite/data-view'
+import { createRecordDetail, type DetailSlotProps, type SingleView, type UniComponent } from '@/lib/blocksuite-data-view'
 import { RecordDetailHeader } from './record-detail-header'
 import { RecordDetailNote } from './record-detail-note'
 
