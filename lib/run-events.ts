@@ -13,7 +13,7 @@ export type RunEvent =
   | { type: 'terminal'; id: string; chunk: string }
   | { type: 'usage'; provider: string; model: string; tokens: number; costTicks: number }
   | { type: 'session'; externalId: string }
-  | { type: 'done'; status: 'ok' | 'error' | 'cancelled' }
+  | { type: 'done'; status: 'ok' | 'error' | 'cancelled'; reason?: string }
 
 export interface RunEventEnvelope {
   runId: string

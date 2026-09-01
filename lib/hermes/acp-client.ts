@@ -184,10 +184,9 @@ function extractTextContent(content: unknown): string | null {
   return parts.join('')
 }
 
-function extractToolInput(u: { [k: string]: unknown }): unknown {
-  if ('rawInput' in u) return u.rawInput
-  if ('input' in u) return u.input
-  return null
+function extractToolInput(u: { [k: string]: unknown }): Record<string, unknown> {
+  const raw = 'rawInput' in u ? u.rawInput : 'input' in u ? u.input : null
+  return raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
 }
 
 function normaliseToolStatus(
@@ -275,19 +274,16 @@ function normaliseSessionUpdate(update: unknown): RunEvent | null {
             cost?: { ticks?: number }
           }
         | undefined
+      // Canonical `usage` RunEvent carries one total `tokens` count, not an
+      // input/output breakdown — the breakdown isn't lost, ACP's own
+      // `usage_update` notification is still available to anything that
+      // subscribes to the raw stream directly.
       return {
         type: 'usage',
-        provider: usage?.provider ?? null,
-        model: usage?.model ?? null,
-        tokens:
-          usage?.inputTokens !== undefined || usage?.outputTokens !== undefined
-            ? {
-                input: usage?.inputTokens ?? 0,
-                output: usage?.outputTokens ?? 0,
-                total: usage?.totalTokens ?? (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0),
-              }
-            : null,
-        costTicks: usage?.cost?.ticks ?? null,
+        provider: usage?.provider ?? 'unknown',
+        model: usage?.model ?? 'unknown',
+        tokens: usage?.totalTokens ?? (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0),
+        costTicks: usage?.cost?.ticks ?? 0,
       }
     }
     case 'plan': {
@@ -343,35 +339,38 @@ export async function sendTurn(opts: SendTurnOptions): Promise<SendTurnResult> {
     const turnPromise = new Promise<void>((resolve, reject) => {
       void app.connectWith(stream, async (ctx) => {
         try {
-          const init = await ctx.initialize({
+          // `ClientContext` has no dedicated `.initialize()`/`.newSession()`
+          // methods — confirmed against the installed SDK's own type
+          // declarations and its `examples/client.js`. Requests go through
+          // the generic `.request(method, params)`, and session creation is
+          // handled by `buildSession(...).start()`, which returns an
+          // `ActiveSession` already carrying `sessionId` — no separate
+          // `session/new` round-trip needed.
+          const init = await ctx.request('initialize', {
             protocolVersion: PROTOCOL_VERSION,
             clientInfo: { name: 'notionforge-harness', version: '0.1.0' },
             clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: true },
           })
-          agentName = init.agentInfo.name
-          // Emit a session event with the agent's name first so the harness
-          // sees "who" answered; then the real session id once newSession
-          // resolves (roadmap 3.2 §1: pin immediately).
-          pushEvent({ type: 'session', externalId: init.agentInfo.name })
+          // `agentInfo` is nullable per the ACP schema ("in future versions
+          // of the protocol, this will be required").
+          agentName = init.agentInfo?.name ?? 'unknown'
+          pushEvent({ type: 'session', externalId: agentName })
 
-          const newRes = await ctx.newSession({
-            cwd: opts.cwd,
-            mcpServers: (opts.mcpServers ?? []) as never,
-          })
-          pinnedSessionId = newRes.sessionId
-          pushEvent({ type: 'session', externalId: newRes.sessionId })
-
-          const sb = ctx.buildSession({ cwd: opts.cwd, mcpServers: (opts.mcpServers ?? []) as never })
+          const mcpServers = (opts.mcpServers ?? []) as never[]
+          const sb = mcpServers.length > 0 ? ctx.buildSession({ cwd: opts.cwd, mcpServers }) : ctx.buildSession(opts.cwd)
           const active = await sb.start()
+          // Pin immediately once the session exists (roadmap 3.2 §1).
+          pinnedSessionId = active.sessionId
+          pushEvent({ type: 'session', externalId: active.sessionId })
+
           await active.prompt(opts.text)
           for (;;) {
             const msg = await active.nextUpdate()
             if (msg.kind === 'stop') {
-              const stop = (msg as { stopReason?: string }).stopReason ?? 'end_turn'
               pushEvent({
                 type: 'done',
-                status: stop === 'cancelled' ? 'cancelled' : 'ok',
-                reason: stop,
+                status: msg.stopReason === 'cancelled' ? 'cancelled' : 'ok',
+                reason: msg.stopReason,
               })
               break
             }

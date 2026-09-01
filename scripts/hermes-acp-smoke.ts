@@ -70,7 +70,9 @@ async function main() {
   console.log(`[smoke] monotonic seq:              ${monotonic ? 'OK' : 'BROKEN'}`)
   console.log(`[smoke] pinned session id present:  ${sessionId ? 'OK' : 'MISSING'}`)
   console.log(`[smoke] all envelopes carry runId:  ${wrongRunId === 0 ? 'OK' : `${wrongRunId} MISMATCH`}`)
-  const done = envelopes.find((e) => e.event.type === 'done')?.event
+  const done = envelopes.find(
+    (e): e is RunEventEnvelope & { event: Extract<RunEvent, { type: 'done' }> } => e.event.type === 'done',
+  )?.event
   console.log(
     `[smoke] done event:                 ${done ? `${done.status}${done.reason ? ` (${done.reason})` : ''}` : 'MISSING'}`,
   )
@@ -97,6 +99,14 @@ function format(env: RunEventEnvelope): string {
       return `session    externalId=${ev.externalId}`
     case 'done':
       return `done       status=${ev.status}${ev.reason ? `  reason=${ev.reason}` : ''}`
+    case 'permission':
+      return `permission id=${ev.id}  title=${ev.title}`
+    case 'file_change':
+      return `file_change path=${ev.path}`
+    case 'terminal':
+      return `terminal   id=${ev.id}  chunk=${JSON.stringify(truncate(ev.chunk, 120))}`
+    default:
+      return `unknown    ${JSON.stringify(ev)}`
   }
 }
 
