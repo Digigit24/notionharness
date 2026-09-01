@@ -38,6 +38,21 @@ export const Workspaces: CollectionConfig = {
       relationTo: 'users',
       hasMany: true,
     },
+    {
+      name: 'taskPrefix',
+      type: 'text',
+      admin: {
+        description: 'Short, human-readable task-id prefix for this workspace (e.g. "ENG") — combined with taskCounter for IDs like ENG-142. Not yet surfaced in any UI.',
+      },
+    },
+    {
+      name: 'taskCounter',
+      type: 'number',
+      defaultValue: 0,
+      admin: {
+        description: 'Last-issued sequence number for this workspace\'s human-readable task IDs — increment and read atomically when actually wiring ENG-142-style IDs.',
+      },
+    },
   ],
 }
 
