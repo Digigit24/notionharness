@@ -32,12 +32,12 @@ export function Bubble({ type = 'text', children, className, metadata }: BubbleP
       {type === 'thinking' && <span className="text-xs text-gray-600 dark:text-gray-400">💭 </span>}
       {type === 'tool-call' && (
         <span className="text-xs text-purple-600 dark:text-purple-400">
-          🔧 {metadata?.toolName && `${metadata.toolName}`}:{' '}
+          🔧 {metadata?.toolName ? String(metadata.toolName) : ''}:{' '}
         </span>
       )}
       {type === 'tool-result' && (
         <span className="text-xs text-green-600 dark:text-green-400">
-          ✓ {metadata?.isError && '(error)'}{' '}
+          ✓ {metadata?.isError ? '(error)' : ''}{' '}
         </span>
       )}
       <span>{children}</span>

@@ -3,7 +3,8 @@
 import { useState, useEffect } from 'react'
 import { Thread } from './Thread'
 import { adaptRunEventsToThread, streamRunEventsToThread } from '@/lib/hermes/runEvent-adapter'
-import type { ChatThread, RunEventEnvelope } from '@/lib/hermes/runEvent-adapter'
+import type { ChatThread } from '@/lib/hermes/runEvent-adapter'
+import type { RunEventEnvelope } from '@/lib/run-events'
 
 /**
  * Demo component for testing Thread with hermes-acp smoke test data
