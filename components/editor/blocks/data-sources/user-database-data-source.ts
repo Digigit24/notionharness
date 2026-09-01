@@ -1,7 +1,10 @@
 import type { PropertyMetaConfig, TypeInstance } from '@blocksuite/data-view'
 import { propertyPresets } from '@blocksuite/data-view/property-presets'
 import type { InsertToPosition } from '@blocksuite/affine-shared/utils'
+import { signal, type ReadonlySignal } from '@preact/signals-core'
 import { GenericDataSource, type GenericField, type GenericRecord } from './generic-data-source'
+import { relationPropertyConfig } from './relation-property'
+import { openGenericRecordDetailPanel } from './generic-record-detail-panel'
 
 // ROADMAP P2.3/D4 — backs an `affine:database` block with the generic
 // `databases`/`database-rows` Payload collections instead of any system
@@ -26,6 +29,11 @@ interface DatabaseDoc {
   fields?: GenericField[] | null
 }
 
+interface TargetDatabaseEntry {
+  fields: GenericField[]
+  records: GenericRecord[]
+}
+
 export class UserDatabaseDataSource extends GenericDataSource {
   get propertyMetas(): PropertyMetaConfig[] {
     return [
@@ -35,11 +43,32 @@ export class UserDatabaseDataSource extends GenericDataSource {
       propertyPresets.selectPropertyConfig,
       propertyPresets.multiSelectPropertyConfig,
       propertyPresets.datePropertyConfig,
+      relationPropertyConfig,
     ] as PropertyMetaConfig[]
   }
 
-  constructor(private readonly _databaseId: number) {
+  // NOTION-PARITY 1 — cache of other databases' fields+rows, populated
+  // lazily by `loadTargetDatabase` as relation cells need them (a relation
+  // field points at a database this data source doesn't otherwise load at
+  // all). Signal-backed so cell renderers (which extend `SignalWatcher`)
+  // re-render automatically once an async load resolves.
+  private readonly _targetDatabaseCache = signal<Map<number, TargetDatabaseEntry>>(new Map())
+
+  get targetDatabaseCache$(): ReadonlySignal<Map<number, TargetDatabaseEntry>> {
+    return this._targetDatabaseCache
+  }
+
+  constructor(
+    private readonly _databaseId: number,
+    private readonly _workspaceId: number,
+  ) {
     super()
+  }
+
+  /** Public for `generic-record-detail-panel.ts`'s reverse-link lookup, which
+   * needs to know which database the row it's showing actually belongs to. */
+  get databaseId(): number {
+    return this._databaseId
   }
 
   protected async fetchFields(): Promise<GenericField[]> {
@@ -74,6 +103,103 @@ export class UserDatabaseDataSource extends GenericDataSource {
         body: JSON.stringify({ fields: this._fields.value }),
       })
     })
+  }
+
+  // --- relations (NOTION-PARITY 1) ------------------------------------------
+
+  /** Every `databases` doc in this data source's workspace, for the "link to
+   * database" picker (`relation-property.ts`'s `_pickTargetDatabase`). */
+  async listDatabases(): Promise<{ id: number; name: string }[]> {
+    const res = await userDbFetch(`/api/user-databases?workspaceId=${this._workspaceId}`)
+    const json = await res.json().catch(() => ({ docs: [] }))
+    // Deliberately includes this data source's own database — self-reference
+    // is a legitimate relation (e.g. a "parent task" field on `tasks` itself).
+    return Array.isArray(json.docs) ? json.docs : []
+  }
+
+  /** Fetches+caches a target database's fields/rows for relation cell
+   * rendering/picking. Idempotent — returns the cached entry if already
+   * loaded, never refetches on every cell render. */
+  async loadTargetDatabase(targetDatabaseId: number): Promise<TargetDatabaseEntry> {
+    const cached = this._targetDatabaseCache.value.get(targetDatabaseId)
+    if (cached) return cached
+    const [fieldsRes, rowsRes] = await Promise.all([
+      userDbFetch(`/api/user-databases/${targetDatabaseId}`),
+      userDbFetch(`/api/user-databases/${targetDatabaseId}/rows`),
+    ])
+    const fieldsJson = await fieldsRes.json().catch(() => null)
+    const rowsJson = await rowsRes.json().catch(() => ({ docs: [] }))
+    const fields: GenericField[] = Array.isArray(fieldsJson?.doc?.fields) ? fieldsJson.doc.fields : []
+    const rowDocs: { id: number; cells?: Record<string, unknown> | null }[] = Array.isArray(rowsJson.docs) ? rowsJson.docs : []
+    const entry: TargetDatabaseEntry = {
+      fields,
+      records: rowDocs.map((d) => ({ id: String(d.id), fields: d.cells ?? {} })),
+    }
+    const next = new Map(this._targetDatabaseCache.value)
+    next.set(targetDatabaseId, entry)
+    this._targetDatabaseCache.value = next
+    return entry
+  }
+
+  /** Best-effort display text for a linked row: its target database's
+   * primary field value. Degrades to the raw row id if the target database
+   * hasn't finished loading yet (never silently blank — same "don't let
+   * content disappear" standard used for markdown export elsewhere in this
+   * app) or the row was deleted since the link was made. */
+  getTargetRowLabel(targetDatabaseId: number, rowId: string): string {
+    const entry = this._targetDatabaseCache.value.get(targetDatabaseId)
+    if (!entry) return rowId
+    const row = entry.records.find((r) => r.id === rowId)
+    if (!row) return `(deleted row ${rowId})`
+    const primaryFieldId = entry.fields[0]?.id
+    const label = primaryFieldId ? row.fields[primaryFieldId] : undefined
+    return typeof label === 'string' && label.trim() ? label : 'Untitled'
+  }
+
+  /** NOTION-PARITY 1, requirement 4 — bidirectional visibility computed at
+   * read time, not stored: for a row in `targetDatabaseId`, finds every OTHER
+   * database in the same workspace with a relation field pointing back at
+   * `targetDatabaseId`, and returns whichever of THEIR rows reference this
+   * one. No reciprocal write on link/unlink — avoids write-amplification and
+   * the two-sided-consistency bugs that come with it; the cost is a scan
+   * across the workspace's databases on read, acceptable at this scale (a
+   * single user's workspace, not a multi-tenant table). */
+  async getReverseLinks(targetDatabaseId: number, rowId: string): Promise<{ databaseId: number; databaseName: string; fieldId: string; rowId: string; label: string }[]> {
+    const databases = await this.listDatabases()
+    const results: { databaseId: number; databaseName: string; fieldId: string; rowId: string; label: string }[] = []
+    for (const db of databases) {
+      const entry = await this.loadTargetDatabase(db.id)
+      const relationFields = entry.fields.filter((f) => f.type === 'relation' && f.options?.targetDatabaseId === targetDatabaseId)
+      if (relationFields.length === 0) continue
+      const primaryFieldId = entry.fields[0]?.id
+      for (const field of relationFields) {
+        for (const row of entry.records) {
+          const linked = row.fields[field.id]
+          if (Array.isArray(linked) && linked.includes(rowId)) {
+            const label = primaryFieldId ? row.fields[primaryFieldId] : undefined
+            results.push({
+              databaseId: db.id,
+              databaseName: db.name,
+              fieldId: field.id,
+              rowId: row.id,
+              label: typeof label === 'string' && label.trim() ? label : 'Untitled',
+            })
+          }
+        }
+      }
+    }
+    return results
+  }
+
+  /** Opens the real BlockSuite `RecordDetail` panel for a linked row —
+   * requirement 5: same click-to-detail UX Teable's relation chips already
+   * have. Builds a fresh `UserDatabaseDataSource` + its default table view
+   * for the *target* database (this data source only holds its own). */
+  async openRelatedRow(targetDatabaseId: number, rowId: string): Promise<void> {
+    const target = new UserDatabaseDataSource(targetDatabaseId, this._workspaceId)
+    await target.refresh()
+    const view = target.viewManager.viewGet('table-view')
+    openGenericRecordDetailPanel({ view, rowId })
   }
 
   // --- cells --------------------------------------------------------------
@@ -159,9 +285,21 @@ export class UserDatabaseDataSource extends GenericDataSource {
     if (!field) return
     const isSelect = toType === 'select' || toType === 'multi-select'
     const wasSelect = field.type === 'select' || field.type === 'multi-select'
+    const isRelation = toType === 'relation'
     this._fields.value = this._fields.value.map((f) =>
       f.id === propertyId
-        ? { ...f, type: toType, options: isSelect ? { choices: wasSelect ? (f.options?.choices ?? []) : [] } : undefined }
+        ? {
+            ...f,
+            type: toType,
+            options: isSelect
+              ? { choices: wasSelect ? (f.options?.choices ?? []) : [] }
+              : isRelation
+                // No `targetDatabaseId` yet — `RelationCellEditing` prompts to
+                // pick one on first edit (unless retyping an existing relation
+                // field, which keeps whatever it already pointed at).
+                ? { targetDatabaseId: f.options?.targetDatabaseId, cardinality: f.options?.cardinality ?? 'many' }
+                : undefined,
+          }
         : f,
     )
     this._persistFields()
@@ -169,18 +307,33 @@ export class UserDatabaseDataSource extends GenericDataSource {
 
   propertyDataGet(propertyId: string): Record<string, unknown> {
     const field = this._fieldById(propertyId)
-    if (!field || (field.type !== 'select' && field.type !== 'multi-select')) return {}
-    return { options: (field.options?.choices ?? []).map((c) => ({ id: c.id, value: c.name, color: c.color })) }
+    if (!field) return {}
+    if (field.type === 'select' || field.type === 'multi-select') {
+      return { options: (field.options?.choices ?? []).map((c) => ({ id: c.id, value: c.name, color: c.color })) }
+    }
+    if (field.type === 'relation') {
+      return { targetDatabaseId: field.options?.targetDatabaseId, cardinality: field.options?.cardinality ?? 'many' }
+    }
+    return {}
   }
 
   propertyDataSet(propertyId: string, data: Record<string, unknown>): void {
     const field = this._fieldById(propertyId)
-    if (!field || (field.type !== 'select' && field.type !== 'multi-select')) return
-    const options = data.options as Array<{ id?: string; value: string; color?: string }> | undefined
-    if (!options) return
-    const choices = options.map((o, i) => ({ id: o.id || `choice-${Date.now()}-${i}`, name: o.value, color: o.color ?? 'grey' }))
-    this._fields.value = this._fields.value.map((f) => (f.id === propertyId ? { ...f, options: { choices } } : f))
-    this._persistFields()
+    if (!field) return
+    if (field.type === 'select' || field.type === 'multi-select') {
+      const options = data.options as Array<{ id?: string; value: string; color?: string }> | undefined
+      if (!options) return
+      const choices = options.map((o, i) => ({ id: o.id || `choice-${Date.now()}-${i}`, name: o.value, color: o.color ?? 'grey' }))
+      this._fields.value = this._fields.value.map((f) => (f.id === propertyId ? { ...f, options: { choices } } : f))
+      this._persistFields()
+      return
+    }
+    if (field.type === 'relation') {
+      const targetDatabaseId = typeof data.targetDatabaseId === 'number' ? data.targetDatabaseId : field.options?.targetDatabaseId
+      const cardinality = data.cardinality === 'one' ? 'one' : 'many'
+      this._fields.value = this._fields.value.map((f) => (f.id === propertyId ? { ...f, options: { targetDatabaseId, cardinality } } : f))
+      this._persistFields()
+    }
   }
 
   propertyDataTypeGet(propertyId: string): TypeInstance | undefined {

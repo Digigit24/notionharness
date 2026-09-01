@@ -349,7 +349,8 @@ export class TeableNativeBlockComponent extends BlockComponent<TeableNativeBlock
       const json = await res.json()
       if (!res.ok) throw new Error(json.error || 'Database not found.')
       this._tableName = json.doc?.name || 'Untitled'
-      const source = new UserDatabaseDataSource(id)
+      const workspaceId = typeof json.doc?.workspace === 'number' ? json.doc.workspace : Number(this._workspaceId)
+      const source = new UserDatabaseDataSource(id, workspaceId)
       await source.refresh()
       this._dataSource = source
     } catch (err) {
