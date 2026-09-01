@@ -7,14 +7,14 @@ export const MENTION_NODE = ' '
 
 export function insertMentionNode({
   inlineEditor,
-  user,
+  mention,
 }: {
   inlineEditor: AffineInlineEditor
-  user: MentionAttribute
+  mention: MentionAttribute
 }) {
   if (!inlineEditor) return
   const inlineRange = inlineEditor.getInlineRange()
   if (!inlineRange) return
-  inlineEditor.insertText(inlineRange, MENTION_NODE, { mention: user })
+  inlineEditor.insertText(inlineRange, MENTION_NODE, { mention })
   inlineEditor.setInlineRange({ index: inlineRange.index + 1, length: 0 })
 }

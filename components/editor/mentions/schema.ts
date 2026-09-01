@@ -10,14 +10,20 @@ declare module '@blocksuite/affine-shared/types' {
 }
 
 export interface MentionAttribute {
+  // Holds a Better Auth user id when `kind` is 'user' (or omitted, for
+  // mentions persisted before agent mentions existed) and an `agents`
+  // collection id when `kind` is 'agent' — one id slot, not two, since a
+  // mention only ever points at one or the other.
   userId: string
   name: string
+  kind?: 'user' | 'agent'
 }
 
 export const MentionAttributeSchema = z
   .object({
     userId: z.string(),
     name: z.string(),
+    kind: z.enum(['user', 'agent']).optional(),
   })
   .optional()
   .nullable()

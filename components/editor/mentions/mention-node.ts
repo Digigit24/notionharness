@@ -26,6 +26,10 @@ export class AffineMention extends WithDisposable(ShadowlessElement) {
       background: var(--affine-hover-color, rgba(30, 150, 235, 0.1));
       white-space: nowrap;
     }
+    .affine-mention.agent {
+      color: #7c3aed;
+      background: rgba(124, 58, 237, 0.1);
+    }
   `
 
   constructor() {
@@ -39,7 +43,9 @@ export class AffineMention extends WithDisposable(ShadowlessElement) {
 
     // See reference-node.ts: an embed inline element needs a zero-width
     // joiner v-text child so BlockSuite's inline-range math stays correct.
-    return html`<span class="affine-mention">@${mention.name}<v-text .str=${ZERO_WIDTH_NON_JOINER}></v-text
+    const isAgent = mention.kind === 'agent'
+    return html`<span class="affine-mention ${isAgent ? 'agent' : ''}"
+      >${isAgent ? '@🤖 ' : '@'}${mention.name}<v-text .str=${ZERO_WIDTH_NON_JOINER}></v-text
     ></span>`
   }
 }
