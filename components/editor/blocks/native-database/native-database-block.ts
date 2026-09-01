@@ -9,6 +9,7 @@ import {
   type DataViewSelection,
   type DataViewWidgetProps,
 } from '@/lib/blocksuite-data-view'
+import { popMenu, popupTargetFromElement, menu } from '@blocksuite/affine-components/context-menu'
 import { computed, signal } from '@preact/signals-core'
 import { css, html, unsafeCSS } from 'lit'
 import type { NativeDatabaseBlockModel, NativeDatabaseSourceType } from './schema'
@@ -85,6 +86,12 @@ export class NativeDatabaseBlockComponent extends BlockComponent<NativeDatabaseB
   private _payloadCollections: string[] = []
   private _userDatabases: UserDatabaseOption[] = []
   private _newUserDatabaseName = ''
+  // NOTION-PARITY 7, requirement 1 — true while `_renderSourcePicker()` is
+  // showing as an overlay *on top of* an already-connected block (its
+  // "Change data source" menu action), as opposed to the disconnected block's
+  // own upfront picker (`_renderCreateOrConnect`) — same picker UI, different
+  // context, so `renderBlock()` needs to tell them apart.
+  private _changingSource = false
 
   /** `model.sourceType` is the source of truth once set; `null` means a
    * pre-P2.3 document, which is always a legacy Teable connection if it has
@@ -134,6 +141,11 @@ export class NativeDatabaseBlockComponent extends BlockComponent<NativeDatabaseB
     const sourceType = this._effectiveSourceType
     if (sourceType === 'payload' && this.model.payloadCollection) void this._loadPayloadSource(this.model.payloadCollection)
     else if (sourceType === 'user-database' && this.model.userDatabaseId !== null) void this._loadUserDatabaseSource(this.model.userDatabaseId)
+    // NOTION-PARITY 7 — `sourceType: 'user-database', userDatabaseId: null`
+    // is exactly the state the slash-menu action now inserts a fresh block
+    // in (see `slash-menu.ts`): no upfront picker, straight to an instantly-
+    // rendered, optimistically-created database.
+    else if (sourceType === 'user-database' && this.model.userDatabaseId === null) this._createNewUserDatabase()
   }
 
   override disconnectedCallback() {
@@ -198,15 +210,15 @@ export class NativeDatabaseBlockComponent extends BlockComponent<NativeDatabaseB
       return
     }
 
-    if (sourceType === 'user-database' && this.model.userDatabaseId !== null) {
+    if (sourceType === 'user-database') {
       this._tableName = trimmed || 'Untitled'
       this.requestUpdate()
-      if (trimmed) {
-        void fetch(`/api/user-databases/${this.model.userDatabaseId}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: this._tableName }),
-        })
+      // Routed through the data source (not a direct fetch keyed on
+      // `model.userDatabaseId`) so a rename typed in the brief window before
+      // an optimistic creation's id resolves isn't silently lost — see
+      // `UserDatabaseDataSource.rename`'s own `_waitForDatabaseId` handling.
+      if (trimmed && this._dataSource instanceof UserDatabaseDataSource) {
+        this._dataSource.rename(this._tableName)
       }
       return
     }
@@ -384,6 +396,33 @@ export class NativeDatabaseBlockComponent extends BlockComponent<NativeDatabaseB
     }
   }
 
+  /**
+   * NOTION-PARITY 7, requirements 1+2 — instant slash-database creation with
+   * an optimistic UI: `UserDatabaseDataSource.createOptimistic` returns a
+   * fully usable data source *synchronously*, seeded with the same default
+   * primary field the server seeds real new databases with, so this renders
+   * a real, editable table shell on the very same tick — no loading state,
+   * no upfront picker, matching Notion's actual `/table` behavior. The real
+   * `POST /api/user-databases` fires in the background; once it resolves,
+   * `onCreated` persists the real id onto the block's own model so reloading
+   * the page reconnects to the *same* database rather than losing it.
+   */
+  private _createNewUserDatabase() {
+    const workspaceId = this._workspaceId
+    if (!workspaceId) {
+      this._error = 'This page has no workspace context.'
+      this.requestUpdate()
+      return
+    }
+    this._tableName = 'Untitled'
+    this._titleTouched = false
+    this._error = null
+    this._dataSource = UserDatabaseDataSource.createOptimistic(Number(workspaceId), this._tableName, (databaseId) => {
+      this.doc.updateBlock(this.model, { userDatabaseId: databaseId })
+    })
+    this.requestUpdate()
+  }
+
   private async _openPayloadPicker() {
     this._pickingSourceType = 'payload'
     this._error = null
@@ -423,12 +462,14 @@ export class NativeDatabaseBlockComponent extends BlockComponent<NativeDatabaseB
   private _selectPayloadCollection(slug: string) {
     this.doc.updateBlock(this.model, { sourceType: 'payload', payloadCollection: slug, teableDatabaseId: null, userDatabaseId: null })
     this._pickingSourceType = null
+    this._changingSource = false
     void this._loadPayloadSource(slug)
   }
 
   private _selectUserDatabase(option: UserDatabaseOption) {
     this.doc.updateBlock(this.model, { sourceType: 'user-database', userDatabaseId: option.id, teableDatabaseId: null, payloadCollection: null })
     this._pickingSourceType = null
+    this._changingSource = false
     this._tableName = option.name
     void this._loadUserDatabaseSource(option.id)
   }
@@ -458,9 +499,24 @@ export class NativeDatabaseBlockComponent extends BlockComponent<NativeDatabaseB
 
   override renderBlock() {
     if (this._effectiveSourceType === null) return this._renderCreateOrConnect()
+    if (this._changingSource && this._pickingSourceType) return this._renderChangeSourceOverlay()
     if (this._loading || !this._dataSource) return this._renderLoading()
     if (this._error) return this._renderErrorState()
     return this._renderDataView()
+  }
+
+  /** NOTION-PARITY 7, requirement 1 — "Use an existing source" for an
+   * already-connected block: same `_renderSourcePicker()` content the
+   * disconnected block shows, reached via the data view's own "Change data
+   * source" menu instead of gating creation up front. */
+  private _renderChangeSourceOverlay() {
+    return html`
+      <div class="my-2 rounded-lg border border-black/10 p-3 dark:border-white/10">
+        ${this._error ? html`<div class="mb-2 text-xs text-red-600 dark:text-red-400">${this._error}</div>` : null}
+        <div class="mb-2 text-sm font-semibold">Change data source</div>
+        ${this._renderSourcePicker()}
+      </div>
+    `
   }
 
   private _renderLoading() {
@@ -531,6 +587,7 @@ export class NativeDatabaseBlockComponent extends BlockComponent<NativeDatabaseB
   private _renderSourcePicker() {
     const cancel = () => {
       this._pickingSourceType = null
+      this._changingSource = false
       this.requestUpdate()
     }
     if (this._pickingSourceType === 'payload') {
@@ -621,6 +678,36 @@ export class NativeDatabaseBlockComponent extends BlockComponent<NativeDatabaseB
     `
   }
 
+  /** NOTION-PARITY 7, requirement 1 — "Change data source" now lives here,
+   * on the already-connected block, instead of gating creation with an
+   * upfront picker. Reuses the exact same fetch-then-list flow
+   * (`_openPayloadPicker`/`_openUserDatabasePicker`) the disconnected
+   * block's own picker already uses — just triggered from a different
+   * place, rendered via `_renderChangeSourceOverlay`. */
+  private _openDatabaseMenu(target: HTMLElement) {
+    const handler = popMenu(popupTargetFromElement(target), {
+      options: {
+        items: [
+          menu.action({
+            name: 'Use a user database…',
+            select: () => {
+              this._changingSource = true
+              void this._openUserDatabasePicker()
+            },
+          }),
+          menu.action({
+            name: 'Use a Payload collection…',
+            select: () => {
+              this._changingSource = true
+              void this._openPayloadPicker()
+            },
+          }),
+        ],
+      },
+    })
+    this._disposables.add(handler.close)
+  }
+
   private _renderDataView() {
     const dataSource = this._dataSource!
     const sourceType = this._effectiveSourceType
@@ -652,6 +739,14 @@ export class NativeDatabaseBlockComponent extends BlockComponent<NativeDatabaseB
                 ↗
               </button>`
             : null}
+          <button
+            type="button"
+            title="Database options"
+            class="shrink-0 rounded p-1 text-black/40 hover:bg-black/[.06] hover:text-black/70 dark:text-white/40 dark:hover:bg-white/[.08] dark:hover:text-white/70"
+            @click=${(e: MouseEvent) => this._openDatabaseMenu(e.currentTarget as HTMLElement)}
+          >
+            ⋯
+          </button>
         </div>
         <div contenteditable="false" style="position: relative">
         ${this._dataView.render({

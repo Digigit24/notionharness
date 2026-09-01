@@ -1,4 +1,4 @@
-import { html, render } from 'lit'
+import { html, render, nothing, type TemplateResult } from 'lit'
 import { createElement, type ReactElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { createRecordDetail, type DetailSlotProps, type SingleView, type UniComponent } from '@/lib/blocksuite-data-view'
@@ -50,6 +50,11 @@ export function openRecordDetailPanel(ops: {
   sourceId: string
   workspaceId?: number | null
   workspaceSlug: string | null
+  /** NOTION-PARITY 1/7 — lets a caller (e.g. `UserDatabaseDataSource.openRelatedRow`)
+   * append content below the native property list, e.g. relations' computed
+   * "Linked from" reverse-link section. Resolved asynchronously and
+   * re-rendered in place once ready, same pattern already used for it. */
+  extraSection?: () => Promise<TemplateResult | typeof nothing>
 }) {
   closeRecordDetailPanel()
   panelContainer = document.createElement('div')
@@ -65,44 +70,57 @@ export function openRecordDetailPanel(ops: {
   })
   const note = reactSlot(RecordDetailNote, { sourceType: ops.sourceType, sourceId: ops.sourceId, workspaceId: ops.workspaceId })
 
-  const template = html`
-    <div
-      class="fixed inset-0 z-50 bg-black/20 dark:bg-black/50"
-      @mousedown=${(e: MouseEvent) => {
-        if (e.target === e.currentTarget) close()
-      }}
-    >
-      <aside
-        class="ml-auto flex h-full w-full max-w-2xl flex-col overflow-y-auto border-l border-black/10 bg-white p-6 shadow-2xl dark:border-white/10 dark:bg-[#252525]"
-      >
-        <button
-          type="button"
-          class="self-end text-xl text-black/40 hover:text-black dark:text-white/40 dark:hover:text-white"
-          aria-label="Close"
-          @click=${close}
+  const renderPanel = (extra: TemplateResult | typeof nothing) => {
+    if (!panelContainer) return
+    render(
+      html`
+        <div
+          class="fixed inset-0 z-50 bg-black/20 dark:bg-black/50"
+          @mousedown=${(e: MouseEvent) => {
+            if (e.target === e.currentTarget) close()
+          }}
         >
-          ×
-        </button>
-        ${createRecordDetail({
-          view: ops.view,
-          rowId: ops.rowId,
-          detail: { header, note },
-          // BlockSuite's own stock `NoteRenderer` calls `openDoc(id)` after
-          // creating+linking a fresh doc, to "open" it — we don't use that
-          // flow (our note slot always shows real, already-paired content),
-          // but the header's "Open full page" button reuses the same
-          // already-threaded callback to navigate to this row's paired page.
-          openDoc: (docId: string) => {
-            if (!ops.workspaceSlug) return
-            close()
-            window.location.href = `/workspace/${ops.workspaceSlug}/p/${docId}`
-          },
-        })}
-      </aside>
-    </div>
-  `
+          <aside
+            class="ml-auto flex h-full w-full max-w-2xl flex-col overflow-y-auto border-l border-black/10 bg-white p-6 shadow-2xl dark:border-white/10 dark:bg-[#252525]"
+          >
+            <button
+              type="button"
+              class="self-end text-xl text-black/40 hover:text-black dark:text-white/40 dark:hover:text-white"
+              aria-label="Close"
+              @click=${close}
+            >
+              ×
+            </button>
+            ${createRecordDetail({
+              view: ops.view,
+              rowId: ops.rowId,
+              detail: { header, note },
+              // BlockSuite's own stock `NoteRenderer` calls `openDoc(id)` after
+              // creating+linking a fresh doc, to "open" it — we don't use that
+              // flow (our note slot always shows real, already-paired content),
+              // but the header's "Open full page" button reuses the same
+              // already-threaded callback to navigate to this row's paired page.
+              openDoc: (docId: string) => {
+                if (!ops.workspaceSlug) return
+                close()
+                window.location.href = `/workspace/${ops.workspaceSlug}/p/${docId}`
+              },
+            })}
+            ${extra}
+          </aside>
+        </div>
+      `,
+      panelContainer,
+    )
+  }
 
-  render(template, panelContainer)
+  renderPanel(nothing)
+  if (ops.extraSection) {
+    void ops
+      .extraSection()
+      .then(renderPanel)
+      .catch(() => renderPanel(nothing))
+  }
 
   panelKeydownHandler = (e: KeyboardEvent) => {
     if (e.key === 'Escape') close()
