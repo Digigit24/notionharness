@@ -44,6 +44,7 @@ next-env.d.ts
 # scratch/test artifacts
 sync-body.json
 dev.log
+dev-detached.log
 *.tmp
 
 # agent tooling scratch state (not app source)

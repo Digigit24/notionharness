@@ -1,9 +1,5 @@
-import {
-  popMenu,
-  popupTargetFromElement,
-  menu,
-} from '@blocksuite/affine-components/context-menu'
-import { BaseCellRenderer, createFromBaseCellRenderer, propertyType, t } from '@blocksuite/data-view'
+import { popMenu, popupTargetFromElement, menu } from '@/lib/blocksuite-affine-components'
+import { BaseCellRenderer, createFromBaseCellRenderer, propertyType, t } from '@/lib/blocksuite-data-view'
 import { computed } from '@preact/signals-core'
 import { html } from 'lit/static-html.js'
 import type { UserDatabaseDataSource } from './user-database-data-source'

@@ -9,7 +9,7 @@ import {
   type DataViewSelection,
   type DataViewWidgetProps,
 } from '@/lib/blocksuite-data-view'
-import { popMenu, popupTargetFromElement, menu } from '@blocksuite/affine-components/context-menu'
+import { popMenu, popupTargetFromElement, menu } from '@/lib/blocksuite-affine-components'
 import { computed, signal } from '@preact/signals-core'
 import { css, html, unsafeCSS } from 'lit'
 import type { NativeDatabaseBlockModel, NativeDatabaseSourceType } from './schema'

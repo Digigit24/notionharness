@@ -1,14 +1,15 @@
 import {
   DataSourceBase,
   ViewManagerBase,
+  viewPresets,
+  viewConverts,
   type DatabaseFlags,
   type DataViewDataType,
   type PropertyMetaConfig,
   type ViewManager,
   type ViewMeta,
-} from '@blocksuite/data-view'
-import { viewPresets, viewConverts } from '@blocksuite/data-view/view-presets'
-import type { InsertToPosition } from '@blocksuite/affine-shared/utils'
+} from '@/lib/blocksuite-data-view'
+import type { InsertToPosition } from '@/lib/blocksuite-affine-shared'
 import { computed, signal, type ReadonlySignal, type Signal } from '@preact/signals-core'
 import { showClientError } from '@/lib/client-notify'
 

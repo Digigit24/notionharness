@@ -1,6 +1,5 @@
-import type { PropertyMetaConfig, TypeInstance } from '@blocksuite/data-view'
-import { propertyPresets } from '@blocksuite/data-view/property-presets'
-import type { InsertToPosition } from '@blocksuite/affine-shared/utils'
+import { propertyPresets, type PropertyMetaConfig, type TypeInstance } from '@/lib/blocksuite-data-view'
+import type { InsertToPosition } from '@/lib/blocksuite-affine-shared'
 import { GenericDataSource, type GenericField, type GenericRecord } from './generic-data-source'
 import { showClientError } from '@/lib/client-notify'
 
