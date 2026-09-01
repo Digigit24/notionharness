@@ -44,8 +44,21 @@ function pushItem(widget: SlashMenuWidgetLike) {
         const parentModel = rootComponent.doc.getParent(model)
         if (!parentModel) return
         const index = parentModel.children.indexOf(model) + 1
-        // Flavour string stays `affine:embed-teable-native` — see schema.ts's comment.
-        rootComponent.doc.addBlock('affine:embed-teable-native', {}, parentModel, index)
+        // NOTION-PARITY 7 — inserted already committed to a fresh
+        // `user-database` source (`userDatabaseId: null` signals "not
+        // created yet" to `native-database-block.ts`'s `connectedCallback`,
+        // which immediately starts an optimistic creation) — no upfront
+        // picker, matching Notion's actual `/table` behavior. "Use an
+        // existing source" is now a secondary action reachable from the
+        // block's own "Change data source" menu once it exists, not a
+        // blocking choice here. Flavour string stays
+        // `affine:embed-teable-native` — see schema.ts's comment.
+        rootComponent.doc.addBlock(
+          'affine:embed-teable-native',
+          { sourceType: 'user-database', userDatabaseId: null },
+          parentModel,
+          index,
+        )
       },
     }
     widget.config.items.push(item)

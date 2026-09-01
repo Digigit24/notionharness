@@ -41,6 +41,10 @@ export interface GenericField {
     targetDatabaseId?: number
     /** Defaults to `'many'` (Notion/Airtable convention) when unset. */
     cardinality?: 'one' | 'many'
+    /** NOTION-PARITY 7 — see `UserDatabaseDataSource.setRelationTwoWay`'s own
+     * doc comment for the one-way/two-way design. */
+    twoWay?: boolean
+    mirrorFieldId?: string
   }
   /** This field is the backend's own "primary"/title column, if it has that
    * concept (Teable does; a plain user database may not). Used to seed the
@@ -101,29 +105,39 @@ export abstract class GenericDataSource extends DataSourceBase {
     const [fields, records] = await Promise.all([this.fetchFields(), this.fetchRecords()])
     this._fields.value = fields
     this._records.value = records
+    this._seedViewDataIfNeeded()
+  }
 
-    // Seeded once, on first successful load (view configuration itself is
-    // local-only for v1, same simplification `TeableDataSource` already
-    // made — see its own comment for why `kanbanViewMeta.model.defaultData`
-    // needs to run after fields are populated, and why it's wrapped in a
-    // try/catch for tables with nothing groupable).
-    if (this._viewData.value.length === 0) {
-      const table = viewPresets.tableViewMeta.model.defaultData(this.viewManager)
-      const primaryFieldId = this.getPrimaryFieldId(this._fields.value)
-      if (primaryFieldId) {
-        table.header = { ...table.header, titleColumn: primaryFieldId }
-      }
-      let kanban: ReturnType<typeof viewPresets.kanbanViewMeta.model.defaultData>
-      try {
-        kanban = viewPresets.kanbanViewMeta.model.defaultData(this.viewManager)
-      } catch {
-        kanban = { columns: [], filter: { type: 'group', op: 'and', conditions: [] }, header: {}, groupProperties: [] }
-      }
-      this._viewData.value = [
-        { id: 'table-view', name: 'Table', mode: 'table', ...table } as DataViewDataType,
-        { id: 'kanban-view', name: 'Kanban', mode: 'kanban', ...kanban } as DataViewDataType,
-      ]
+  /**
+   * Seeds `_viewData` (table + kanban) once, if it hasn't been already.
+   * Extracted out of `refresh()` (NOTION-PARITY 7) so a data source that
+   * *skips* `refresh()` entirely — `UserDatabaseDataSource.createOptimistic`,
+   * whose whole point is rendering a real table shell on the same tick as
+   * construction, before any network round-trip — still ends up with real
+   * views to render. Without this, `viewDataList$` stays empty and
+   * `DataView.render()` has nothing to show at all (view configuration
+   * itself is local-only for v1, same simplification `TeableDataSource`
+   * already made — see its own comment for why `kanbanViewMeta.model.
+   * defaultData` needs fields populated first, and why it's wrapped in a
+   * try/catch for tables with nothing groupable).
+   */
+  protected _seedViewDataIfNeeded() {
+    if (this._viewData.value.length > 0) return
+    const table = viewPresets.tableViewMeta.model.defaultData(this.viewManager)
+    const primaryFieldId = this.getPrimaryFieldId(this._fields.value)
+    if (primaryFieldId) {
+      table.header = { ...table.header, titleColumn: primaryFieldId }
     }
+    let kanban: ReturnType<typeof viewPresets.kanbanViewMeta.model.defaultData>
+    try {
+      kanban = viewPresets.kanbanViewMeta.model.defaultData(this.viewManager)
+    } catch {
+      kanban = { columns: [], filter: { type: 'group', op: 'and', conditions: [] }, header: {}, groupProperties: [] }
+    }
+    this._viewData.value = [
+      { id: 'table-view', name: 'Table', mode: 'table', ...table } as DataViewDataType,
+      { id: 'kanban-view', name: 'Kanban', mode: 'kanban', ...kanban } as DataViewDataType,
+    ]
   }
 
   /** Fetches the current field list from the backend. Called once per `refresh()`. */

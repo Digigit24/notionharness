@@ -28,6 +28,14 @@ import type { UserDatabaseDataSource } from './user-database-data-source'
 export interface RelationPropertyData extends Record<string, unknown> {
   targetDatabaseId?: number
   cardinality?: 'one' | 'many'
+  // NOTION-PARITY 7 — mirrors real Notion's "Show on [database]" toggle.
+  // `twoWay: true` means a REAL field with id `mirrorFieldId` was created on
+  // the target database (see `UserDatabaseDataSource.setRelationTwoWay`),
+  // kept in sync on every write — not just the always-on, computed-at-read
+  // "Linked from" panel section every relation already gets regardless of
+  // this setting (see `getReverseLinks`).
+  twoWay?: boolean
+  mirrorFieldId?: string
 }
 
 export const relationPropertyType = propertyType('relation')
@@ -123,6 +131,7 @@ export class RelationCellEditing extends RelationChips {
               name: d.name,
               select: () => {
                 this.property.dataUpdate((data) => ({ ...data, targetDatabaseId: d.id }))
+                this._configureRelation(d.id)
               },
             }),
           ),
@@ -131,6 +140,35 @@ export class RelationCellEditing extends RelationChips {
       })
       this._disposables.add(handler.close)
     })
+  }
+
+  /** NOTION-PARITY 7 — one-way/two-way toggle, shown right after picking a
+   * target database (first-time setup) and reachable again later via the
+   * "⚙" affordance next to an already-configured field's chips. Closing this
+   * popup (click-away/Escape) chains straight into `_pickRows` so setup
+   * flows as one motion the first time, without forcing a second click. */
+  private _configureRelation(targetId: number) {
+    let twoWay = this.property.data$.value.twoWay ?? false
+    const handler = popMenu(popupTargetFromElement(this), {
+      options: {
+        title: { text: 'Relationship' },
+        items: [
+          menu.toggleSwitch({
+            name: 'Two-way',
+            on: twoWay,
+            label: () => html`Show on linked database`,
+            onChange: (on) => {
+              twoWay = on
+              void this._dataSource.setRelationTwoWay(this.property.id, on).catch((err) => {
+                console.error('[relation] failed to toggle two-way sync', err)
+              })
+            },
+          }),
+        ],
+        onClose: () => this._pickRows(targetId),
+      },
+    })
+    this._disposables.add(handler.close)
   }
 
   private _pickRows(targetId: number) {
@@ -179,6 +217,26 @@ export class RelationCellEditing extends RelationChips {
     const targetId = this._targetId
     if (targetId) this._pickRows(targetId)
     else this._pickTargetDatabase()
+  }
+
+  // Adds a "⚙" affordance (re-open `_configureRelation`) after the inherited
+  // chip rendering, so an already-configured field's two-way setting stays
+  // reachable without deleting and re-adding the property.
+  override render() {
+    const base = super.render()
+    const targetId = this._targetId
+    if (!targetId) return base
+    return html`<div style="display:flex;align-items:center;gap:4px;">
+      ${base}
+      <span
+        title="Relationship settings"
+        style="cursor:pointer;color:var(--affine-icon-color);font-size:13px;"
+        @click=${(e: Event) => {
+          e.stopPropagation()
+          this._configureRelation(targetId)
+        }}
+      >⚙</span>
+    </div>`
   }
 }
 
