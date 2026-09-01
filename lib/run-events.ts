@@ -16,6 +16,21 @@ export type RunEvent =
   /** A page subtree append has been durably persisted to the page CRDT. */
   | { type: 'page_write'; pageId: number; subtree: string; blockId?: string; operation: 'append'; kind: 'heading' | 'paragraph'; status: 'committed' }
   | { type: 'done'; status: 'ok' | 'error' | 'cancelled'; reason?: string }
+  // ROADMAP 6.1 — a post-persist confirmation that a block landed in the
+  // run's page subtree (`lib/agent-page-writes.ts` already did the actual
+  // Yjs write by the time this is recorded). Deliberately a *committed*
+  // fact, not an upstream intent/trigger — the daemon's request to write is
+  // a plain HTTP call to `/api/daemon/page-writes`, never this event, so
+  // there's no risk of a "committed" record being replayed as a new write.
+  | {
+      type: 'page_write'
+      pageId: number
+      subtree: string
+      blockId: string
+      operation: 'append'
+      kind: 'heading' | 'paragraph'
+      status: 'committed'
+    }
 
 export interface RunEventEnvelope {
   runId: string

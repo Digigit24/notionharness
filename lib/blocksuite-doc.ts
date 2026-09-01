@@ -161,7 +161,7 @@ export function updateToBase64(update: Uint8Array): string {
   return Buffer.from(update).toString('base64')
 }
 
-function seedEmptyDoc(doc: Doc, title: string) {
+export function seedEmptyDoc(doc: Doc, title: string) {
   const rootId = doc.addBlock('affine:page', { title: new Text(title) })
   doc.addBlock('affine:surface', {}, rootId)
   const noteId = doc.addBlock('affine:note', {}, rootId)
@@ -274,7 +274,7 @@ export async function applyDocSync(payload: Payload, pageId: number, update: str
 export async function loadDocForWrite(
   payload: Payload,
   pageId: number,
-): Promise<{ doc: Doc; persist: () => Promise<void> }> {
+): Promise<{ doc: Doc; title: string; persist: () => Promise<void> }> {
   const existing = await payload.findByID({ collection: 'pages', id: pageId, overrideAccess: true, depth: 0 })
   const { doc } = loadDocForMerge(pageId, existing.docState)
   const persist = async () => {
@@ -287,7 +287,7 @@ export async function loadDocForWrite(
       overrideAccess: true,
     })
   }
-  return { doc, persist }
+  return { doc, title: existing.title || 'Untitled', persist }
 }
 
 export function getNote(doc: Doc): AnyBlockModel | undefined {
