@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { X } from 'lucide-react'
 import { getRunMessages, getTaskActivity, getTaskRuns, updateTaskFields } from '@/app/(app)/workspace/[workspaceSlug]/tasks/actions'
+import { AgentPresence } from './run-metrics'
 import type { Activity, Agent, Project, Task, TaskStatus, User, Workspace } from '@/payload-types'
 
 type Tab = 'overview' | 'activity' | 'sessions'
@@ -200,7 +201,7 @@ function SessionsTab({ taskId, agents }: { taskId: number; agents: Agent[] }) {
     return () => { active = false; clearInterval(timer) }
   }, [taskId])
   if (runs.length === 0) return <p className="text-sm text-black/40 dark:text-white/40">No agent runs yet.</p>
-  return <div className="space-y-4">{runs.map((run) => <section key={run.id} className="rounded border border-black/10 p-2 text-xs dark:border-white/10"><div className="mb-2 flex justify-between"><span>Run #{run.id} · {agents.find((a) => a.id === run.agentId)?.name ?? 'Agent'}</span><span>{run.status}</span></div><div className="space-y-1 font-mono">{(messages[run.id] ?? []).map((row) => <div key={row.seq} className="whitespace-pre-wrap break-words"><span className="text-black/40 dark:text-white/40">[{row.seq}] </span>{JSON.stringify(row.event)}</div>)}</div></section>)}</div>
+  return <div className="space-y-4">{runs.map((run) => <section key={run.id} className="rounded border border-black/10 p-2 text-xs dark:border-white/10"><div className="mb-2 flex justify-between"><span>Run #{run.id} · {agents.find((a) => a.id === run.agentId)?.name ?? 'Agent'}</span><span className="flex items-center gap-2"><AgentPresence active={run.status === 'queued' || run.status === 'dispatched' || run.status === 'running'} />{run.status}</span></div><div className="space-y-1 font-mono">{(messages[run.id] ?? []).map((row) => <div key={row.seq} className="whitespace-pre-wrap break-words"><span className="text-black/40 dark:text-white/40">[{row.seq}] </span>{JSON.stringify(row.event)}</div>)}</div></section>)}</div>
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {

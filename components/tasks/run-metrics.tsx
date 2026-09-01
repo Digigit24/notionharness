@@ -23,3 +23,9 @@ export function RunMetrics({ metrics }: { metrics?: TaskRunMetrics }) {
     ${ (metrics.totalCostTicks / 100).toFixed(2) } · {elapsed(metrics.startedAt, metrics.completedAt)} · {metrics.stepCount} steps
   </span>
 }
+
+/** Task-level presence until a future block write handle can map files to editor blocks. */
+export function AgentPresence({ active }: { active?: boolean }) {
+  if (!active) return null
+  return <span className="inline-flex shrink-0 items-center gap-1 text-[11px] text-emerald-700 dark:text-emerald-400" title="An agent is working on this task"><span className="size-1.5 rounded-full bg-emerald-500" aria-hidden="true" /> Agent active</span>
+}

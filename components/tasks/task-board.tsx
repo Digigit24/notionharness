@@ -6,9 +6,9 @@ import { Plus } from 'lucide-react'
 import { flexRender, getCoreRowModel, getSortedRowModel, useReactTable, type ColumnDef, type SortingState } from '@tanstack/react-table'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { statusColorClasses } from '@/lib/status-colors'
-import { createTask, getTaskRuns, loadMoreTasks, moveTaskToStatus } from '@/app/(app)/workspace/[workspaceSlug]/tasks/actions'
+import { createTask, getActiveRunsForWorkspace, getTaskRuns, loadMoreTasks, moveTaskToStatus } from '@/app/(app)/workspace/[workspaceSlug]/tasks/actions'
 import { TaskDrawer } from './task-drawer'
-import { RunMetrics, type TaskRunMetrics } from './run-metrics'
+import { AgentPresence, RunMetrics, type TaskRunMetrics } from './run-metrics'
 import type { Agent, Project, Task, TaskStatus, User, Workspace } from '@/payload-types'
 
 export interface ColumnData {
@@ -64,6 +64,7 @@ export function TaskBoard({
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(initialSelectedTaskId)
   const [view, setView] = useState<'board' | 'list' | 'table'>('board')
   const [runMetrics, setRunMetrics] = useState<Record<number, TaskRunMetrics>>({})
+  const [activeTaskIds, setActiveTaskIds] = useState<Set<number>>(new Set())
 
   useEffect(() => {
     setTasksByStatus(Object.fromEntries(columns.map((c) => [c.status.id, c.tasks])))
@@ -167,6 +168,17 @@ export function TaskBoard({
     return () => { active = false; window.clearInterval(timer) }
   }, [allTasks])
 
+  useEffect(() => {
+    let active = true
+    async function refreshPresence() {
+      const runs = await getActiveRunsForWorkspace(workspace.id)
+      if (active) setActiveTaskIds(new Set(runs.flatMap((run) => run.taskId === null ? [] : [run.taskId])))
+    }
+    void refreshPresence().catch(() => undefined)
+    const timer = window.setInterval(() => { void refreshPresence().catch(() => undefined) }, 4000)
+    return () => { active = false; window.clearInterval(timer) }
+  }, [workspace.id])
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center justify-between border-b border-black/5 px-6 py-3 dark:border-white/10">
@@ -185,8 +197,8 @@ export function TaskBoard({
         </div>
       )}
       {view === 'board' ? <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
-        <div className="flex flex-1 gap-3 overflow-x-auto p-4">{columns.map((col) => <TaskColumn key={col.status.id} status={col.status} tasks={tasksByStatus[col.status.id] ?? []} totalDocs={totalsByStatus[col.status.id] ?? 0} runMetrics={runMetrics} onOpenTask={setSelectedTaskId} onAddTask={(title) => void handleAddTask(col.status.id, title)} onLoadMore={() => void handleLoadMore(col.status.id)} />)}</div>
-      </DndContext> : view === 'list' ? <TaskListView columns={columns} tasksByStatus={tasksByStatus} runMetrics={runMetrics} onOpenTask={setSelectedTaskId} /> : <TaskTableView tasks={allTasks} columns={columns} runMetrics={runMetrics} onOpenTask={setSelectedTaskId} />}
+        <div className="flex flex-1 gap-3 overflow-x-auto p-4">{columns.map((col) => <TaskColumn key={col.status.id} status={col.status} tasks={tasksByStatus[col.status.id] ?? []} totalDocs={totalsByStatus[col.status.id] ?? 0} runMetrics={runMetrics} activeTaskIds={activeTaskIds} onOpenTask={setSelectedTaskId} onAddTask={(title) => void handleAddTask(col.status.id, title)} onLoadMore={() => void handleLoadMore(col.status.id)} />)}</div>
+      </DndContext> : view === 'list' ? <TaskListView columns={columns} tasksByStatus={tasksByStatus} runMetrics={runMetrics} activeTaskIds={activeTaskIds} onOpenTask={setSelectedTaskId} /> : <TaskTableView tasks={allTasks} columns={columns} runMetrics={runMetrics} activeTaskIds={activeTaskIds} onOpenTask={setSelectedTaskId} />}
 
       {selectedTask && (
         <TaskDrawer
@@ -204,7 +216,7 @@ export function TaskBoard({
   )
 }
 
-function TaskListView({ columns, tasksByStatus, runMetrics, onOpenTask }: { columns: ColumnData[]; tasksByStatus: Record<number, Task[]>; runMetrics: Record<number, TaskRunMetrics>; onOpenTask: (id: number) => void }) {
+function TaskListView({ columns, tasksByStatus, runMetrics, activeTaskIds, onOpenTask }: { columns: ColumnData[]; tasksByStatus: Record<number, Task[]>; runMetrics: Record<number, TaskRunMetrics>; activeTaskIds: Set<number>; onOpenTask: (id: number) => void }) {
   const groups = columns.map((column) => ({ ...column, tasks: tasksByStatus[column.status.id] ?? [] })).filter((group) => group.tasks.length > 0)
   const rows = groups.flatMap((group) => [{ kind: 'header' as const, id: `status-${group.status.id}`, status: group.status }, ...group.tasks.map((task) => ({ kind: 'task' as const, id: `task-${task.id}`, task }))])
   const parentRef = useMemo(() => ({ current: null as HTMLDivElement | null }), [])
@@ -214,7 +226,7 @@ function TaskListView({ columns, tasksByStatus, runMetrics, onOpenTask }: { colu
 
 function TaskMeta({ task }: { task: Task }) { const project = typeof task.project === 'object' ? task.project?.name : null; const assignee = typeof task.assignee === 'object' ? task.assignee?.name : null; return <span className="ml-3 shrink-0 text-xs text-black/40 dark:text-white/40">{project || assignee || ''}</span> }
 
-function TaskTableView({ tasks, columns, runMetrics, onOpenTask }: { tasks: Task[]; columns: ColumnData[]; runMetrics: Record<number, TaskRunMetrics>; onOpenTask: (id: number) => void }) {
+function TaskTableView({ tasks, columns, runMetrics, activeTaskIds: _activeTaskIds, onOpenTask }: { tasks: Task[]; columns: ColumnData[]; runMetrics: Record<number, TaskRunMetrics>; activeTaskIds: Set<number>; onOpenTask: (id: number) => void }) {
   const [sorting, setSorting] = useState<SortingState>([])
   const statusById = useMemo(() => new Map(columns.map((column) => [column.status.id, column.status.name])), [columns])
   const columnDefs = useMemo<ColumnDef<Task>[]>(() => [
@@ -236,6 +248,7 @@ function TaskColumn({
   tasks,
   totalDocs,
   runMetrics,
+  activeTaskIds,
   onOpenTask,
   onAddTask,
   onLoadMore,
@@ -244,6 +257,7 @@ function TaskColumn({
   tasks: Task[]
   totalDocs: number
   runMetrics: Record<number, TaskRunMetrics>
+  activeTaskIds: Set<number>
   onOpenTask: (taskId: number) => void
   onAddTask: (title: string) => void
   onLoadMore: () => void
@@ -274,7 +288,7 @@ function TaskColumn({
       </div>
       <div className="flex min-h-[40px] flex-1 flex-col gap-1.5 px-2 pb-2">
         {tasks.map((task) => (
-          <TaskCard key={task.id} task={task} metrics={runMetrics[task.id]} onOpen={() => onOpenTask(task.id)} />
+          <TaskCard key={task.id} task={task} metrics={runMetrics[task.id]} active={activeTaskIds.has(task.id)} onOpen={() => onOpenTask(task.id)} />
         ))}
         {tasks.length < totalDocs && (
           <button
@@ -317,7 +331,7 @@ function TaskColumn({
   )
 }
 
-function TaskCard({ task, metrics, onOpen }: { task: Task; metrics?: TaskRunMetrics; onOpen: () => void }) {
+function TaskCard({ task, metrics, active, onOpen }: { task: Task; metrics?: TaskRunMetrics; active?: boolean; onOpen: () => void }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: `${DRAG_PREFIX}${task.id}` })
   const assignee = typeof task.assignee === 'object' ? task.assignee : null
   const project = typeof task.project === 'object' ? task.project : null
@@ -333,7 +347,7 @@ function TaskCard({ task, metrics, onOpen }: { task: Task; metrics?: TaskRunMetr
         isDragging ? 'opacity-50' : ''
       }`}
     >
-      <div className="flex items-center justify-between gap-2"><div className="truncate font-medium">{task.title || 'Untitled'}</div><RunMetrics metrics={metrics} /></div>
+      <div className="flex items-center justify-between gap-2"><div className="truncate font-medium">{task.title || 'Untitled'}</div><span className="flex items-center gap-2"><AgentPresence active={active} /><RunMetrics metrics={metrics} /></span></div>
       {(project || assignee) && (
         <div className="mt-1 flex items-center justify-between gap-1">
           {project ? (

@@ -207,3 +207,19 @@ export async function listRunsForTask(taskId: number): Promise<Run[]> {
   const res = await pool.query<RunRow>(`SELECT * FROM runs WHERE task_id = $1 ORDER BY created_at DESC`, [taskId])
   return res.rows.map(rowToRun)
 }
+
+/** Returns non-terminal runs for tasks in a workspace, used by board-level
+ * presence indicators. Runs intentionally have no workspace column; ownership
+ * is resolved through the Payload-owned tasks table. */
+export async function listActiveRunsForWorkspace(workspaceId: number): Promise<Run[]> {
+  const pool = getBrokerPool()
+  const res = await pool.query<RunRow>(
+    `SELECT r.* FROM runs r
+     INNER JOIN tasks t ON t.id = r.task_id
+     WHERE t.workspace_id = $1
+       AND r.status IN ('queued', 'dispatched', 'running')
+     ORDER BY r.created_at DESC`,
+    [workspaceId],
+  )
+  return res.rows.map(rowToRun)
+}
