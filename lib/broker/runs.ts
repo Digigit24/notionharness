@@ -16,6 +16,8 @@ interface RunRow {
   accountable_user: number
   worker_id: string | null
   external_session_id: string | null
+  page_id: string | number | null
+  page_subtree_block_id: string | null
   next_seq: string | number
   lease_expires_at: string | null
   started_at: string | null
@@ -41,6 +43,8 @@ function rowToRun(row: RunRow): Run {
     accountableUser: row.accountable_user,
     workerId: row.worker_id,
     externalSessionId: row.external_session_id,
+    pageId: row.page_id === null ? null : Number(row.page_id),
+    pageSubtreeBlockId: row.page_subtree_block_id,
     nextSeq: Number(row.next_seq),
     leaseExpiresAt: row.lease_expires_at,
     startedAt: row.started_at,
@@ -222,4 +226,23 @@ export async function listActiveRunsForWorkspace(workspaceId: number): Promise<R
     [workspaceId],
   )
   return res.rows.map(rowToRun)
+}
+
+export async function getRunPageContext(runId: number): Promise<{ pageId: number; subtreeBlockId: string } | null> {
+  const pool = getBrokerPool()
+  const res = await pool.query<{ page_id: string | number | null; page_subtree_block_id: string | null }>(
+    `SELECT page_id, page_subtree_block_id FROM runs WHERE id = $1`,
+    [runId],
+  )
+  const row = res.rows[0]
+  if (!row || row.page_id === null || row.page_subtree_block_id === null) return null
+  return { pageId: Number(row.page_id), subtreeBlockId: row.page_subtree_block_id }
+}
+
+export async function setRunPageContext(runId: number, pageId: number, subtreeBlockId: string): Promise<void> {
+  const pool = getBrokerPool()
+  await pool.query(
+    `UPDATE runs SET page_id = $2, page_subtree_block_id = $3, updated_at = now() WHERE id = $1`,
+    [runId, pageId, subtreeBlockId],
+  )
 }

@@ -10,13 +10,15 @@ nextEnv.loadEnvConfig(process.cwd())
 // way (AGENTS.md D5). Run manually: `npx tsx lib/broker/migrations/apply.ts`.
 // Safe to re-run — every statement in the .sql file is idempotent.
 async function main() {
-  const sqlPath = path.join(import.meta.dirname, '0001_runs_run_messages_run_usage.sql')
-  const sql = fs.readFileSync(sqlPath, 'utf8')
+  const sql = [
+    fs.readFileSync(path.join(import.meta.dirname, '0001_runs_run_messages_run_usage.sql'), 'utf8'),
+    fs.readFileSync(path.join(import.meta.dirname, '0002_run_page_context.sql'), 'utf8'),
+  ].join('\n')
 
   const pool = new Pool({ connectionString: process.env.DATABASE_URI || '', max: 1 })
   try {
     await pool.query(sql)
-    console.log('Broker schema applied: runs, run_messages, run_usage.')
+    console.log('Broker schema applied: runs, run_messages, run_usage, run page context.')
   } finally {
     await pool.end()
   }
