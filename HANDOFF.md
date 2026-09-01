@@ -1,6 +1,10 @@
 # Handoff — NotionForge
 
-Written 2026-09-01. Compact reference for continuation — not exhaustive, see git history / `docs/notion-parity-audit.html` for deeper context.
+Written 2026-09-01, reconciled the same day against `docs/ROADMAP.html` Pillar 1.2 — every claim below was re-verified live (git remote, Docker volume mounts, `.env` keys, file/line counts) rather than carried forward assumed. Compact reference for *current feature status*; for the decisions and environment rules that outlive any one status snapshot, see `AGENTS.md` (durable, hand-maintained section below its auto-generated Next.js block). Not exhaustive — see git history / `docs/notion-parity-audit.html` for deeper context.
+
+## Version control
+
+Git is initialized, first commits pushed to `github.com/Digigit24/notionharness` (confirmed: `origin` remote present, `remotes/origin/main` exists). Pillar work happens on `roadmap/*` branches via per-pillar worktrees, not directly on `main` — as of this writing `roadmap/foundation`, `roadmap/datasource`, `roadmap/editor-hardening`, `roadmap/hermes-acp`, and `roadmap/ui-foundation` all exist in parallel.
 
 ## Environment
 
@@ -30,8 +34,8 @@ Written 2026-09-01. Compact reference for continuation — not exhaustive, see g
 
 ## Parked, not started
 
-- Hermes Gateway / AG-UI / CopilotKit chat integration — paused by explicit user request, needs a fresh feasibility spike (does Hermes Gateway's `/v1` stream match AG-UI's protocol) before resuming.
-- Full Notion parity gaps not yet built: formula/rollup properties, Gallery/List/Timeline views, toggle/callout blocks, templates, comments, page history, granular permissions. Full breakdown with priorities: `docs/notion-parity-audit.html`.
+- Hermes Gateway / AG-UI / CopilotKit chat integration — this was paused pending a feasibility spike on the wire protocol; `docs/ROADMAP.html` Pillar 3 has since decided that question rather than left it open: `hermes acp` over stdio, normalized to a `RunEvent` contract, feeding assistant-ui's runtime directly (D6–D8, explicitly dropping AI SDK from the streaming path). Don't resume this as a "spike the protocol" task — it's Pillar 3/5.1 now, with a defined contract to build against.
+- Full Notion parity gaps not yet built: formula/rollup properties, Gallery/List/Timeline views, toggle/callout blocks, templates, comments, page history, granular permissions. Full breakdown with priorities: `docs/notion-parity-audit.html`. The roadmap's own guardrails section explicitly scopes this down further — full Notion parity is called out as *not* a goal (cap the editor at what a task/spec needs).
 
 ## House rules that mattered all session
 
