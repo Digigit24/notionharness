@@ -5,6 +5,7 @@ import { X } from 'lucide-react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { getRunMessages, getTaskActivity, getTaskRuns, updateTaskFields } from '@/app/(app)/workspace/[workspaceSlug]/tasks/actions'
 import { useRunEventStream } from '@/components/runs/use-run-event-stream'
+import { TERMINAL_STATUSES } from '@/lib/broker/types'
 import { AgentPresence } from './run-metrics'
 import type { Activity, Agent, Project, Task, TaskStatus, User, Workspace } from '@/payload-types'
 
@@ -199,7 +200,7 @@ function SessionsTab({ taskId, agents }: { taskId: number; agents: Agent[] }) {
   const parentRef = useRef<HTMLDivElement>(null)
   const virtualizer = useVirtualizer({ count: rows.length, getScrollElement: () => parentRef.current, estimateSize: (index) => rows[index].kind === 'header' ? 30 : 44, overscan: 10 })
   if (snapshots.length === 0) return <p className="text-sm text-black/40 dark:text-white/40">No agent runs yet.</p>
-  return <div ref={parentRef} className="max-h-[60vh] overflow-auto"><div className="relative" style={{ height: virtualizer.getTotalSize() }}>{virtualizer.getVirtualItems().map((item) => { const row = rows[item.index]; return <div key={row.key} className="absolute left-0 right-0 px-1" style={{ transform: `translateY(${item.start}px)` }}>{row.kind === 'header' ? <div className="flex justify-between border-b border-black/10 py-1 text-xs dark:border-white/10"><span>Run #{row.run.id} · {agents.find((a) => a.id === row.run.agentId)?.name ?? 'Agent'}</span><span className="flex items-center gap-2"><AgentPresence active={row.run.status === 'queued' || row.run.status === 'dispatched' || row.run.status === 'running'} />{row.run.status}</span></div> : <div className="whitespace-pre-wrap break-words py-1 font-mono text-[11px]"><span className="text-black/40 dark:text-white/40">[{row.event.seq}] </span>{JSON.stringify(row.event.event)}</div>}</div> })}</div></div>
+  return <div ref={parentRef} className="max-h-[60vh] overflow-auto"><div className="relative" style={{ height: virtualizer.getTotalSize() }}>{virtualizer.getVirtualItems().map((item) => { const row = rows[item.index]; return <div key={row.key} className="absolute left-0 right-0 px-1" style={{ transform: `translateY(${item.start}px)` }}>{row.kind === 'header' ? <div className="flex justify-between border-b border-black/10 py-1 text-xs dark:border-white/10"><span>Run #{row.run.id} · {agents.find((a) => a.id === row.run.agentId)?.name ?? 'Agent'}</span><span className="flex items-center gap-2"><AgentPresence active={!TERMINAL_STATUSES.includes(row.run.status)} />{row.run.status}</span></div> : <div className="whitespace-pre-wrap break-words py-1 font-mono text-[11px]"><span className="text-black/40 dark:text-white/40">[{row.event.seq}] </span>{JSON.stringify(row.event.event)}</div>}</div> })}</div></div>
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {

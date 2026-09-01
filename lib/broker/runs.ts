@@ -217,7 +217,7 @@ export async function listActiveRunsForWorkspace(workspaceId: number): Promise<R
     `SELECT r.* FROM runs r
      INNER JOIN tasks t ON t.id = r.task_id
      WHERE t.workspace_id = $1
-       AND r.status IN ('queued', 'dispatched', 'running')
+       AND r.status IN ('queued', 'dispatched', 'running', 'waiting_directory')
      ORDER BY r.created_at DESC`,
     [workspaceId],
   )
