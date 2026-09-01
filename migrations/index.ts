@@ -4,6 +4,7 @@ import * as migration_20260902_000000_user_databases from './20260902_000000_use
 import * as migration_20260902_020000_pages_generic_source_links from './20260902_020000_pages_generic_source_links';
 import * as migration_20260902_030000_drop_teable_databases from './20260902_030000_drop_teable_databases';
 import * as migration_20260902_040000_pillar2_system_tables from './20260902_040000_pillar2_system_tables';
+import * as migration_20260902_050000_tasks_revision_numeric from './20260902_050000_tasks_revision_numeric';
 
 export const migrations = [
   {
@@ -35,5 +36,10 @@ export const migrations = [
     up: migration_20260902_040000_pillar2_system_tables.up,
     down: migration_20260902_040000_pillar2_system_tables.down,
     name: '20260902_040000_pillar2_system_tables'
+  },
+  {
+    up: migration_20260902_050000_tasks_revision_numeric.up,
+    down: migration_20260902_050000_tasks_revision_numeric.down,
+    name: '20260902_050000_tasks_revision_numeric'
   },
 ];
