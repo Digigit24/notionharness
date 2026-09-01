@@ -8,7 +8,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { statusColorClasses } from '@/lib/status-colors'
 import { createTask, loadMoreTasks, moveTaskToStatus } from '@/app/(app)/workspace/[workspaceSlug]/tasks/actions'
 import { TaskDrawer } from './task-drawer'
-import type { Project, Task, TaskStatus, User, Workspace } from '@/payload-types'
+import type { Agent, Project, Task, TaskStatus, User, Workspace } from '@/payload-types'
 
 export interface ColumnData {
   status: TaskStatus
@@ -39,6 +39,7 @@ export function TaskBoard({
   columns,
   projects,
   assignableUsers,
+  agents,
   currentUserId,
   pageSize,
   initialSelectedTaskId = null,
@@ -47,6 +48,7 @@ export function TaskBoard({
   columns: ColumnData[]
   projects: Project[]
   assignableUsers: User[]
+  agents: Agent[]
   currentUserId: number | null
   pageSize: number
   initialSelectedTaskId?: number | null
@@ -171,6 +173,7 @@ export function TaskBoard({
           projects={projects}
           statuses={columns.map((c) => c.status)}
           assignableUsers={assignableUsers}
+          agents={agents}
           onClose={() => setSelectedTaskId(null)}
           onUpdated={handleTaskUpdated}
         />

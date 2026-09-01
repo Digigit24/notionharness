@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { getPayloadClient } from '@/lib/payload'
 import { getCurrentPayloadUser } from '@/lib/current-user'
 import type { Task } from '@/payload-types'
+import { enqueueRun, listRunsForTask, listRunEvents } from '@/lib/broker'
 
 async function nextColumnPosition(
   payload: Awaited<ReturnType<typeof getPayloadClient>>,
@@ -93,10 +94,11 @@ export async function updateTaskFields({
 }: {
   taskId: number
   workspaceSlug: string
-  data: Partial<Pick<Task, 'title' | 'status' | 'assignee' | 'project'>>
+  data: Partial<Pick<Task, 'title' | 'status' | 'assignee' | 'agent' | 'project'>>
 }): Promise<Task> {
   const payload = await getPayloadClient()
   const user = await getCurrentPayloadUser()
+  const before = await payload.findByID({ collection: 'tasks', id: taskId, depth: 0, overrideAccess: true })
   const task = await payload.update({
     collection: 'tasks',
     id: taskId,
@@ -104,8 +106,21 @@ export async function updateTaskFields({
     overrideAccess: true,
     context: { actorId: user?.id },
   })
+  const beforeAgent = typeof before.agent === 'number' ? before.agent : before.agent?.id ?? null
+  const afterAgent = typeof task.agent === 'number' ? task.agent : task.agent?.id ?? null
+  if (afterAgent !== null && afterAgent !== beforeAgent && user?.id) {
+    await enqueueRun({ taskId, agentId: afterAgent, originatorUser: user.id, accountableUser: user.id })
+  }
   revalidatePath(`/workspace/${workspaceSlug}/tasks`)
   return task
+}
+
+export async function getTaskRuns(taskId: number) {
+  return listRunsForTask(taskId)
+}
+
+export async function getRunMessages(runId: number) {
+  return listRunEvents(runId)
 }
 
 export async function loadMoreTasks({

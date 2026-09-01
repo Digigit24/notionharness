@@ -63,6 +63,13 @@ export const Tasks: CollectionConfig = {
       hasMany: false,
     },
     {
+      name: 'agent',
+      type: 'relationship',
+      relationTo: 'agents',
+      hasMany: false,
+      index: true,
+    },
+    {
       name: 'createdBy',
       type: 'relationship',
       relationTo: 'users',
@@ -153,6 +160,9 @@ export const Tasks: CollectionConfig = {
               action: 'assignee_changed',
               details: { from: relId(previousDoc.assignee), to: relId(doc.assignee) },
             })
+          }
+          if (relId(previousDoc.agent) !== relId(doc.agent)) {
+            changes.push({ action: 'agent_changed', details: { from: relId(previousDoc.agent), to: relId(doc.agent) } })
           }
           if (relId(previousDoc.project) !== relId(doc.project)) {
             changes.push({ action: 'project_changed', details: { from: relId(previousDoc.project), to: relId(doc.project) } })

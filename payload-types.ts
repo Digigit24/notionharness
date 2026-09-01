@@ -367,6 +367,7 @@ export interface Task {
   project?: (number | null) | Project;
   status: number | TaskStatus;
   assignee?: (number | null) | User;
+  agent?: (number | null) | Agent;
   /**
    * Who created this task — passed explicitly by the caller (see class comment above for why this can't be read off req.user).
    */
@@ -842,6 +843,7 @@ export interface TasksSelect<T extends boolean = true> {
   project?: T;
   status?: T;
   assignee?: T;
+  agent?: T;
   createdBy?: T;
   position?: T;
   revision?: T;
