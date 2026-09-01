@@ -4,7 +4,7 @@ import { mkdir, realpath } from 'node:fs/promises'
 import { resolve as resolvePath } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { once } from 'node:events'
-import { loadSandboxConfig, type SandboxConfig } from './config'
+import { loadSandboxConfig, type ResolvedSandboxRuntime, type SandboxConfig, type SandboxRuntime } from './config'
 import { sandboxLogger } from './logger'
 
 export interface ExecResult {
@@ -21,6 +21,17 @@ export interface SandboxSession {
   workspacePath: string
   createdAt: number
   lastActivityAt: number
+  /** Runtime actually assigned to this container; never report `auto` here. */
+  runtime: ResolvedSandboxRuntime
+  /** Runtime requested by configuration when this session was created. */
+  requestedRuntime: SandboxRuntime
+}
+
+export interface SandboxRuntimeStatus {
+  requestedRuntime: SandboxRuntime
+  resolvedRuntime: ResolvedSandboxRuntime | null
+  gVisorAvailable: boolean | null
+  checkedAt: number | null
 }
 
 export class SandboxError extends Error {
@@ -40,10 +51,17 @@ class SandboxOrchestrator {
   private readonly sessions = new Map<string, SandboxSession>()
   private readonly timers = new Map<string, NodeJS.Timeout>()
   private gVisorChecked = false
+  private runtimeStatus: SandboxRuntimeStatus
   private internalNetworkEnsured = false
 
   constructor(config: SandboxConfig = loadSandboxConfig()) {
     this.config = config
+    this.runtimeStatus = {
+      requestedRuntime: config.runtime,
+      resolvedRuntime: config.runtime === 'runc' ? 'runc' : null,
+      gVisorAvailable: config.runtime === 'runc' ? false : null,
+      checkedAt: config.runtime === 'runc' ? Date.now() : null,
+    }
   }
 
   private getDocker(): Docker {
@@ -51,10 +69,11 @@ class SandboxOrchestrator {
     return this.docker
   }
 
-  /** Returns the runtime string to pass to Docker, resolving auto/runsc against the host. */
-  private async resolveRuntime(): Promise<string> {
+  /** Returns the runtime actually passed to Docker and records its resolution. */
+  private async resolveRuntime(): Promise<ResolvedSandboxRuntime> {
     if (this.config.runtime === 'runc') {
       this.config.gVisorAvailable = false
+      this.runtimeStatus = { ...this.runtimeStatus, resolvedRuntime: 'runc', gVisorAvailable: false, checkedAt: Date.now() }
       return 'runc'
     }
     const docker = this.getDocker()
@@ -66,16 +85,48 @@ class SandboxOrchestrator {
         const runtimes: Record<string, unknown> = (info.Runtimes ?? {}) as Record<string, unknown>
         available = Boolean(runtimes['runsc'])
       } catch (err) {
-        sandboxLogger.warn('sandbox.runtime_check_failed', { error: String(err) })
+        sandboxLogger.warn('sandbox.runtime_check_failed', {
+          error: String(err),
+          requestedRuntime: this.config.runtime,
+          fallbackRuntime: 'runc',
+        })
+        if (this.config.runtime === 'runsc') {
+          this.gVisorChecked = false
+          throw new SandboxError('gvisor_runtime_check_failed', `Unable to verify required gVisor runtime: ${String(err)}`)
+        }
       }
       this.config.gVisorAvailable = available
       if (this.config.runtime === 'runsc' && !available) {
-        sandboxLogger.warn('sandbox.gvisor_unavailable_falling_back_to_runc', {
+        sandboxLogger.error('sandbox.gvisor_required_unavailable', {
+          requestedRuntime: 'runsc',
+          availableRuntime: 'runc',
           reason: 'runsc runtime requested via config but not installed on host',
         })
+        this.gVisorChecked = false
+        throw new SandboxError('gvisor_unavailable', 'gVisor (runsc) is required but unavailable on this host')
       }
+      const resolvedRuntime: ResolvedSandboxRuntime = this.config.gVisorAvailable ? 'runsc' : 'runc'
+      this.runtimeStatus = {
+        requestedRuntime: this.config.runtime,
+        resolvedRuntime,
+        gVisorAvailable: this.config.gVisorAvailable,
+        checkedAt: Date.now(),
+      }
+      if (resolvedRuntime === 'runc') {
+        sandboxLogger.warn('sandbox.gvisor_unavailable_falling_back_to_runc', {
+          requestedRuntime: this.config.runtime,
+          resolvedRuntime,
+          reason: 'runsc runtime is not installed on host; this session does not have gVisor isolation',
+        })
+      }
+      return resolvedRuntime
     }
     return this.config.gVisorAvailable ? 'runsc' : 'runc'
+  }
+
+  /** Runtime resolution is exposed so callers can display the actual posture. */
+  getRuntimeStatus(): SandboxRuntimeStatus {
+    return { ...this.runtimeStatus }
   }
 
   private async ensureInternalNetwork(): Promise<void> {
@@ -171,6 +222,8 @@ class SandboxOrchestrator {
       workspacePath,
       createdAt: Date.now(),
       lastActivityAt: Date.now(),
+      runtime,
+      requestedRuntime: config.runtime,
     }
 
     try {
@@ -205,6 +258,8 @@ class SandboxOrchestrator {
       workspacePath,
       createdAt: internal.createdAt,
       lastActivityAt: internal.lastActivityAt,
+      runtime,
+      requestedRuntime: config.runtime,
     }
   }
 
@@ -304,6 +359,8 @@ class SandboxOrchestrator {
       workspacePath: session.workspacePath,
       createdAt: session.createdAt,
       lastActivityAt: session.lastActivityAt,
+      runtime: session.runtime,
+      requestedRuntime: session.requestedRuntime,
     }))
   }
 

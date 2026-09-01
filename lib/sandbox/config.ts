@@ -1,6 +1,7 @@
 const MIB = 1024 * 1024
 
 export type SandboxRuntime = 'runc' | 'runsc' | 'auto'
+export type ResolvedSandboxRuntime = Exclude<SandboxRuntime, 'auto'>
 export type SandboxNetworkMode = 'none' | 'internal'
 
 export interface SandboxConfig {
@@ -20,7 +21,7 @@ export interface SandboxConfig {
   stopTimeoutSec: number
   /** Automatically destroy a session after this much idle time. */
   idleTimeoutMs: number
-  /** Container runtime: 'runsc' (gVisor) when available, 'runc' otherwise, or 'auto' to pick runsc only if installed. */
+  /** Container runtime: 'runsc' requires gVisor, 'runc' explicitly accepts runc, or 'auto' chooses runsc only if installed. */
   runtime: SandboxRuntime
   /** Egress posture. 'none' = no network. 'internal' = isolated internal network with no internet routing. */
   networkMode: SandboxNetworkMode
