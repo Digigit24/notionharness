@@ -1,8 +1,10 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { X } from 'lucide-react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { getRunMessages, getTaskActivity, getTaskRuns, updateTaskFields } from '@/app/(app)/workspace/[workspaceSlug]/tasks/actions'
+import { useRunEventStream } from '@/components/runs/use-run-event-stream'
 import type { Activity, Agent, Project, Task, TaskStatus, User, Workspace } from '@/payload-types'
 
 type Tab = 'overview' | 'activity' | 'sessions'
@@ -184,23 +186,19 @@ function OverviewTab({
 }
 
 function SessionsTab({ taskId, agents }: { taskId: number; agents: Agent[] }) {
-  const [runs, setRuns] = useState<Awaited<ReturnType<typeof getTaskRuns>>>([])
-  const [messages, setMessages] = useState<Record<number, Awaited<ReturnType<typeof getRunMessages>>>>({})
-  useEffect(() => {
-    let active = true
-    const refresh = async () => {
-      const nextRuns = await getTaskRuns(taskId)
-      if (!active) return
-      setRuns(nextRuns)
-      const entries = await Promise.all(nextRuns.map(async (run) => [run.id, await getRunMessages(run.id)] as const))
-      if (active) setMessages(Object.fromEntries(entries))
-    }
-    void refresh()
-    const timer = setInterval(() => void refresh(), 2000)
-    return () => { active = false; clearInterval(timer) }
-  }, [taskId])
-  if (runs.length === 0) return <p className="text-sm text-black/40 dark:text-white/40">No agent runs yet.</p>
-  return <div className="space-y-4">{runs.map((run) => <section key={run.id} className="rounded border border-black/10 p-2 text-xs dark:border-white/10"><div className="mb-2 flex justify-between"><span>Run #{run.id} · {agents.find((a) => a.id === run.agentId)?.name ?? 'Agent'}</span><span>{run.status}</span></div><div className="space-y-1 font-mono">{(messages[run.id] ?? []).map((row) => <div key={row.seq} className="whitespace-pre-wrap break-words"><span className="text-black/40 dark:text-white/40">[{row.seq}] </span>{JSON.stringify(row.event)}</div>)}</div></section>)}</div>
+  const observed = true
+  const snapshots = useRunEventStream(taskId, observed, async (id) => {
+    const runs = await getTaskRuns(id)
+    return Promise.all(runs.map(async (run) => ({ run, events: await getRunMessages(run.id) })))
+  })
+  const rows = useMemo(() => snapshots.flatMap(({ run, events }) => [
+    { kind: 'header' as const, key: `run-${run.id}`, run, events },
+    ...events.map((event) => ({ kind: 'event' as const, key: `run-${run.id}-${event.seq}`, run, event })),
+  ]), [snapshots])
+  const parentRef = useRef<HTMLDivElement>(null)
+  const virtualizer = useVirtualizer({ count: rows.length, getScrollElement: () => parentRef.current, estimateSize: (index) => rows[index].kind === 'header' ? 30 : 44, overscan: 10 })
+  if (snapshots.length === 0) return <p className="text-sm text-black/40 dark:text-white/40">No agent runs yet.</p>
+  return <div ref={parentRef} className="max-h-[60vh] overflow-auto"><div className="relative" style={{ height: virtualizer.getTotalSize() }}>{virtualizer.getVirtualItems().map((item) => { const row = rows[item.index]; return <div key={row.key} className="absolute left-0 right-0 px-1" style={{ transform: `translateY(${item.start}px)` }}>{row.kind === 'header' ? <div className="flex justify-between border-b border-black/10 py-1 text-xs dark:border-white/10"><span>Run #{row.run.id} · {agents.find((a) => a.id === row.run.agentId)?.name ?? 'Agent'}</span><span>{row.run.status}</span></div> : <div className="whitespace-pre-wrap break-words py-1 font-mono text-[11px]"><span className="text-black/40 dark:text-white/40">[{row.event.seq}] </span>{JSON.stringify(row.event.event)}</div>}</div> })}</div></div>
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
