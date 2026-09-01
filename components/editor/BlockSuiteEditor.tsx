@@ -5,6 +5,8 @@ import { syncPageDoc } from '@/app/(app)/actions'
 import { NativeDatabaseBlockSchema } from '@/components/editor/blocks/native-database/schema'
 import { NativeDatabaseBlockSpec } from '@/components/editor/blocks/native-database/spec'
 import { registerNativeDatabaseSlashMenuItem } from '@/components/editor/blocks/native-database/slash-menu'
+import { RunCardBlockSchema } from '@/components/editor/blocks/run-card/schema'
+import { RunCardBlockSpec } from '@/components/editor/blocks/run-card/spec'
 import { MentionSpec } from '@/components/editor/mentions/spec'
 import type { AffineEditorContainer } from '@/lib/blocksuite-presets'
 import type { Doc } from '@/lib/blocksuite-store'
@@ -21,9 +23,11 @@ function ensureBlockSuiteEffects() {
     blockSuiteEffectsReady = Promise.all([
       loadBlockSuiteEffects(),
       import('@/components/editor/blocks/native-database/effects'),
+      import('@/components/editor/blocks/run-card/effects'),
       import('@/components/editor/mentions/effects'),
-    ]).then(([, nativeDatabaseModule, mentionsModule]) => {
+    ]).then(([, nativeDatabaseModule, runCardModule, mentionsModule]) => {
       nativeDatabaseModule.effects()
+      runCardModule.effects()
       mentionsModule.effects()
     })
   }
@@ -92,7 +96,7 @@ export function BlockSuiteEditor({
         const { PageEditorBlockSpecs } = blocks
         if (cancelled) return
 
-        const schema = new Schema().register(AffineSchemas).register([NativeDatabaseBlockSchema])
+        const schema = new Schema().register(AffineSchemas).register([NativeDatabaseBlockSchema, RunCardBlockSchema])
         const collection = new DocCollection({ schema })
         collection.meta.initialize()
 
@@ -124,7 +128,7 @@ export function BlockSuiteEditor({
         doc.awarenessStore.setReadonly(doc.blockCollection, locked)
 
         editor = new AffineEditorContainer()
-        editor.pageSpecs = [...PageEditorBlockSpecs, ...NativeDatabaseBlockSpec, ...MentionSpec]
+        editor.pageSpecs = [...PageEditorBlockSpecs, ...NativeDatabaseBlockSpec, ...RunCardBlockSpec, ...MentionSpec]
         editor.doc = doc
         editor.mode = 'page'
         editor.style.display = 'block'

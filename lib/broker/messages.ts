@@ -45,3 +45,12 @@ export async function listRunEvents(runId: number): Promise<RunMessageRow[]> {
   )
   return res.rows.map((r) => ({ seq: Number(r.seq), event: r.event, createdAt: r.created_at }))
 }
+
+/** ROADMAP 6.3 — the run-card block's "N steps" chip needs a count, not the
+ * full transcript `listRunEvents` returns (which would mean fetching every
+ * tool_call/tool_result payload just to count them). */
+export async function countRunEvents(runId: number): Promise<number> {
+  const pool = getBrokerPool()
+  const res = await pool.query<{ count: string }>(`SELECT count(*) FROM run_messages WHERE run_id = $1`, [runId])
+  return Number(res.rows[0]?.count ?? 0)
+}

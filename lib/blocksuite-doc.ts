@@ -1,6 +1,7 @@
 import { DocCollection, Schema, Text, type Doc } from '@/lib/blocksuite-store'
 import { AffineSchemas } from '@/lib/blocksuite-blocks'
 import { NativeDatabaseBlockSchema } from '@/components/editor/blocks/native-database/schema'
+import { RunCardBlockSchema } from '@/components/editor/blocks/run-card/schema'
 import type { Payload } from 'payload'
 
 // Server-side (Node) mirror of the headless doc setup in `BlockSuiteEditor.tsx`,
@@ -146,7 +147,7 @@ export function snapshotToMarkdownTable(snapshot: TeableDatabaseSnapshot): strin
 }
 
 function createCollection() {
-  const schema = new Schema().register(AffineSchemas).register([NativeDatabaseBlockSchema])
+  const schema = new Schema().register(AffineSchemas).register([NativeDatabaseBlockSchema, RunCardBlockSchema])
   const collection = new DocCollection({ schema })
   collection.meta.initialize()
   return collection
@@ -302,6 +303,16 @@ async function serializeChildren(models: AnyBlockModel[], lines: string[], depth
         lines.push('')
         break
       }
+      // ROADMAP 6.3 — a run card is a live-status reference, not something a
+      // static markdown export can show status for; degrades to a visible,
+      // traceable placeholder (never silently dropped, same standard as
+      // every other block here) rather than trying to embed a snapshot that
+      // would immediately go stale.
+      case 'affine:embed-run-card':
+        numberedIndex = 0
+        lines.push(`${indent}[Run #${typeof model.runId === 'number' ? model.runId : '?'}]`)
+        lines.push('')
+        break
       // Rich embeds that degrade to a plain markdown link. The rich embed
       // syntax doesn't exist in markdown, so a link (with title if known) is
       // the correct degraded representation.

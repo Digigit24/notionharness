@@ -24,6 +24,27 @@ async function userDbFetch(path: string, init?: RequestInit) {
   })
 }
 
+/**
+ * Defensive normalization for a legacy field shape found live in the shared
+ * dev DB (database id 5's "QA2 Database"): a relation field stored its
+ * config under a `data` key instead of `options` — `{id, data: {...},
+ * name, type, isPrimary}` — which no current code path produces (every
+ * `options`-reading call site here uses `field.options?.x`, so a field like
+ * this just silently showed "Click to choose a database…" instead of its
+ * real, already-linked target — degraded, not crashed, but wrong). Data was
+ * corrected once directly; this exists so the same shape, wherever it came
+ * from (hand-authored test data, a future manual DB edit), self-heals on
+ * next read instead of silently misbehaving again.
+ */
+function normalizeLegacyField(field: GenericField): GenericField {
+  const legacy = field as GenericField & { data?: Record<string, unknown> }
+  if (legacy.options === undefined && legacy.data !== undefined) {
+    const { data, ...rest } = legacy
+    return { ...rest, options: data }
+  }
+  return field
+}
+
 interface DatabaseDoc {
   id: number
   name: string
@@ -144,7 +165,7 @@ export class UserDatabaseDataSource extends GenericDataSource {
     const json = await res.json().catch(() => null)
     const doc = json?.doc as DatabaseDoc | undefined
     if (doc?.name) this._databaseName = doc.name
-    return Array.isArray(doc?.fields) ? doc!.fields! : []
+    return Array.isArray(doc?.fields) ? doc!.fields!.map(normalizeLegacyField) : []
   }
 
   protected async fetchRecords(): Promise<GenericRecord[]> {
