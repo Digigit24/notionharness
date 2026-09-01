@@ -8,7 +8,6 @@ import sharp from 'sharp'
 import { Users } from './collections/Users'
 import { Workspaces } from './collections/Workspaces'
 import { Pages } from './collections/Pages'
-import { TeableDatabases } from './collections/TeableDatabases'
 import { Databases } from './collections/Databases'
 import { DatabaseRows } from './collections/DatabaseRows'
 
@@ -22,7 +21,7 @@ export default buildConfig({
       baseDir: path.resolve(dirname),
     },
   },
-  collections: [Users, Workspaces, Pages, TeableDatabases, Databases, DatabaseRows],
+  collections: [Users, Workspaces, Pages, Databases, DatabaseRows],
   editor: lexicalEditor(),
   secret: process.env.PAYLOAD_SECRET || '',
   typescript: {

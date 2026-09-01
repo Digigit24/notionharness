@@ -12,7 +12,6 @@ import {
 import { computed, signal } from '@preact/signals-core'
 import { css, html, unsafeCSS } from 'lit'
 import type { NativeDatabaseBlockModel, NativeDatabaseSourceType } from './schema'
-import { TeableDataSource } from './teable-data-source'
 import { PayloadDataSource } from '../data-sources/payload-data-source'
 import { UserDatabaseDataSource } from '../data-sources/user-database-data-source'
 import type { GenericDataSource } from '../data-sources/generic-data-source'
@@ -133,8 +132,7 @@ export class NativeDatabaseBlockComponent extends BlockComponent<NativeDatabaseB
     super.connectedCallback()
     this.contentEditable = 'false'
     const sourceType = this._effectiveSourceType
-    if (sourceType === 'teable' && this.model.teableDatabaseId !== null) void this._loadConnectedTable()
-    else if (sourceType === 'payload' && this.model.payloadCollection) void this._loadPayloadSource(this.model.payloadCollection)
+    if (sourceType === 'payload' && this.model.payloadCollection) void this._loadPayloadSource(this.model.payloadCollection)
     else if (sourceType === 'user-database' && this.model.userDatabaseId !== null) void this._loadUserDatabaseSource(this.model.userDatabaseId)
   }
 
@@ -148,11 +146,19 @@ export class NativeDatabaseBlockComponent extends BlockComponent<NativeDatabaseB
   }
 
   private async _openConnect() {
+    // Teable connections were retired; retain this method only for old
+    // snapshots that may invoke it, but never issue a request to the removed
+    // endpoint.
+    this._connecting = false
+    this._connections = []
+    this.requestUpdate()
+    return
+    /*
     this._connecting = true
     this._error = null
     this.requestUpdate()
     try {
-      const res = await fetch(`/api/teable-databases?workspaceId=${this._workspaceId ?? ''}`)
+      const res = await fetch(`/api/retired-database-connections?workspaceId=${this._workspaceId ?? ''}`)
       if (!res.ok) {
         const body = await res.json().catch(() => null)
         throw new Error(body?.error || `Server returned HTTP ${res.status} listing connections.`)
@@ -174,6 +180,7 @@ export class NativeDatabaseBlockComponent extends BlockComponent<NativeDatabaseB
     } finally {
       this.requestUpdate()
     }
+    */
   }
 
   /** The inline title IS the create/rename affordance (no separate "new table name" input):
@@ -279,7 +286,8 @@ export class NativeDatabaseBlockComponent extends BlockComponent<NativeDatabaseB
     this._titleTouched = false
     this._pickingSourceType = null
     this._error = null
-    void this._openConnect()
+    this._connecting = false
+    this.requestUpdate()
   }
 
   private _openFullPage() {
@@ -299,13 +307,17 @@ export class NativeDatabaseBlockComponent extends BlockComponent<NativeDatabaseB
   }
 
   private async _loadConnectedTable() {
+    // Teable collection metadata was retired. Existing snapshots are left
+    // render-safe, but are not resolved or mounted as a native source.
+    return
+    /*
     const id = this.model.teableDatabaseId
     if (id === null) return
     this._loading = true
     this._error = null
     this.requestUpdate()
     try {
-      const connRes = await fetch(`/api/teable-databases/${id}`)
+      const connRes = await fetch(`/api/retired-database-connections/${id}`)
       const connJson = await connRes.json()
       if (!connRes.ok) throw new Error(connJson.error || 'Connection not found.')
       this._teableTableId = connJson.doc.teableTableId
@@ -316,15 +328,13 @@ export class NativeDatabaseBlockComponent extends BlockComponent<NativeDatabaseB
       this._loading = false
       this.requestUpdate()
     }
+    */
   }
 
   private async _mountDataSource() {
-    if (!this._teableTableId) return
-    const source = new TeableDataSource(this._teableTableId)
-    await source.refresh()
-    this._dataSource = source
-    this._loading = false
-    this.requestUpdate()
+    // Legacy Teable connections are intentionally no longer mounted. Native
+    // Payload and user-database sources use their dedicated loaders below.
+    return
   }
 
   /** Loads+mounts a `PayloadDataSource` (existing document, e.g. after reload). */

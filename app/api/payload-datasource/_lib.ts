@@ -1,7 +1,7 @@
 // ROADMAP P2.3 — `PayloadDataSource` bridges a real Payload collection into
 // BlockSuite's `DataView`. Deliberately NOT a generic "any collection,
 // introspected at runtime" bridge: that would let a database block query or
-// mutate collections it has no business touching (`users`, `teable-databases`,
+// mutate collections it has no business touching (`users`, `databases`,
 // internal config). This is a small, explicit, server-owned registry of which
 // collections are exposed this way and what a database-block "property" maps
 // to on each — the same allowlist discipline the Teable proxy routes already
