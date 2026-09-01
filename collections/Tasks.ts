@@ -1,4 +1,5 @@
 import type { CollectionConfig } from 'payload'
+import { recordActivity, relId } from '@/lib/activity'
 
 // ROADMAP P2.1 — the core unit of work. Three details called out explicitly
 // as "cheap now and structural later":
@@ -109,31 +110,71 @@ export const Tasks: CollectionConfig = {
       },
     ],
     afterChange: [
-      async ({ doc, operation, req }) => {
-        if (operation !== 'create') return
+      async ({ doc, previousDoc, operation, req }) => {
         // ROADMAP 2.6 — "creator auto-follows on create; follows drive
         // notifications" + "one polymorphic activity table behind every
-        // Activity tab." Best-effort: a failure here must never fail the
-        // task creation itself, so it's logged, not thrown.
-        try {
-          await req.payload.create({
-            collection: 'activity',
-            data: {
+        // Activity tab." Best-effort throughout: a failure here must never
+        // fail the task write itself, so every branch is logged, not thrown.
+        //
+        // `req.context.actorId` is how the *update* path learns who made the
+        // change: there's still no `req.user` in this app's hooks (see class
+        // comment), and unlike `create` there's no persisted "who did this"
+        // field for updates to read — callers thread it through Payload's
+        // built-in hook-only `context` option instead of a new schema field.
+        if (operation === 'create') {
+          try {
+            await recordActivity({
+              payload: req.payload,
               entityType: 'task',
               entityId: String(doc.id),
-              actor: doc.createdBy,
+              actor: relId(doc.createdBy),
               action: 'created',
-              payload: { title: doc.title },
-            },
-            overrideAccess: true,
-          })
-          await req.payload.create({
-            collection: 'followers',
-            data: { user: doc.createdBy, entityType: 'task', entityId: String(doc.id) },
-            overrideAccess: true,
-          })
-        } catch (err) {
-          console.error('[tasks] Failed to record creation activity/auto-follow.', err)
+              details: { title: doc.title },
+            })
+            await req.payload.create({
+              collection: 'followers',
+              data: { user: doc.createdBy, entityType: 'task', entityId: String(doc.id) },
+              overrideAccess: true,
+            })
+          } catch (err) {
+            console.error('[tasks] Failed to record creation activity/auto-follow.', err)
+          }
+          return
+        }
+
+        if (operation === 'update' && previousDoc) {
+          const actorId = typeof req.context?.actorId === 'number' ? req.context.actorId : null
+          const changes: Array<{ action: string; details: Record<string, unknown> }> = []
+          if (relId(previousDoc.status) !== relId(doc.status)) {
+            changes.push({ action: 'status_changed', details: { from: relId(previousDoc.status), to: relId(doc.status) } })
+          }
+          if (relId(previousDoc.assignee) !== relId(doc.assignee)) {
+            changes.push({
+              action: 'assignee_changed',
+              details: { from: relId(previousDoc.assignee), to: relId(doc.assignee) },
+            })
+          }
+          if (relId(previousDoc.project) !== relId(doc.project)) {
+            changes.push({ action: 'project_changed', details: { from: relId(previousDoc.project), to: relId(doc.project) } })
+          }
+          if (previousDoc.title !== doc.title) {
+            changes.push({ action: 'renamed', details: { from: previousDoc.title, to: doc.title } })
+          }
+          if (changes.length === 0) return
+          try {
+            for (const change of changes) {
+              await recordActivity({
+                payload: req.payload,
+                entityType: 'task',
+                entityId: String(doc.id),
+                actor: actorId,
+                action: change.action,
+                details: change.details,
+              })
+            }
+          } catch (err) {
+            console.error('[tasks] Failed to record update activity.', err)
+          }
         }
       },
     ],

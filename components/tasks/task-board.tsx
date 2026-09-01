@@ -39,6 +39,7 @@ export function TaskBoard({
   assignableUsers,
   currentUserId,
   pageSize,
+  initialSelectedTaskId = null,
 }: {
   workspace: Workspace
   columns: ColumnData[]
@@ -46,6 +47,7 @@ export function TaskBoard({
   assignableUsers: User[]
   currentUserId: number | null
   pageSize: number
+  initialSelectedTaskId?: number | null
 }) {
   const [tasksByStatus, setTasksByStatus] = useState<Record<number, Task[]>>(() =>
     Object.fromEntries(columns.map((c) => [c.status.id, c.tasks])),
@@ -54,7 +56,7 @@ export function TaskBoard({
     Object.fromEntries(columns.map((c) => [c.status.id, c.totalDocs])),
   )
   const [error, setError] = useState<string | null>(null)
-  const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null)
+  const [selectedTaskId, setSelectedTaskId] = useState<number | null>(initialSelectedTaskId)
 
   useEffect(() => {
     setTasksByStatus(Object.fromEntries(columns.map((c) => [c.status.id, c.tasks])))

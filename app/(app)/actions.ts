@@ -101,7 +101,10 @@ export async function createPage({
   parentPageId?: number | null
 }) {
   const payload = await getPayloadClient()
-  const position = await nextPosition(payload, workspaceId, parentPageId ?? null)
+  const [position, user] = await Promise.all([
+    nextPosition(payload, workspaceId, parentPageId ?? null),
+    getCurrentPayloadUser(),
+  ])
 
   const page = await payload.create({
     collection: 'pages',
@@ -112,6 +115,10 @@ export async function createPage({
       position,
     },
     overrideAccess: true,
+    // ROADMAP P2.6 — Pages has no `createdBy` field (unlike Tasks); the
+    // afterChange activity hook reads the actor from this hook-only context
+    // instead (see `collections/Pages.ts`).
+    context: { actorId: user?.id },
   })
 
   revalidatePath(`/workspace/${workspaceSlug}`)
@@ -120,11 +127,13 @@ export async function createPage({
 
 export async function renamePage(pageId: number, workspaceSlug: string, title: string) {
   const payload = await getPayloadClient()
+  const user = await getCurrentPayloadUser()
   await payload.update({
     collection: 'pages',
     id: pageId,
     data: { title: title || 'Untitled' },
     overrideAccess: true,
+    context: { actorId: user?.id },
   })
   revalidatePath(`/workspace/${workspaceSlug}`)
 }

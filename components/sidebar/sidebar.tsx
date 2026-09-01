@@ -10,6 +10,7 @@ import { authClient } from '@/lib/auth-client'
 import { PageTree } from './page-tree'
 import { WorkspaceSwitcher } from './workspace-switcher'
 import { SearchModal } from './search-modal'
+import { NotificationsBell } from '@/components/notifications/notifications-bell'
 import { createPage, deletePageForever, restorePage } from '@/app/(app)/actions'
 import type { Page, Workspace } from '@/payload-types'
 
@@ -18,11 +19,13 @@ export function Sidebar({
   workspaces,
   pages,
   userEmail,
+  unreadNotificationCount,
 }: {
   workspace: Workspace
   workspaces: Workspace[]
   pages: Page[]
   userEmail: string
+  unreadNotificationCount: number
 }) {
   const router = useRouter()
   const pathname = usePathname()
@@ -135,14 +138,17 @@ export function Sidebar({
     <div className="flex h-full w-64 shrink-0 flex-col border-r border-black/5 bg-[#f7f7f5] dark:border-white/10 dark:bg-[#202020]">
       <div className="flex items-center justify-between gap-1 px-2 pt-2">
         <WorkspaceSwitcher workspace={workspace} workspaces={workspaces} />
-        <button
-          type="button"
-          onClick={() => setCollapsed(true)}
-          title="Collapse sidebar"
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md hover:bg-black/[.06] dark:hover:bg-white/[.08]"
-        >
-          <ChevronsLeft size={16} />
-        </button>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <NotificationsBell initialUnreadCount={unreadNotificationCount} />
+          <button
+            type="button"
+            onClick={() => setCollapsed(true)}
+            title="Collapse sidebar"
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md hover:bg-black/[.06] dark:hover:bg-white/[.08]"
+          >
+            <ChevronsLeft size={16} />
+          </button>
+        </div>
       </div>
 
       <button
