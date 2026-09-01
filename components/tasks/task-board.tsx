@@ -6,8 +6,9 @@ import { Plus } from 'lucide-react'
 import { flexRender, getCoreRowModel, getSortedRowModel, useReactTable, type ColumnDef, type SortingState } from '@tanstack/react-table'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { statusColorClasses } from '@/lib/status-colors'
-import { createTask, loadMoreTasks, moveTaskToStatus } from '@/app/(app)/workspace/[workspaceSlug]/tasks/actions'
+import { createTask, getTaskRuns, loadMoreTasks, moveTaskToStatus } from '@/app/(app)/workspace/[workspaceSlug]/tasks/actions'
 import { TaskDrawer } from './task-drawer'
+import { RunMetrics, type TaskRunMetrics } from './run-metrics'
 import type { Agent, Project, Task, TaskStatus, User, Workspace } from '@/payload-types'
 
 export interface ColumnData {
@@ -62,6 +63,7 @@ export function TaskBoard({
   const [error, setError] = useState<string | null>(null)
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(initialSelectedTaskId)
   const [view, setView] = useState<'board' | 'list' | 'table'>('board')
+  const [runMetrics, setRunMetrics] = useState<Record<number, TaskRunMetrics>>({})
 
   useEffect(() => {
     setTasksByStatus(Object.fromEntries(columns.map((c) => [c.status.id, c.tasks])))
@@ -145,6 +147,26 @@ export function TaskBoard({
   const selectedTask = selectedTaskId != null ? findTask(selectedTaskId)?.task ?? null : null
   const allTasks = useMemo(() => Object.values(tasksByStatus).flat(), [tasksByStatus])
 
+  useEffect(() => {
+    let active = true
+    async function refreshMetrics() {
+      const items = await Promise.all(allTasks.map(async (task) => {
+      if (!task.agent) return null
+      const runs = await getTaskRuns(task.id)
+      const run = runs[0]
+      if (!run) return null
+      const usage = await fetch(`/api/runs/${run.id}`).then((response) => response.ok ? response.json() as Promise<{ totalCostTicks: number; stepCount: number }> : null)
+      if (!usage) return null
+      return { taskId: task.id, metrics: { runId: run.id, status: run.status, startedAt: run.startedAt, completedAt: run.completedAt, totalCostTicks: usage.totalCostTicks, stepCount: usage.stepCount } }
+      }))
+      if (!active) return
+      setRunMetrics(Object.fromEntries(items.filter((item): item is NonNullable<typeof item> => item !== null).map((item) => [item.taskId, item.metrics])))
+    }
+    void refreshMetrics().catch(() => { /* Metrics are non-critical; cards remain usable if broker data is unavailable. */ })
+    const timer = window.setInterval(() => { void refreshMetrics().catch(() => undefined) }, 4000)
+    return () => { active = false; window.clearInterval(timer) }
+  }, [allTasks])
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center justify-between border-b border-black/5 px-6 py-3 dark:border-white/10">
@@ -163,8 +185,8 @@ export function TaskBoard({
         </div>
       )}
       {view === 'board' ? <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
-        <div className="flex flex-1 gap-3 overflow-x-auto p-4">{columns.map((col) => <TaskColumn key={col.status.id} status={col.status} tasks={tasksByStatus[col.status.id] ?? []} totalDocs={totalsByStatus[col.status.id] ?? 0} onOpenTask={setSelectedTaskId} onAddTask={(title) => void handleAddTask(col.status.id, title)} onLoadMore={() => void handleLoadMore(col.status.id)} />)}</div>
-      </DndContext> : view === 'list' ? <TaskListView columns={columns} tasksByStatus={tasksByStatus} onOpenTask={setSelectedTaskId} /> : <TaskTableView tasks={allTasks} columns={columns} onOpenTask={setSelectedTaskId} />}
+        <div className="flex flex-1 gap-3 overflow-x-auto p-4">{columns.map((col) => <TaskColumn key={col.status.id} status={col.status} tasks={tasksByStatus[col.status.id] ?? []} totalDocs={totalsByStatus[col.status.id] ?? 0} runMetrics={runMetrics} onOpenTask={setSelectedTaskId} onAddTask={(title) => void handleAddTask(col.status.id, title)} onLoadMore={() => void handleLoadMore(col.status.id)} />)}</div>
+      </DndContext> : view === 'list' ? <TaskListView columns={columns} tasksByStatus={tasksByStatus} runMetrics={runMetrics} onOpenTask={setSelectedTaskId} /> : <TaskTableView tasks={allTasks} columns={columns} runMetrics={runMetrics} onOpenTask={setSelectedTaskId} />}
 
       {selectedTask && (
         <TaskDrawer
@@ -182,17 +204,17 @@ export function TaskBoard({
   )
 }
 
-function TaskListView({ columns, tasksByStatus, onOpenTask }: { columns: ColumnData[]; tasksByStatus: Record<number, Task[]>; onOpenTask: (id: number) => void }) {
+function TaskListView({ columns, tasksByStatus, runMetrics, onOpenTask }: { columns: ColumnData[]; tasksByStatus: Record<number, Task[]>; runMetrics: Record<number, TaskRunMetrics>; onOpenTask: (id: number) => void }) {
   const groups = columns.map((column) => ({ ...column, tasks: tasksByStatus[column.status.id] ?? [] })).filter((group) => group.tasks.length > 0)
   const rows = groups.flatMap((group) => [{ kind: 'header' as const, id: `status-${group.status.id}`, status: group.status }, ...group.tasks.map((task) => ({ kind: 'task' as const, id: `task-${task.id}`, task }))])
   const parentRef = useMemo(() => ({ current: null as HTMLDivElement | null }), [])
   const virtualizer = useVirtualizer({ count: rows.length, getScrollElement: () => parentRef.current, estimateSize: (index) => rows[index].kind === 'header' ? 36 : 52, overscan: 8 })
-  return <div ref={parentRef} className="min-h-0 flex-1 overflow-auto p-4"><div className="relative" style={{ height: virtualizer.getTotalSize() }}>{virtualizer.getVirtualItems().map((item) => { const row = rows[item.index]; return <div key={row.id} className="absolute left-0 right-0" style={{ transform: `translateY(${item.start}px)` }}>{row.kind === 'header' ? <div className="border-b border-black/10 px-2 py-2 text-xs font-semibold text-black/50 dark:border-white/10 dark:text-white/50">{row.status.name}</div> : <button type="button" onClick={() => onOpenTask(row.task.id)} className="flex h-[52px] w-full items-center justify-between border-b border-black/5 px-3 text-left text-sm hover:bg-black/[.03] dark:border-white/10 dark:hover:bg-white/[.04]"><span className="truncate">{row.task.title || 'Untitled'}</span><TaskMeta task={row.task} /></button>}</div> })}</div></div>
+  return <div ref={parentRef} className="min-h-0 flex-1 overflow-auto p-4"><div className="relative" style={{ height: virtualizer.getTotalSize() }}>{virtualizer.getVirtualItems().map((item) => { const row = rows[item.index]; return <div key={row.id} className="absolute left-0 right-0" style={{ transform: `translateY(${item.start}px)` }}>{row.kind === 'header' ? <div className="border-b border-black/10 px-2 py-2 text-xs font-semibold text-black/50 dark:border-white/10 dark:text-white/50">{row.status.name}</div> : <button type="button" onClick={() => onOpenTask(row.task.id)} className="flex h-[52px] w-full items-center justify-between border-b border-black/5 px-3 text-left text-sm hover:bg-black/[.03] dark:border-white/10 dark:hover:bg-white/[.04]"><span className="truncate">{row.task.title || 'Untitled'}</span><span className="flex items-center gap-3"><TaskMeta task={row.task} /><RunMetrics metrics={runMetrics[row.task.id]} /></span></button>}</div> })}</div></div>
 }
 
 function TaskMeta({ task }: { task: Task }) { const project = typeof task.project === 'object' ? task.project?.name : null; const assignee = typeof task.assignee === 'object' ? task.assignee?.name : null; return <span className="ml-3 shrink-0 text-xs text-black/40 dark:text-white/40">{project || assignee || ''}</span> }
 
-function TaskTableView({ tasks, columns, onOpenTask }: { tasks: Task[]; columns: ColumnData[]; onOpenTask: (id: number) => void }) {
+function TaskTableView({ tasks, columns, runMetrics, onOpenTask }: { tasks: Task[]; columns: ColumnData[]; runMetrics: Record<number, TaskRunMetrics>; onOpenTask: (id: number) => void }) {
   const [sorting, setSorting] = useState<SortingState>([])
   const statusById = useMemo(() => new Map(columns.map((column) => [column.status.id, column.status.name])), [columns])
   const columnDefs = useMemo<ColumnDef<Task>[]>(() => [
@@ -206,13 +228,14 @@ function TaskTableView({ tasks, columns, onOpenTask }: { tasks: Task[]; columns:
   const table = useReactTable({ data: tasks, columns: columnDefs, state: { sorting }, onSortingChange: setSorting, getCoreRowModel: getCoreRowModel(), getSortedRowModel: getSortedRowModel() })
   const parentRef = useMemo(() => ({ current: null as HTMLDivElement | null }), [])
   const virtualizer = useVirtualizer({ count: table.getRowModel().rows.length, getScrollElement: () => parentRef.current, estimateSize: () => 48, overscan: 8 })
-  return <div ref={parentRef} className="min-h-0 flex-1 overflow-auto p-4"><table className="w-full min-w-[720px] text-left text-sm"><thead className="sticky top-0 z-10 bg-white dark:bg-[#191919]"><tr>{table.getFlatHeaders().map((header) => <th key={header.id} className="border-b border-black/10 px-3 py-2 font-medium dark:border-white/10"><button type="button" onClick={header.column.getToggleSortingHandler()}>{flexRender(header.column.columnDef.header, header.getContext())}{header.column.getIsSorted() === 'asc' ? ' ↑' : header.column.getIsSorted() === 'desc' ? ' ↓' : ''}</button></th>)}</tr></thead><tbody>{virtualizer.getVirtualItems().map((item) => { const row = table.getRowModel().rows[item.index]; return <tr key={row.id} style={{ height: 48 }} onClick={() => onOpenTask(row.original.id)} className="cursor-pointer hover:bg-black/[.03] dark:hover:bg-white/[.04]">{row.getVisibleCells().map((cell) => <td key={cell.id} className="border-b border-black/5 px-3 py-2 dark:border-white/10">{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>)}</tr> })}</tbody></table></div>
+  return <div ref={parentRef} className="min-h-0 flex-1 overflow-auto p-4"><table className="w-full min-w-[820px] text-left text-sm"><thead className="sticky top-0 z-10 bg-white dark:bg-[#191919]"><tr>{table.getFlatHeaders().map((header) => <th key={header.id} className="border-b border-black/10 px-3 py-2 font-medium dark:border-white/10"><button type="button" onClick={header.column.getToggleSortingHandler()}>{flexRender(header.column.columnDef.header, header.getContext())}{header.column.getIsSorted() === 'asc' ? ' ↑' : header.column.getIsSorted() === 'desc' ? ' ↓' : ''}</button></th>)}<th className="border-b border-black/10 px-3 py-2 font-medium dark:border-white/10">Run</th></tr></thead><tbody>{virtualizer.getVirtualItems().map((item) => { const row = table.getRowModel().rows[item.index]; return <tr key={row.id} style={{ height: 48 }} onClick={() => onOpenTask(row.original.id)} className="cursor-pointer hover:bg-black/[.03] dark:hover:bg-white/[.04]">{row.getVisibleCells().map((cell) => <td key={cell.id} className="border-b border-black/5 px-3 py-2 dark:border-white/10">{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>)}<td><RunMetrics metrics={runMetrics[row.original.id]} /></td></tr> })}</tbody></table></div>
 }
 
 function TaskColumn({
   status,
   tasks,
   totalDocs,
+  runMetrics,
   onOpenTask,
   onAddTask,
   onLoadMore,
@@ -220,6 +243,7 @@ function TaskColumn({
   status: TaskStatus
   tasks: Task[]
   totalDocs: number
+  runMetrics: Record<number, TaskRunMetrics>
   onOpenTask: (taskId: number) => void
   onAddTask: (title: string) => void
   onLoadMore: () => void
@@ -250,7 +274,7 @@ function TaskColumn({
       </div>
       <div className="flex min-h-[40px] flex-1 flex-col gap-1.5 px-2 pb-2">
         {tasks.map((task) => (
-          <TaskCard key={task.id} task={task} onOpen={() => onOpenTask(task.id)} />
+          <TaskCard key={task.id} task={task} metrics={runMetrics[task.id]} onOpen={() => onOpenTask(task.id)} />
         ))}
         {tasks.length < totalDocs && (
           <button
@@ -293,7 +317,7 @@ function TaskColumn({
   )
 }
 
-function TaskCard({ task, onOpen }: { task: Task; onOpen: () => void }) {
+function TaskCard({ task, metrics, onOpen }: { task: Task; metrics?: TaskRunMetrics; onOpen: () => void }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: `${DRAG_PREFIX}${task.id}` })
   const assignee = typeof task.assignee === 'object' ? task.assignee : null
   const project = typeof task.project === 'object' ? task.project : null
@@ -309,7 +333,7 @@ function TaskCard({ task, onOpen }: { task: Task; onOpen: () => void }) {
         isDragging ? 'opacity-50' : ''
       }`}
     >
-      <div className="truncate font-medium">{task.title || 'Untitled'}</div>
+      <div className="flex items-center justify-between gap-2"><div className="truncate font-medium">{task.title || 'Untitled'}</div><RunMetrics metrics={metrics} /></div>
       {(project || assignee) && (
         <div className="mt-1 flex items-center justify-between gap-1">
           {project ? (
