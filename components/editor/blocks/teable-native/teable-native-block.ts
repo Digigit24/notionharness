@@ -11,14 +11,22 @@ import {
 import { widgetPresets } from '@blocksuite/data-view/widget-presets'
 import { computed, signal } from '@preact/signals-core'
 import { css, html, unsafeCSS } from 'lit'
-import type { TeableNativeBlockModel } from './schema'
+import type { TeableNativeBlockModel, TeableNativeSourceType } from './schema'
 import { TeableDataSource } from './teable-data-source'
+import { PayloadDataSource } from '../data-sources/payload-data-source'
+import { UserDatabaseDataSource } from '../data-sources/user-database-data-source'
+import type { GenericDataSource } from '../data-sources/generic-data-source'
 import { openRecordDetailPanel, closeRecordDetailPanel } from './record-detail-panel'
 
 interface ConnectionOption {
   id: number
   name: string
   teableTableId: string
+}
+
+interface UserDatabaseOption {
+  id: number
+  name: string
 }
 
 /**
@@ -54,8 +62,28 @@ export class TeableNativeBlockComponent extends BlockComponent<TeableNativeBlock
   private _teableTableId: string | null = null
   private _tableName = 'Untitled'
   private _titleTouched = false
-  private _dataSource: TeableDataSource | null = null
+  // ROADMAP P2.3/D3 — swappable across the three `GenericDataSource`
+  // backends; see `_mountDataSource`/`_loadPayloadSource`/
+  // `_loadUserDatabaseSource` for which concrete class ends up here.
+  private _dataSource: GenericDataSource | null = null
   private _dataView = new DataView()
+
+  // Alternate-source picker state (Payload collection / generic user
+  // database) — separate from `_connecting` (Teable's own "connect an
+  // existing table" list), which stays untouched.
+  private _pickingSourceType: 'payload' | 'user-database' | null = null
+  private _payloadCollections: string[] = []
+  private _userDatabases: UserDatabaseOption[] = []
+  private _newUserDatabaseName = ''
+
+  /** `model.sourceType` is the source of truth once set; `null` means a
+   * pre-P2.3 document, which is always a legacy Teable connection if it has
+   * a `teableDatabaseId` at all — see `schema.ts`'s comment on `sourceType`. */
+  private get _effectiveSourceType(): TeableNativeSourceType | null {
+    if (this.model.sourceType) return this.model.sourceType
+    if (this.model.teableDatabaseId !== null) return 'teable'
+    return null
+  }
 
   private _bindHotkey = (hotkeys: Record<string, UIEventHandler>) => {
     return { dispose: this.host.event.bindHotkey(hotkeys, { blockId: this.topContenteditableElement?.blockId ?? this.blockId }) }
@@ -93,7 +121,10 @@ export class TeableNativeBlockComponent extends BlockComponent<TeableNativeBlock
   override connectedCallback() {
     super.connectedCallback()
     this.contentEditable = 'false'
-    if (this.model.teableDatabaseId !== null) void this._loadConnectedTable()
+    const sourceType = this._effectiveSourceType
+    if (sourceType === 'teable' && this.model.teableDatabaseId !== null) void this._loadConnectedTable()
+    else if (sourceType === 'payload' && this.model.payloadCollection) void this._loadPayloadSource(this.model.payloadCollection)
+    else if (sourceType === 'user-database' && this.model.userDatabaseId !== null) void this._loadUserDatabaseSource(this.model.userDatabaseId)
   }
 
   override disconnectedCallback() {
@@ -135,15 +166,40 @@ export class TeableNativeBlockComponent extends BlockComponent<TeableNativeBlock
   }
 
   /** The inline title IS the create/rename affordance (no separate "new table name" input):
-   * unconnected + committed (blur/Enter) → creates a table named after the title;
-   * already connected + committed → renames the connected table to the new title. */
+   * unconnected + committed (blur/Enter) → creates a Teable table named after the title
+   * (the only source that can be *created* this way — Payload/user-database connections
+   * are picked or created through `_renderSourcePicker`, not typed into this field);
+   * already connected + committed → renames the connected source, where that's supported. */
   private async _commitTitle() {
     const trimmed = this._tableName.trim()
+    const sourceType = this._effectiveSourceType
 
-    if (this.model.teableDatabaseId !== null) {
+    if (sourceType === 'teable') {
       this._tableName = trimmed || 'Untitled'
       this.requestUpdate()
       if (trimmed) void this._renameTable(this._tableName)
+      return
+    }
+
+    if (sourceType === 'user-database' && this.model.userDatabaseId !== null) {
+      this._tableName = trimmed || 'Untitled'
+      this.requestUpdate()
+      if (trimmed) {
+        void fetch(`/api/user-databases/${this.model.userDatabaseId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: this._tableName }),
+        })
+      }
+      return
+    }
+
+    if (sourceType === 'payload') {
+      // A Payload-backed block is named after the collection it points at,
+      // not a user-chosen label — `PayloadDataSource`'s schema is fixed
+      // (see its own class comment), so there's nothing to rename server-side.
+      this._tableName = trimmed || (this.model.payloadCollection ?? 'Untitled')
+      this.requestUpdate()
       return
     }
 
@@ -203,11 +259,12 @@ export class TeableNativeBlockComponent extends BlockComponent<TeableNativeBlock
 
   /** Resets to the create/connect view — used by "Change table" so a stray blur-commit can't be misread as renaming the table being left behind. */
   private _changeTable() {
-    this.doc.updateBlock(this.model, { teableDatabaseId: null })
+    this.doc.updateBlock(this.model, { teableDatabaseId: null, sourceType: null, payloadCollection: null, userDatabaseId: null })
     this._teableTableId = null
     this._dataSource = null
     this._tableName = 'Untitled'
     this._titleTouched = false
+    this._pickingSourceType = null
     this._error = null
     void this._openConnect()
   }
@@ -220,7 +277,7 @@ export class TeableNativeBlockComponent extends BlockComponent<TeableNativeBlock
   }
 
   private _selectConnection(conn: ConnectionOption) {
-    this.doc.updateBlock(this.model, { teableDatabaseId: conn.id })
+    this.doc.updateBlock(this.model, { teableDatabaseId: conn.id, sourceType: 'teable', payloadCollection: null, userDatabaseId: null })
     this._connecting = false
     this._teableTableId = conn.teableTableId
     this._tableName = conn.name || 'Untitled'
@@ -257,8 +314,126 @@ export class TeableNativeBlockComponent extends BlockComponent<TeableNativeBlock
     this.requestUpdate()
   }
 
+  /** Loads+mounts a `PayloadDataSource` (existing document, e.g. after reload). */
+  private async _loadPayloadSource(collection: string) {
+    const workspaceId = this._workspaceId
+    if (!workspaceId) {
+      this._error = 'This page has no workspace context.'
+      this.requestUpdate()
+      return
+    }
+    this._loading = true
+    this._error = null
+    this._tableName = collection
+    this.requestUpdate()
+    try {
+      const source = new PayloadDataSource(collection, Number(workspaceId))
+      await source.refresh()
+      this._dataSource = source
+    } catch (err) {
+      this._error = err instanceof Error ? err.message : 'Failed to load the collection.'
+    } finally {
+      this._loading = false
+      this.requestUpdate()
+    }
+  }
+
+  /** Loads+mounts a `UserDatabaseDataSource`, fetching the real doc name (schema.ts
+   * doesn't cache it on the block — the `databases` doc is the source of truth). */
+  private async _loadUserDatabaseSource(id: number) {
+    this._loading = true
+    this._error = null
+    this.requestUpdate()
+    try {
+      const res = await fetch(`/api/user-databases/${id}`)
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || 'Database not found.')
+      this._tableName = json.doc?.name || 'Untitled'
+      const source = new UserDatabaseDataSource(id)
+      await source.refresh()
+      this._dataSource = source
+    } catch (err) {
+      this._error = err instanceof Error ? err.message : 'Failed to load the database.'
+    } finally {
+      this._loading = false
+      this.requestUpdate()
+    }
+  }
+
+  private async _openPayloadPicker() {
+    this._pickingSourceType = 'payload'
+    this._error = null
+    this.requestUpdate()
+    try {
+      const res = await fetch('/api/payload-datasource')
+      const json = await res.json()
+      this._payloadCollections = (json.collections ?? []).map((c: { slug: string }) => c.slug)
+    } catch {
+      this._error = 'Could not load available collections.'
+    } finally {
+      this.requestUpdate()
+    }
+  }
+
+  private async _openUserDatabasePicker() {
+    this._pickingSourceType = 'user-database'
+    this._error = null
+    this.requestUpdate()
+    const workspaceId = this._workspaceId
+    if (!workspaceId) {
+      this._error = 'This page has no workspace context.'
+      this.requestUpdate()
+      return
+    }
+    try {
+      const res = await fetch(`/api/user-databases?workspaceId=${workspaceId}`)
+      const json = await res.json()
+      this._userDatabases = (json.docs ?? []).map((d: { id: number; name: string }) => ({ id: d.id, name: d.name }))
+    } catch {
+      this._error = 'Could not load user databases.'
+    } finally {
+      this.requestUpdate()
+    }
+  }
+
+  private _selectPayloadCollection(slug: string) {
+    this.doc.updateBlock(this.model, { sourceType: 'payload', payloadCollection: slug, teableDatabaseId: null, userDatabaseId: null })
+    this._pickingSourceType = null
+    void this._loadPayloadSource(slug)
+  }
+
+  private _selectUserDatabase(option: UserDatabaseOption) {
+    this.doc.updateBlock(this.model, { sourceType: 'user-database', userDatabaseId: option.id, teableDatabaseId: null, payloadCollection: null })
+    this._pickingSourceType = null
+    this._tableName = option.name
+    void this._loadUserDatabaseSource(option.id)
+  }
+
+  private async _createUserDatabase() {
+    const workspaceId = this._workspaceId
+    const name = this._newUserDatabaseName.trim() || 'Untitled'
+    if (!workspaceId) {
+      this._error = 'This page has no workspace context.'
+      this.requestUpdate()
+      return
+    }
+    try {
+      const res = await fetch('/api/user-databases', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, workspaceId: Number(workspaceId) }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || 'Failed to create the database.')
+      this._selectUserDatabase({ id: json.doc.id, name: json.doc.name })
+    } catch (err) {
+      this._error = err instanceof Error ? err.message : 'Failed to create the database.'
+      this.requestUpdate()
+    }
+  }
+
   override renderBlock() {
-    if (this.model.teableDatabaseId === null) return this._renderCreateOrConnect()
+    if (this._effectiveSourceType === null) return this._renderCreateOrConnect()
     if (this._loading || !this._dataSource) return this._renderLoading()
     if (this._error) return this._renderErrorState()
     return this._renderDataView()
@@ -308,15 +483,87 @@ export class TeableNativeBlockComponent extends BlockComponent<TeableNativeBlock
         </div>
         ${this._connecting
           ? this._renderExistingList()
-          : html`
-              <button
-                type="button"
-                class="mt-2 text-xs text-black/40 hover:text-black/60 dark:text-white/40 dark:hover:text-white/60"
-                @click=${() => this._openConnect()}
-              >
-                Or connect an existing table…
-              </button>
+          : this._pickingSourceType
+            ? this._renderSourcePicker()
+            : html`
+              <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-black/40 dark:text-white/40">
+                <button type="button" class="hover:text-black/60 dark:hover:text-white/60" @click=${() => this._openConnect()}>
+                  Or connect an existing table…
+                </button>
+                <button type="button" class="hover:text-black/60 dark:hover:text-white/60" @click=${() => void this._openPayloadPicker()}>
+                  Use a Payload collection…
+                </button>
+                <button type="button" class="hover:text-black/60 dark:hover:text-white/60" @click=${() => void this._openUserDatabasePicker()}>
+                  Use a user database…
+                </button>
+              </div>
             `}
+      </div>
+    `
+  }
+
+  /** ROADMAP P2.3/D3 — picker for the two non-Teable `GenericDataSource`
+   * backends, alongside Teable's own pre-existing `_renderExistingList()`. */
+  private _renderSourcePicker() {
+    const cancel = () => {
+      this._pickingSourceType = null
+      this.requestUpdate()
+    }
+    if (this._pickingSourceType === 'payload') {
+      return html`
+        <div class="mt-2 border-t border-black/10 pt-2 dark:border-white/10">
+          ${this._payloadCollections.length
+            ? this._payloadCollections.map(
+                (slug) =>
+                  html`<button
+                    type="button"
+                    class="block w-full truncate rounded px-2 py-1 text-left text-sm hover:bg-black/[.06] dark:hover:bg-white/[.08]"
+                    @click=${() => this._selectPayloadCollection(slug)}
+                  >
+                    ${slug}
+                  </button>`,
+              )
+            : html`<div class="px-2 py-1 text-xs text-black/40 dark:text-white/40">No collections exposed as database sources yet.</div>`}
+          <button type="button" class="mt-1 text-xs text-black/40 hover:text-black/60 dark:text-white/40 dark:hover:text-white/60" @click=${cancel}>
+            Cancel
+          </button>
+        </div>
+      `
+    }
+    return html`
+      <div class="mt-2 border-t border-black/10 pt-2 dark:border-white/10">
+        ${this._userDatabases.length
+          ? this._userDatabases.map(
+              (d) =>
+                html`<button
+                  type="button"
+                  class="block w-full truncate rounded px-2 py-1 text-left text-sm hover:bg-black/[.06] dark:hover:bg-white/[.08]"
+                  @click=${() => this._selectUserDatabase(d)}
+                >
+                  ${d.name}
+                </button>`,
+            )
+          : html`<div class="px-2 py-1 text-xs text-black/40 dark:text-white/40">No user databases in this workspace yet.</div>`}
+        <div class="mt-2 flex items-center gap-1.5">
+          <input
+            class="min-w-0 flex-1 rounded border border-black/10 bg-transparent px-2 py-1 text-sm outline-none dark:border-white/10"
+            placeholder="New database name…"
+            .value=${this._newUserDatabaseName}
+            @input=${(e: Event) => {
+              this._newUserDatabaseName = (e.target as HTMLInputElement).value
+            }}
+          />
+          <button
+            type="button"
+            class="shrink-0 rounded bg-black/[.06] px-2 py-1 text-xs hover:bg-black/10 dark:bg-white/10 dark:hover:bg-white/20"
+            @click=${() => void this._createUserDatabase()}
+          >
+            Create
+          </button>
+        </div>
+        <button type="button" class="mt-1 text-xs text-black/40 hover:text-black/60 dark:text-white/40 dark:hover:text-white/60" @click=${cancel}>
+          Cancel
+        </button>
       </div>
     `
   }
@@ -352,7 +599,8 @@ export class TeableNativeBlockComponent extends BlockComponent<TeableNativeBlock
 
   private _renderDataView() {
     const dataSource = this._dataSource!
-    const teableTableId = this._teableTableId!
+    const sourceType = this._effectiveSourceType
+    const teableTableId = this._teableTableId
     return html`
       <div>
         <div class="mb-1 flex items-center gap-1.5 px-1">
@@ -370,14 +618,16 @@ export class TeableNativeBlockComponent extends BlockComponent<TeableNativeBlock
             }}
             @blur=${() => this._commitTitle()}
           />
-          <button
-            type="button"
-            title="Open as full page"
-            class="shrink-0 rounded p-1 text-black/40 hover:bg-black/[.06] hover:text-black/70 dark:text-white/40 dark:hover:bg-white/[.08] dark:hover:text-white/70"
-            @click=${() => this._openFullPage()}
-          >
-            ↗
-          </button>
+          ${sourceType === 'teable'
+            ? html`<button
+                type="button"
+                title="Open as full page"
+                class="shrink-0 rounded p-1 text-black/40 hover:bg-black/[.06] hover:text-black/70 dark:text-white/40 dark:hover:bg-white/[.08] dark:hover:text-white/70"
+                @click=${() => this._openFullPage()}
+              >
+                ↗
+              </button>`
+            : null}
         </div>
         <div contenteditable="false" style="position: relative">
         ${this._dataView.render({
@@ -393,12 +643,21 @@ export class TeableNativeBlockComponent extends BlockComponent<TeableNativeBlock
           eventTrace: () => {},
           detailPanelConfig: {
             openDetailPanel: (_target, data) => {
-              openRecordDetailPanel({
-                view: data.view,
-                rowId: data.rowId,
-                teableTableId,
-                workspaceSlug: this._workspaceSlug,
-              })
+              // ROADMAP P2.3 — the real BlockSuite `RecordDetail` panel is
+              // wired to Teable's row-as-page pairing (`for-teable-record`)
+              // specifically; an equivalent pairing for Payload/user-database
+              // rows doesn't exist yet, so this is a scoped, honest no-op for
+              // those sources rather than a broken/misleading panel — same
+              // "reasonable no-op, not a silent gap" precedent as
+              // `TeableDataSource.rowMove`.
+              if (sourceType === 'teable' && teableTableId) {
+                openRecordDetailPanel({
+                  view: data.view,
+                  rowId: data.rowId,
+                  teableTableId,
+                  workspaceSlug: this._workspaceSlug,
+                })
+              }
               return Promise.resolve()
             },
           },

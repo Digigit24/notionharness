@@ -1,5 +1,6 @@
 import * as migration_20260831_181832_initial from './20260831_181832_initial';
 import * as migration_20260901_034500_teable_databases_base_id from './20260901_034500_teable_databases_base_id';
+import * as migration_20260902_000000_user_databases from './20260902_000000_user_databases';
 
 export const migrations = [
   {
@@ -11,5 +12,10 @@ export const migrations = [
     up: migration_20260901_034500_teable_databases_base_id.up,
     down: migration_20260901_034500_teable_databases_base_id.down,
     name: '20260901_034500_teable_databases_base_id'
+  },
+  {
+    up: migration_20260902_000000_user_databases.up,
+    down: migration_20260902_000000_user_databases.down,
+    name: '20260902_000000_user_databases'
   },
 ];
