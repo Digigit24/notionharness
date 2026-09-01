@@ -1,8 +1,10 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { DndContext, PointerSensor, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { Plus } from 'lucide-react'
+import { flexRender, getCoreRowModel, getSortedRowModel, useReactTable, type ColumnDef, type SortingState } from '@tanstack/react-table'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { statusColorClasses } from '@/lib/status-colors'
 import { createTask, loadMoreTasks, moveTaskToStatus } from '@/app/(app)/workspace/[workspaceSlug]/tasks/actions'
 import { TaskDrawer } from './task-drawer'
@@ -55,6 +57,7 @@ export function TaskBoard({
   )
   const [error, setError] = useState<string | null>(null)
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null)
+  const [view, setView] = useState<'board' | 'list' | 'table'>('board')
 
   useEffect(() => {
     setTasksByStatus(Object.fromEntries(columns.map((c) => [c.status.id, c.tasks])))
@@ -136,32 +139,28 @@ export function TaskBoard({
   }
 
   const selectedTask = selectedTaskId != null ? findTask(selectedTaskId)?.task ?? null : null
+  const allTasks = useMemo(() => Object.values(tasksByStatus).flat(), [tasksByStatus])
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center justify-between border-b border-black/5 px-6 py-3 dark:border-white/10">
         <h1 className="text-lg font-semibold">Tasks</h1>
+        <div className="flex rounded-md border border-black/10 p-0.5 text-xs dark:border-white/10">
+          {(['board', 'list', 'table'] as const).map((item) => (
+            <button key={item} type="button" onClick={() => setView(item)} className={`rounded px-2 py-1 capitalize ${view === item ? 'bg-black/[.08] font-medium dark:bg-white/[.12]' : 'text-black/50 dark:text-white/50'}`}>
+              {item}
+            </button>
+          ))}
+        </div>
       </div>
       {error && (
         <div className="border-b border-red-200 bg-red-50 px-6 py-1.5 text-xs text-red-600 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-400">
           {error}
         </div>
       )}
-      <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
-        <div className="flex flex-1 gap-3 overflow-x-auto p-4">
-          {columns.map((col) => (
-            <TaskColumn
-              key={col.status.id}
-              status={col.status}
-              tasks={tasksByStatus[col.status.id] ?? []}
-              totalDocs={totalsByStatus[col.status.id] ?? 0}
-              onOpenTask={setSelectedTaskId}
-              onAddTask={(title) => void handleAddTask(col.status.id, title)}
-              onLoadMore={() => void handleLoadMore(col.status.id)}
-            />
-          ))}
-        </div>
-      </DndContext>
+      {view === 'board' ? <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+        <div className="flex flex-1 gap-3 overflow-x-auto p-4">{columns.map((col) => <TaskColumn key={col.status.id} status={col.status} tasks={tasksByStatus[col.status.id] ?? []} totalDocs={totalsByStatus[col.status.id] ?? 0} onOpenTask={setSelectedTaskId} onAddTask={(title) => void handleAddTask(col.status.id, title)} onLoadMore={() => void handleLoadMore(col.status.id)} />)}</div>
+      </DndContext> : view === 'list' ? <TaskListView columns={columns} tasksByStatus={tasksByStatus} onOpenTask={setSelectedTaskId} /> : <TaskTableView tasks={allTasks} columns={columns} onOpenTask={setSelectedTaskId} />}
 
       {selectedTask && (
         <TaskDrawer
@@ -176,6 +175,33 @@ export function TaskBoard({
       )}
     </div>
   )
+}
+
+function TaskListView({ columns, tasksByStatus, onOpenTask }: { columns: ColumnData[]; tasksByStatus: Record<number, Task[]>; onOpenTask: (id: number) => void }) {
+  const groups = columns.map((column) => ({ ...column, tasks: tasksByStatus[column.status.id] ?? [] })).filter((group) => group.tasks.length > 0)
+  const rows = groups.flatMap((group) => [{ kind: 'header' as const, id: `status-${group.status.id}`, status: group.status }, ...group.tasks.map((task) => ({ kind: 'task' as const, id: `task-${task.id}`, task }))])
+  const parentRef = useMemo(() => ({ current: null as HTMLDivElement | null }), [])
+  const virtualizer = useVirtualizer({ count: rows.length, getScrollElement: () => parentRef.current, estimateSize: (index) => rows[index].kind === 'header' ? 36 : 52, overscan: 8 })
+  return <div ref={parentRef} className="min-h-0 flex-1 overflow-auto p-4"><div className="relative" style={{ height: virtualizer.getTotalSize() }}>{virtualizer.getVirtualItems().map((item) => { const row = rows[item.index]; return <div key={row.id} className="absolute left-0 right-0" style={{ transform: `translateY(${item.start}px)` }}>{row.kind === 'header' ? <div className="border-b border-black/10 px-2 py-2 text-xs font-semibold text-black/50 dark:border-white/10 dark:text-white/50">{row.status.name}</div> : <button type="button" onClick={() => onOpenTask(row.task.id)} className="flex h-[52px] w-full items-center justify-between border-b border-black/5 px-3 text-left text-sm hover:bg-black/[.03] dark:border-white/10 dark:hover:bg-white/[.04]"><span className="truncate">{row.task.title || 'Untitled'}</span><TaskMeta task={row.task} /></button>}</div> })}</div></div>
+}
+
+function TaskMeta({ task }: { task: Task }) { const project = typeof task.project === 'object' ? task.project?.name : null; const assignee = typeof task.assignee === 'object' ? task.assignee?.name : null; return <span className="ml-3 shrink-0 text-xs text-black/40 dark:text-white/40">{project || assignee || ''}</span> }
+
+function TaskTableView({ tasks, columns, onOpenTask }: { tasks: Task[]; columns: ColumnData[]; onOpenTask: (id: number) => void }) {
+  const [sorting, setSorting] = useState<SortingState>([])
+  const statusById = useMemo(() => new Map(columns.map((column) => [column.status.id, column.status.name])), [columns])
+  const columnDefs = useMemo<ColumnDef<Task>[]>(() => [
+    { accessorKey: 'title', header: 'Title', cell: (info) => info.getValue<string>() || 'Untitled' },
+    { id: 'status', accessorFn: (task) => statusById.get(typeof task.status === 'number' ? task.status : task.status.id) || '', header: 'Status' },
+    { id: 'assignee', accessorFn: (task) => typeof task.assignee === 'object' ? task.assignee?.name || task.assignee?.email || '' : '', header: 'Assignee' },
+    { id: 'project', accessorFn: (task) => typeof task.project === 'object' ? task.project?.name || '' : '', header: 'Project' },
+    { accessorKey: 'position', header: 'Position' },
+    { accessorKey: 'updatedAt', header: 'Updated' },
+  ], [statusById])
+  const table = useReactTable({ data: tasks, columns: columnDefs, state: { sorting }, onSortingChange: setSorting, getCoreRowModel: getCoreRowModel(), getSortedRowModel: getSortedRowModel() })
+  const parentRef = useMemo(() => ({ current: null as HTMLDivElement | null }), [])
+  const virtualizer = useVirtualizer({ count: table.getRowModel().rows.length, getScrollElement: () => parentRef.current, estimateSize: () => 48, overscan: 8 })
+  return <div ref={parentRef} className="min-h-0 flex-1 overflow-auto p-4"><table className="w-full min-w-[720px] text-left text-sm"><thead className="sticky top-0 z-10 bg-white dark:bg-[#191919]"><tr>{table.getFlatHeaders().map((header) => <th key={header.id} className="border-b border-black/10 px-3 py-2 font-medium dark:border-white/10"><button type="button" onClick={header.column.getToggleSortingHandler()}>{flexRender(header.column.columnDef.header, header.getContext())}{header.column.getIsSorted() === 'asc' ? ' ↑' : header.column.getIsSorted() === 'desc' ? ' ↓' : ''}</button></th>)}</tr></thead><tbody>{virtualizer.getVirtualItems().map((item) => { const row = table.getRowModel().rows[item.index]; return <tr key={row.id} style={{ height: 48 }} onClick={() => onOpenTask(row.original.id)} className="cursor-pointer hover:bg-black/[.03] dark:hover:bg-white/[.04]">{row.getVisibleCells().map((cell) => <td key={cell.id} className="border-b border-black/5 px-3 py-2 dark:border-white/10">{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>)}</tr> })}</tbody></table></div>
 }
 
 function TaskColumn({
