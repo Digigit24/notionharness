@@ -17,6 +17,8 @@ export interface Run {
   accountableUser: number
   workerId: string | null
   externalSessionId: string | null
+  pageId: number | null
+  pageSubtreeBlockId: string | null
   nextSeq: number
   leaseExpiresAt: string | null
   startedAt: string | null
