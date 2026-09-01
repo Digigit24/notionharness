@@ -9,6 +9,8 @@ import { Users } from './collections/Users'
 import { Workspaces } from './collections/Workspaces'
 import { Pages } from './collections/Pages'
 import { TeableDatabases } from './collections/TeableDatabases'
+import { Databases } from './collections/Databases'
+import { DatabaseRows } from './collections/DatabaseRows'
 
 const filename = fileURLToPath(import.meta.url)
 const dirname = path.dirname(filename)
@@ -20,7 +22,7 @@ export default buildConfig({
       baseDir: path.resolve(dirname),
     },
   },
-  collections: [Users, Workspaces, Pages, TeableDatabases],
+  collections: [Users, Workspaces, Pages, TeableDatabases, Databases, DatabaseRows],
   editor: lexicalEditor(),
   secret: process.env.PAYLOAD_SECRET || '',
   typescript: {

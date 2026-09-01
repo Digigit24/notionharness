@@ -71,6 +71,8 @@ export interface Config {
     workspaces: Workspace;
     pages: Page;
     'teable-databases': TeableDatabase;
+    databases: Database;
+    'database-rows': DatabaseRow;
     'payload-kv': PayloadKv;
     'payload-locked-documents': PayloadLockedDocument;
     'payload-preferences': PayloadPreference;
@@ -82,6 +84,8 @@ export interface Config {
     workspaces: WorkspacesSelect<false> | WorkspacesSelect<true>;
     pages: PagesSelect<false> | PagesSelect<true>;
     'teable-databases': TeableDatabasesSelect<false> | TeableDatabasesSelect<true>;
+    databases: DatabasesSelect<false> | DatabasesSelect<true>;
+    'database-rows': DatabaseRowsSelect<false> | DatabaseRowsSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
     'payload-locked-documents': PayloadLockedDocumentsSelect<false> | PayloadLockedDocumentsSelect<true>;
     'payload-preferences': PayloadPreferencesSelect<false> | PayloadPreferencesSelect<true>;
@@ -242,6 +246,55 @@ export interface TeableDatabase {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "databases".
+ */
+export interface Database {
+  id: number;
+  name: string;
+  workspace: number | Workspace;
+  /**
+   * Array of GenericField-shaped property definitions ({id, name, type, options?, isPrimary?}) — the user-editable schema for this database.
+   */
+  fields?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "database-rows".
+ */
+export interface DatabaseRow {
+  id: number;
+  database: number | Database;
+  /**
+   * fieldId -> cell value map
+   */
+  cells?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  /**
+   * Fractional manual ordering within the database (cheap now, per the roadmap's own 2.1 guidance on `position float`)
+   */
+  position?: number | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "payload-kv".
  */
 export interface PayloadKv {
@@ -279,6 +332,14 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'teable-databases';
         value: number | TeableDatabase;
+      } | null)
+    | ({
+        relationTo: 'databases';
+        value: number | Database;
+      } | null)
+    | ({
+        relationTo: 'database-rows';
+        value: number | DatabaseRow;
       } | null);
   globalSlug?: string | null;
   user: {
@@ -394,6 +455,28 @@ export interface TeableDatabasesSelect<T extends boolean = true> {
   workspace?: T;
   teableTableId?: T;
   teableBaseId?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "databases_select".
+ */
+export interface DatabasesSelect<T extends boolean = true> {
+  name?: T;
+  workspace?: T;
+  fields?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "database-rows_select".
+ */
+export interface DatabaseRowsSelect<T extends boolean = true> {
+  database?: T;
+  cells?: T;
+  position?: T;
   updatedAt?: T;
   createdAt?: T;
 }
