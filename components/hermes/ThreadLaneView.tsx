@@ -22,7 +22,7 @@ export interface ThreadLaneViewProps {
 export function ThreadLaneView({
   taskId,
   taskTitle,
-  _agents,
+  agents: _agents,
   loader,
   height = 'h-[500px]',
 }: ThreadLaneViewProps) {

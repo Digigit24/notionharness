@@ -21,7 +21,7 @@ export interface ThreadDrawerTabProps {
   expandHref?: string
 }
 
-export function ThreadDrawerTab({ taskId, _agents, loader, expandHref }: ThreadDrawerTabProps) {
+export function ThreadDrawerTab({ taskId, agents: _agents, loader, expandHref }: ThreadDrawerTabProps) {
   const observed = true
   const threads = useThreadData(taskId, observed, loader)
   const parentRef = useRef<HTMLDivElement>(null)
