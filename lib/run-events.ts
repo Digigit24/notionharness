@@ -13,6 +13,8 @@ export type RunEvent =
   | { type: 'terminal'; id: string; chunk: string }
   | { type: 'usage'; provider: string; model: string; tokens: number; costTicks: number }
   | { type: 'session'; externalId: string }
+  /** A page subtree append has been durably persisted to the page CRDT. */
+  | { type: 'page_write'; pageId: number; subtree: string; blockId?: string; operation: 'append'; kind: 'heading' | 'paragraph'; status: 'committed' }
   | { type: 'done'; status: 'ok' | 'error' | 'cancelled'; reason?: string }
 
 export interface RunEventEnvelope {

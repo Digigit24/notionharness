@@ -57,16 +57,15 @@ export async function appendBlockToSubtree(
   pageId: number,
   subtree: RunSubtreeHandle,
   spec: AgentBlockSpec,
-): Promise<void> {
+): Promise<string> {
   const { doc, persist } = await loadDocForWrite(payload, pageId)
   const handleBlock = doc.getBlock(subtree)
   if (!handleBlock) {
     throw new Error(`Run subtree ${subtree} no longer exists on page ${pageId}.`)
   }
-  if (spec.kind === 'heading') {
-    doc.addBlock('affine:paragraph', { type: toParagraphType(spec.level), text: new Text(spec.text) }, subtree)
-  } else {
-    doc.addBlock('affine:paragraph', { type: 'text', text: new Text(spec.text) }, subtree)
-  }
+  const blockId = spec.kind === 'heading'
+    ? doc.addBlock('affine:paragraph', { type: toParagraphType(spec.level), text: new Text(spec.text) }, subtree)
+    : doc.addBlock('affine:paragraph', { type: 'text', text: new Text(spec.text) }, subtree)
   await persist()
+  return blockId
 }
