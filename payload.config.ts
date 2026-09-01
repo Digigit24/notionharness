@@ -19,6 +19,9 @@ import { Comments } from './collections/Comments'
 import { Activity } from './collections/Activity'
 import { Notifications } from './collections/Notifications'
 import { Artifacts } from './collections/Artifacts'
+import { RuntimeProfiles } from './collections/RuntimeProfiles'
+import { Runtimes } from './collections/Runtimes'
+import { Agents } from './collections/Agents'
 
 const filename = fileURLToPath(import.meta.url)
 const dirname = path.dirname(filename)
@@ -45,6 +48,9 @@ export default buildConfig({
     Activity,
     Notifications,
     Artifacts,
+    RuntimeProfiles,
+    Runtimes,
+    Agents,
   ],
   editor: lexicalEditor(),
   secret: process.env.PAYLOAD_SECRET || '',

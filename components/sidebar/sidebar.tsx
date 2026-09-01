@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useOptimistic, useState, useTransition } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight, ListTodo, LogOut, Plus, Search, Trash2 } from 'lucide-react'
+import { Bot, ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight, ListTodo, LogOut, Plus, Search, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { ThemeToggle } from '@/components/theme/theme-toggle'
 import { authClient } from '@/lib/auth-client'
@@ -168,6 +168,19 @@ export function Sidebar({
       >
         <ListTodo size={14} />
         Tasks
+      </Link>
+
+      <Link
+        href={`/workspace/${workspace.slug}/agents`}
+        className={cn(
+          'mx-2 mt-1 flex items-center gap-2 rounded-md px-2 py-1.5 text-sm',
+          pathname.endsWith('/agents')
+            ? 'bg-black/[.06] dark:bg-white/[.08]'
+            : 'text-black/60 hover:bg-black/[.06] dark:text-white/60 dark:hover:bg-white/[.08]',
+        )}
+      >
+        <Bot size={14} />
+        Agents
       </Link>
 
       <div className="mt-2 flex-1 overflow-y-auto px-2 pb-4">
