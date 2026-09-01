@@ -7,6 +7,7 @@ import * as migration_20260902_040000_pillar2_system_tables from './20260902_040
 import * as migration_20260902_050000_tasks_revision_numeric from './20260902_050000_tasks_revision_numeric';
 import * as migration_20260902_060000_followers_page_entity_type from './20260902_060000_followers_page_entity_type';
 import * as migration_20260902_061000_agent_runtime_profiles from './20260902_061000_agent_runtime_profiles';
+import * as migration_20260902_070000_tasks_agents from './20260902_070000_tasks_agents';
 
 export const migrations = [
   {
@@ -53,5 +54,10 @@ export const migrations = [
     up: migration_20260902_061000_agent_runtime_profiles.up,
     down: migration_20260902_061000_agent_runtime_profiles.down,
     name: '20260902_061000_agent_runtime_profiles'
+  },
+  {
+    up: migration_20260902_070000_tasks_agents.up,
+    down: migration_20260902_070000_tasks_agents.down,
+    name: '20260902_070000_tasks_agents'
   },
 ];

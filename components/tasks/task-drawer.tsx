@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from 'react'
 import { X } from 'lucide-react'
-import { getTaskActivity, updateTaskFields } from '@/app/(app)/workspace/[workspaceSlug]/tasks/actions'
-import type { Activity, Project, Task, TaskStatus, User, Workspace } from '@/payload-types'
+import { getRunMessages, getTaskActivity, getTaskRuns, updateTaskFields } from '@/app/(app)/workspace/[workspaceSlug]/tasks/actions'
+import type { Activity, Agent, Project, Task, TaskStatus, User, Workspace } from '@/payload-types'
 
 type Tab = 'overview' | 'activity' | 'sessions'
 
@@ -13,6 +13,7 @@ export function TaskDrawer({
   projects,
   statuses,
   assignableUsers,
+  agents,
   onClose,
   onUpdated,
 }: {
@@ -21,6 +22,7 @@ export function TaskDrawer({
   projects: Project[]
   statuses: TaskStatus[]
   assignableUsers: User[]
+  agents: Agent[]
   onClose: () => void
   onUpdated: (task: Task) => void
 }) {
@@ -34,7 +36,7 @@ export function TaskDrawer({
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  async function patch(data: Partial<Pick<Task, 'title' | 'status' | 'assignee' | 'project'>>) {
+  async function patch(data: Partial<Pick<Task, 'title' | 'status' | 'assignee' | 'agent' | 'project'>>) {
     const updated = await updateTaskFields({ taskId: task.id, workspaceSlug: workspace.slug, data })
     onUpdated(updated)
   }
@@ -86,15 +88,12 @@ export function TaskDrawer({
               projects={projects}
               statuses={statuses}
               assignableUsers={assignableUsers}
+              agents={agents}
               onPatch={patch}
             />
           )}
           {tab === 'activity' && <ActivityTab taskId={task.id} />}
-          {tab === 'sessions' && (
-            <p className="text-sm text-black/40 dark:text-white/40">
-              Sessions will appear here once the agent broker (Pillar 4) is wired up to this surface.
-            </p>
-          )}
+          {tab === 'sessions' && <SessionsTab taskId={task.id} agents={agents} />}
         </div>
       </div>
     </div>
@@ -106,13 +105,15 @@ function OverviewTab({
   projects,
   statuses,
   assignableUsers,
+  agents,
   onPatch,
 }: {
   task: Task
   projects: Project[]
   statuses: TaskStatus[]
   assignableUsers: User[]
-  onPatch: (data: Partial<Pick<Task, 'title' | 'status' | 'assignee' | 'project'>>) => Promise<void>
+  agents: Agent[]
+  onPatch: (data: Partial<Pick<Task, 'title' | 'status' | 'assignee' | 'agent' | 'project'>>) => Promise<void>
 }) {
   const [title, setTitle] = useState(task.title || '')
   useEffect(() => setTitle(task.title || ''), [task.id, task.title])
@@ -158,6 +159,12 @@ function OverviewTab({
           ))}
         </select>
       </Field>
+      <Field label="Agent">
+        <select value={typeof task.agent === 'object' ? task.agent?.id ?? '' : task.agent ?? ''} onChange={(e) => void onPatch({ agent: e.target.value ? Number(e.target.value) : null })} className="w-full rounded-md border border-black/10 bg-transparent px-2.5 py-1.5 text-sm dark:border-white/10">
+          <option value="">No agent</option>
+          {agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
+        </select>
+      </Field>
       <Field label="Project">
         <select
           value={projectId ?? ''}
@@ -174,6 +181,26 @@ function OverviewTab({
       </Field>
     </div>
   )
+}
+
+function SessionsTab({ taskId, agents }: { taskId: number; agents: Agent[] }) {
+  const [runs, setRuns] = useState<Awaited<ReturnType<typeof getTaskRuns>>>([])
+  const [messages, setMessages] = useState<Record<number, Awaited<ReturnType<typeof getRunMessages>>>>({})
+  useEffect(() => {
+    let active = true
+    const refresh = async () => {
+      const nextRuns = await getTaskRuns(taskId)
+      if (!active) return
+      setRuns(nextRuns)
+      const entries = await Promise.all(nextRuns.map(async (run) => [run.id, await getRunMessages(run.id)] as const))
+      if (active) setMessages(Object.fromEntries(entries))
+    }
+    void refresh()
+    const timer = setInterval(() => void refresh(), 2000)
+    return () => { active = false; clearInterval(timer) }
+  }, [taskId])
+  if (runs.length === 0) return <p className="text-sm text-black/40 dark:text-white/40">No agent runs yet.</p>
+  return <div className="space-y-4">{runs.map((run) => <section key={run.id} className="rounded border border-black/10 p-2 text-xs dark:border-white/10"><div className="mb-2 flex justify-between"><span>Run #{run.id} · {agents.find((a) => a.id === run.agentId)?.name ?? 'Agent'}</span><span>{run.status}</span></div><div className="space-y-1 font-mono">{(messages[run.id] ?? []).map((row) => <div key={row.seq} className="whitespace-pre-wrap break-words"><span className="text-black/40 dark:text-white/40">[{row.seq}] </span>{JSON.stringify(row.event)}</div>)}</div></section>)}</div>
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {

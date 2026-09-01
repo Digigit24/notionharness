@@ -201,3 +201,9 @@ export async function getRun(runId: number): Promise<Run | null> {
   const res = await pool.query<RunRow>(`SELECT * FROM runs WHERE id = $1`, [runId])
   return res.rows[0] ? rowToRun(res.rows[0]) : null
 }
+
+export async function listRunsForTask(taskId: number): Promise<Run[]> {
+  const pool = getBrokerPool()
+  const res = await pool.query<RunRow>(`SELECT * FROM runs WHERE task_id = $1 ORDER BY created_at DESC`, [taskId])
+  return res.rows.map(rowToRun)
+}
