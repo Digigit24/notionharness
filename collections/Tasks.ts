@@ -70,6 +70,17 @@ export const Tasks: CollectionConfig = {
       index: true,
     },
     {
+      name: 'page',
+      type: 'relationship',
+      relationTo: 'pages',
+      hasMany: false,
+      index: true,
+      admin: {
+        description:
+          'The task\'s document (ROADMAP 6.1 — "streams blocks into the task\'s document"). Null until something needs to write into it: lazily created/linked by lib/task-pages.ts\'s ensureTaskPage, not on task creation, so a task an agent never touches never gets a page nobody opens.',
+      },
+    },
+    {
       name: 'createdBy',
       type: 'relationship',
       relationTo: 'users',

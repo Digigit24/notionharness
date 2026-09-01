@@ -369,6 +369,10 @@ export interface Task {
   assignee?: (number | null) | User;
   agent?: (number | null) | Agent;
   /**
+   * The task's document (ROADMAP 6.1 — "streams blocks into the task's document"). Null until something needs to write into it: lazily created/linked by lib/task-pages.ts's ensureTaskPage, not on task creation, so a task an agent never touches never gets a page nobody opens.
+   */
+  page?: (number | null) | Page;
+  /**
    * Who created this task — passed explicitly by the caller (see class comment above for why this can't be read off req.user).
    */
   createdBy: number | User;
@@ -844,6 +848,7 @@ export interface TasksSelect<T extends boolean = true> {
   status?: T;
   assignee?: T;
   agent?: T;
+  page?: T;
   createdBy?: T;
   position?: T;
   revision?: T;
