@@ -44,7 +44,16 @@ function defaultShell(): { shell: string; args: string[] } {
 function isResizeMessage(value: unknown): value is PtyResizeMessage {
   if (!value || typeof value !== 'object') return false
   const message = value as Partial<PtyResizeMessage>
-  return message.type === 'resize' && Number.isInteger(message.cols) && Number.isInteger(message.rows) && message.cols > 0 && message.rows > 0
+  const { cols, rows } = message
+  return (
+    message.type === 'resize' &&
+    typeof cols === 'number' &&
+    typeof rows === 'number' &&
+    Number.isInteger(cols) &&
+    Number.isInteger(rows) &&
+    cols > 0 &&
+    rows > 0
+  )
 }
 
 function sendBytes(socket: WebSocket, value: string) {
