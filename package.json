@@ -13,7 +13,8 @@
     "generate:importmap": "payload generate:importmap",
     "seed:teable": "tsx scripts/seed-teable-databases.ts",
     "mcp:notionforge": "tsx scripts/notionforge-mcp.ts",
-    "test:mcp": "tsx scripts/test-mcp.ts"
+    "test:mcp": "tsx scripts/test-mcp.ts",
+    "test:run-worktrees": "tsx scripts/test-run-worktrees.ts"
   },
   "dependencies": {
     "@blocksuite/block-std": "^0.19.5",
