@@ -17,11 +17,13 @@ export default async function ActiveRunsPage({ params }: PageProps) {
 
   // Fetch workspace to get its ID
   const payload = await getPayloadClient()
-  const workspace = await payload.findOne({
+  const workspaceResult = await payload.find({
     collection: 'workspaces',
     where: { slug: { equals: workspaceSlug } },
+    limit: 1,
     overrideAccess: true,
   })
+  const workspace = workspaceResult.docs[0]
 
   if (!workspace) {
     return (
