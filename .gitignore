@@ -46,6 +46,7 @@ sync-body.json
 dev.log
 dev-detached.log
 dev-detached*.log
+dispatcher-loop.log
 *.tmp
 
 # agent tooling scratch state (not app source)
