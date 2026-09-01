@@ -13,7 +13,8 @@
     "generate:importmap": "payload generate:importmap",
     "seed:teable": "tsx scripts/seed-teable-databases.ts",
     "mcp:notionforge": "tsx scripts/notionforge-mcp.ts",
-    "test:mcp": "tsx scripts/test-mcp.ts"
+    "test:mcp": "tsx scripts/test-mcp.ts",
+    "test:pty": "tsx scripts/test-pty-terminal.ts"
   },
   "dependencies": {
     "@blocksuite/block-std": "^0.19.5",
@@ -34,6 +35,7 @@
     "dockerode": "^5.0.1",
     "graphql": "^16.14.2",
     "lucide-react": "^1.38.0",
+    "node-pty": "^1.1.0",
     "next": "^15.4.11",
     "payload": "^3.88.0",
     "pg": "^8.23.0",
@@ -41,6 +43,7 @@
     "react-dom": "19.2.8",
     "sharp": "^0.35.4",
     "tailwind-merge": "^3.6.0",
+    "ws": "^8.18.3",
     "yjs": "^13.6.32",
     "zod": "^4.5.4"
   },
@@ -51,6 +54,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/ws": "^8.5.13",
     "eslint": "^9",
     "eslint-config-next": "^15.4.11",
     "tailwindcss": "^4",
