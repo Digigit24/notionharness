@@ -13,7 +13,7 @@
 // claim → worktree → identity-scoped turn → live event streaming → settle
 // work end to end," which is what this module is responsible for).
 import { getPayloadClient } from '@/lib/payload'
-import { claimNextRun, markRunStarted, settleRun, appendRunEvent, type Run } from '@/lib/broker'
+import { claimNextRun, markRunStarted, settleRun, appendRunEvent, recordUsage, type Run } from '@/lib/broker'
 import { RunWorktreeManager } from '@/lib/run-worktrees/manager'
 import { resolveRunWorktreeConfig } from '@/lib/run-worktrees/config'
 import { sendTurnWithIdentity } from '@/lib/hermes/run-with-identity'
@@ -146,6 +146,22 @@ async function executeRun(run: Run): Promise<{ status: 'completed' | 'failed'; e
         void appendRunEvent(run.id, envelope.event).catch((err) => {
           console.error(`[dispatcher] Failed to append live run event for run ${run.id}.`, err)
         })
+        // The run-card block (6.3) and P5.8's cost-on-task-card both read
+        // cost via getRunUsageTotals, which SUMs run_usage — without this,
+        // every real dispatched run shows $0.00 forever even though the
+        // RunEvent stream genuinely carries real `usage` events. Same
+        // best-effort handling as the appendRunEvent call above.
+        if (envelope.event.type === 'usage') {
+          const usage = envelope.event
+          void recordUsage(run.id, {
+            provider: usage.provider,
+            model: usage.model,
+            tokens: usage.tokens,
+            costTicks: usage.costTicks,
+          }).catch((err) => {
+            console.error(`[dispatcher] Failed to record usage for run ${run.id}.`, err)
+          })
+        }
       },
     })
   } catch (err) {
