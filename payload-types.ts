@@ -70,7 +70,6 @@ export interface Config {
     users: User;
     workspaces: Workspace;
     pages: Page;
-    'teable-databases': TeableDatabase;
     databases: Database;
     'database-rows': DatabaseRow;
     'payload-kv': PayloadKv;
@@ -83,7 +82,6 @@ export interface Config {
     users: UsersSelect<false> | UsersSelect<true>;
     workspaces: WorkspacesSelect<false> | WorkspacesSelect<true>;
     pages: PagesSelect<false> | PagesSelect<true>;
-    'teable-databases': TeableDatabasesSelect<false> | TeableDatabasesSelect<true>;
     databases: DatabasesSelect<false> | DatabasesSelect<true>;
     'database-rows': DatabaseRowsSelect<false> | DatabaseRowsSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
@@ -237,25 +235,6 @@ export interface Page {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
- * via the `definition` "teable-databases".
- */
-export interface TeableDatabase {
-  id: number;
-  name: string;
-  workspace: number | Workspace;
-  /**
-   * Teable table ID
-   */
-  teableTableId: string;
-  /**
-   * Teable base ID (required by the Teable REST API alongside the table ID)
-   */
-  teableBaseId: string;
-  updatedAt: string;
-  createdAt: string;
-}
-/**
- * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "databases".
  */
 export interface Database {
@@ -338,10 +317,6 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'pages';
         value: number | Page;
-      } | null)
-    | ({
-        relationTo: 'teable-databases';
-        value: number | TeableDatabase;
       } | null)
     | ({
         relationTo: 'databases';
@@ -454,18 +429,6 @@ export interface PagesSelect<T extends boolean = true> {
   isArchived?: T;
   isFullWidth?: T;
   isLocked?: T;
-  updatedAt?: T;
-  createdAt?: T;
-}
-/**
- * This interface was referenced by `Config`'s JSON-Schema
- * via the `definition` "teable-databases_select".
- */
-export interface TeableDatabasesSelect<T extends boolean = true> {
-  name?: T;
-  workspace?: T;
-  teableTableId?: T;
-  teableBaseId?: T;
   updatedAt?: T;
   createdAt?: T;
 }
