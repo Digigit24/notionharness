@@ -3,7 +3,7 @@ import { getPayloadClient } from '@/lib/payload'
 import { getWorkspaceBySlug } from '@/lib/pages-cache'
 import { getCurrentPayloadUser } from '@/lib/current-user'
 import { TaskBoard, type ColumnData } from '@/components/tasks/task-board'
-import type { User } from '@/payload-types'
+import type { Agent, User } from '@/payload-types'
 
 // ROADMAP P2.5 — first pass at the task/project surfaces: Board view only
 // (grouped by individual task-status, ordered by that status's own
@@ -36,7 +36,7 @@ export default async function TasksView({
   ])
   if (!workspace) notFound()
 
-  const [statuses, projects] = await Promise.all([
+  const [statuses, projects, agents] = await Promise.all([
     payload.find({
       collection: 'task-statuses',
       where: { workspace: { equals: workspace.id } },
@@ -44,6 +44,7 @@ export default async function TasksView({
       limit: 100,
       overrideAccess: true,
     }),
+    payload.find({ collection: 'agents', where: { workspace: { equals: workspace.id }, enabled: { equals: true } }, sort: 'name', limit: 100, depth: 0, overrideAccess: true }),
     payload.find({
       collection: 'projects',
       where: { workspace: { equals: workspace.id } },
@@ -101,6 +102,7 @@ export default async function TasksView({
       columns={columns}
       projects={projects.docs}
       assignableUsers={assignableUsers}
+      agents={agents.docs as Agent[]}
       currentUserId={currentUser?.id ?? null}
       pageSize={TASKS_PER_COLUMN_PAGE}
       initialSelectedTaskId={Number.isFinite(initialSelectedTaskId) ? initialSelectedTaskId : null}
