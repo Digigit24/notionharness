@@ -219,6 +219,7 @@ function SessionsTab({ taskId, agents, workspaceSlug }: { taskId: number; agents
       <ThreadDrawerTab
         taskId={taskId}
         agents={agents}
+        expandHref={`/workspace/${workspaceSlug}/tasks/${taskId}/session`}
         loader={async (id) => {
           const nextRuns = await getTaskRuns(id)
           return Promise.all(nextRuns.map(async (run) => ({ run, events: await getRunMessages(run.id) })))
