@@ -53,7 +53,7 @@ export async function sendTurnWithIdentity(opts: SendTurnWithIdentityOptions): P
       permissionTimeoutMs: opts.permissionTimeoutMs,
       mcpServers: opts.mcpServers,
       turnTimeoutMs: opts.turnTimeoutMs,
-      env: { ...opts.env, HERMES_HOME: overlay.homeDir },
+      env: { ...process.env, ...opts.env, HERMES_HOME: overlay.homeDir },
     })
     return { ...result, missingSkills: overlay.missingSkills, hardlinkFallbackFor: overlay.hardlinkFallbackFor }
   } finally {
