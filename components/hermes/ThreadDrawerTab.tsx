@@ -1,6 +1,8 @@
 'use client'
 
+import Link from 'next/link'
 import { useRef } from 'react'
+import { Maximize2 } from 'lucide-react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { Thread } from '@/components/hermes'
 import { useThreadData } from './use-thread-data'
@@ -17,9 +19,10 @@ export interface ThreadDrawerTabProps {
   taskId: number
   agents: Agent[]
   loader: (taskId: number) => Promise<Array<{ run: Run; events: RunMessageRow[] }>>
+  expandHref?: string
 }
 
-export function ThreadDrawerTab({ taskId, agents, loader }: ThreadDrawerTabProps) {
+export function ThreadDrawerTab({ taskId, agents, loader, expandHref }: ThreadDrawerTabProps) {
   const observed = true
   const threads = useThreadData(taskId, observed, loader)
   const parentRef = useRef<HTMLDivElement>(null)
@@ -38,8 +41,17 @@ export function ThreadDrawerTab({ taskId, agents, loader }: ThreadDrawerTabProps
       {/* Most recent thread */}
       {mostRecent && (
         <div className="border rounded-lg overflow-hidden">
-          <div className="bg-gray-100 dark:bg-gray-800 px-3 py-2 border-b">
+          <div className="bg-gray-100 dark:bg-gray-800 px-3 py-2 border-b flex justify-between items-center">
             <p className="text-xs font-medium text-gray-700 dark:text-gray-300">Latest Run</p>
+            {expandHref && (
+              <Link
+                href={expandHref}
+                className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 transition-colors p-1"
+                title="Expand to full session view"
+              >
+                <Maximize2 size={14} />
+              </Link>
+            )}
           </div>
           <div className="h-[500px] bg-white dark:bg-gray-900">
             <Thread thread={mostRecent} showUsage showRunId={false} />

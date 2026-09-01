@@ -94,7 +94,7 @@ export function TaskDrawer({
             />
           )}
           {tab === 'activity' && <ActivityTab taskId={task.id} />}
-          {tab === 'sessions' && <SessionsTab taskId={task.id} agents={agents} />}
+          {tab === 'sessions' && <SessionsTab taskId={task.id} agents={agents} workspaceSlug={workspace.slug} />}
         </div>
       </div>
     </div>
@@ -184,11 +184,12 @@ function OverviewTab({
   )
 }
 
-function SessionsTab({ taskId, agents }: { taskId: number; agents: Agent[] }) {
+function SessionsTab({ taskId, agents, workspaceSlug }: { taskId: number; agents: Agent[]; workspaceSlug: string }) {
   return (
     <ThreadDrawerTab
       taskId={taskId}
       agents={agents}
+      expandHref={`/workspace/${workspaceSlug}/tasks/${taskId}/session`}
       loader={async (id) => {
         const runs = await getTaskRuns(id)
         return Promise.all(runs.map(async (run) => ({ run, events: await getRunMessages(run.id) })))
