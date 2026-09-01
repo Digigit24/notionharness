@@ -93,7 +93,7 @@ export function TaskDrawer({
             />
           )}
           {tab === 'activity' && <ActivityTab taskId={task.id} />}
-          {tab === 'sessions' && <SessionsTab taskId={task.id} agents={agents} />}
+          {tab === 'sessions' && <SessionsTab taskId={task.id} agents={agents} workspaceSlug={workspace.slug} />}
         </div>
       </div>
     </div>
@@ -183,7 +183,7 @@ function OverviewTab({
   )
 }
 
-function SessionsTab({ taskId, agents }: { taskId: number; agents: Agent[] }) {
+function SessionsTab({ taskId, agents, workspaceSlug }: { taskId: number; agents: Agent[]; workspaceSlug: string }) {
   const [runs, setRuns] = useState<Awaited<ReturnType<typeof getTaskRuns>>>([])
   const [messages, setMessages] = useState<Record<number, Awaited<ReturnType<typeof getRunMessages>>>>({})
   useEffect(() => {
@@ -200,7 +200,12 @@ function SessionsTab({ taskId, agents }: { taskId: number; agents: Agent[] }) {
     return () => { active = false; clearInterval(timer) }
   }, [taskId])
   if (runs.length === 0) return <p className="text-sm text-black/40 dark:text-white/40">No agent runs yet.</p>
-  return <div className="space-y-4">{runs.map((run) => <section key={run.id} className="rounded border border-black/10 p-2 text-xs dark:border-white/10"><div className="mb-2 flex justify-between"><span>Run #{run.id} · {agents.find((a) => a.id === run.agentId)?.name ?? 'Agent'}</span><span>{run.status}</span></div><div className="space-y-1 font-mono">{(messages[run.id] ?? []).map((row) => <div key={row.seq} className="whitespace-pre-wrap break-words"><span className="text-black/40 dark:text-white/40">[{row.seq}] </span>{JSON.stringify(row.event)}</div>)}</div></section>)}</div>
+  return <div className="space-y-4">{runs.map((run) => <section key={run.id} className="rounded border border-black/10 p-2 text-xs dark:border-white/10"><div className="mb-2 flex items-center justify-between"><span>Run #{run.id} · {agents.find((a) => a.id === run.agentId)?.name ?? 'Agent'}</span><span className="flex items-center gap-2"><span>{run.status}</span>{run.status === 'completed' && (
+    // ROADMAP P6.4 — the review surface's entry point: a completed run is
+    // reviewable (diff + approve/request-changes), so it's the one status
+    // that gets a link here rather than just a plain status label.
+    <a href={`/workspace/${workspaceSlug}/runs/${run.id}/review`} className="rounded bg-black px-1.5 py-0.5 text-[11px] font-medium text-white dark:bg-white dark:text-black">Review</a>
+  )}</span></div><div className="space-y-1 font-mono">{(messages[run.id] ?? []).map((row) => <div key={row.seq} className="whitespace-pre-wrap break-words"><span className="text-black/40 dark:text-white/40">[{row.seq}] </span>{JSON.stringify(row.event)}</div>)}</div></section>)}</div>
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
