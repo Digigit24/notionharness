@@ -201,19 +201,96 @@ export function encodeDocUpdate(doc: Doc): string {
   return updateToBase64(DocCollection.Y.encodeStateAsUpdate(doc.spaceDoc))
 }
 
-/** Persists a Yjs update into `docState` and refreshes `plainTextContent` from it. Shared by the autosave Server Action and the `/sync` route. */
+/**
+ * Hydrates a headless doc from a page's `docState` field, same as `loadDoc`,
+ * except it never seeds placeholder content when there's nothing to hydrate.
+ * Used as a merge target for an incoming Yjs update (`applyDocSync`, agent
+ * page-writes): seeding here would create a second root/surface/note tree
+ * with the server's own block ids, which then collides with the root the
+ * incoming update creates with its own ids the very first time a page syncs
+ * — two disjoint page trees merged into one doc. An empty, unseeded `Doc` is
+ * a safe, inert merge target; the incoming update supplies the root itself
+ * when a page has never synced before.
+ */
+function loadDocForMerge(pageId: number, docState: unknown): { collection: DocCollection; doc: Doc } {
+  const collection = createCollection()
+  const doc = collection.createDoc({ id: `page-${pageId}` })
+
+  const storedUpdate =
+    docState && typeof docState === 'object' && 'update' in (docState as object)
+      ? (docState as { update: unknown }).update
+      : null
+
+  if (typeof storedUpdate === 'string' && storedUpdate.length > 0) {
+    try {
+      DocCollection.Y.applyUpdate(doc.spaceDoc, base64ToUpdate(storedUpdate), 'hydrate')
+    } catch (err) {
+      console.error(`Failed to hydrate BlockSuite doc for page ${pageId} for merge, starting empty.`, err)
+    }
+  }
+
+  doc.load()
+  return { collection, doc }
+}
+
+/**
+ * Persists a Yjs update into `docState` and refreshes `plainTextContent`.
+ * Shared by the autosave Server Action and the `/sync` route, and now also
+ * the only write path agent page-writes use (ROADMAP 6.1), so it has to be
+ * safe under concurrent writers.
+ *
+ * Merges the incoming update into the *currently persisted* state rather
+ * than treating the incoming update as the whole new state — Yjs updates are
+ * commutative and idempotent (applying A-then-B or B-then-A, or the same
+ * update twice, converges to the same result), so this unions whatever the
+ * caller sent with whatever's already stored instead of one silently
+ * clobbering the other. Previously this loaded a *fresh* doc and applied
+ * only the incoming update, so two writers syncing around the same time
+ * (e.g. a human's browser tab autosaving while an agent run appends blocks)
+ * would have the second write silently erase the first's content — harmless
+ * while pages were effectively single-writer-per-session, but exactly the
+ * scenario 6.1 introduces on purpose.
+ */
 export async function applyDocSync(payload: Payload, pageId: number, update: string) {
-  const { doc } = loadDoc(pageId, 'Untitled', { update })
+  const existing = await payload.findByID({ collection: 'pages', id: pageId, overrideAccess: true, depth: 0 })
+  const { doc } = loadDocForMerge(pageId, existing.docState)
+  DocCollection.Y.applyUpdate(doc.spaceDoc, base64ToUpdate(update), 'sync')
+  const merged = encodeDocUpdate(doc)
   const plainTextContent = extractPlainText(doc)
   await payload.update({
     collection: 'pages',
     id: pageId,
-    data: { docState: { update }, plainTextContent },
+    data: { docState: { update: merged }, plainTextContent },
     overrideAccess: true,
   })
 }
 
-function getNote(doc: Doc): AnyBlockModel | undefined {
+/**
+ * Hydrates the current persisted doc for a page and hands back the live
+ * `Doc` plus a `persist()` callback that encodes+saves whatever mutations
+ * were made to it. Agent page-writes (ROADMAP 6.1) are the only other
+ * caller of this merge-safe load path besides `applyDocSync` itself.
+ */
+export async function loadDocForWrite(
+  payload: Payload,
+  pageId: number,
+): Promise<{ doc: Doc; persist: () => Promise<void> }> {
+  const existing = await payload.findByID({ collection: 'pages', id: pageId, overrideAccess: true, depth: 0 })
+  const { doc } = loadDocForMerge(pageId, existing.docState)
+  const persist = async () => {
+    const merged = encodeDocUpdate(doc)
+    const plainTextContent = extractPlainText(doc)
+    await payload.update({
+      collection: 'pages',
+      id: pageId,
+      data: { docState: { update: merged }, plainTextContent },
+      overrideAccess: true,
+    })
+  }
+  return { doc, persist }
+}
+
+export function getNote(doc: Doc): AnyBlockModel | undefined {
   const root = doc.root as unknown as AnyBlockModel | null
   return root?.children.find((c) => c.flavour === 'affine:note')
 }
