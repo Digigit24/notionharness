@@ -8,7 +8,7 @@ import {
   useSensors,
   type DragEndEvent,
 } from '@dnd-kit/core'
-import { colorClasses, formatReadOnly, type TeableField, type TeableRecord } from '@/components/editor/blocks/teable-database/teable-types'
+import { colorClasses, formatReadOnly, type TeableField, type TeableRecord } from '@/components/database/teable-types'
 
 const NO_STATUS_ID = '__no_status__'
 

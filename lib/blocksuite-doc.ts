@@ -1,6 +1,5 @@
 import { DocCollection, Schema, Text, type Doc } from '@/lib/blocksuite-store'
 import { AffineSchemas } from '@/lib/blocksuite-blocks'
-import { TeableDatabaseBlockSchema } from '@/components/editor/blocks/teable-database/schema'
 import { TeableNativeBlockSchema } from '@/components/editor/blocks/teable-native/schema'
 import type { Payload } from 'payload'
 
@@ -147,7 +146,7 @@ export function snapshotToMarkdownTable(snapshot: TeableDatabaseSnapshot): strin
 }
 
 function createCollection() {
-  const schema = new Schema().register(AffineSchemas).register([TeableDatabaseBlockSchema, TeableNativeBlockSchema])
+  const schema = new Schema().register(AffineSchemas).register([TeableNativeBlockSchema])
   const collection = new DocCollection({ schema })
   collection.meta.initialize()
   return collection
@@ -276,10 +275,6 @@ async function serializeChildren(models: AnyBlockModel[], lines: string[], depth
         lines.push(`${indent}---`)
         lines.push('')
         break
-      // Both Teable-connected block flavours (the boxed custom grid and the
-      // native-BlockSuite-UI fork) share `teableDatabaseId` and export
-      // identically — same underlying connection, just a different editor view.
-      case 'affine:embed-teable-database':
       case 'affine:embed-teable-native': {
         // Real Teable export: if the block is connected (has a teableDatabaseId)
         // and a resolver is provided (and it yields field+row data), emit a

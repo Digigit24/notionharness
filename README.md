@@ -2,7 +2,7 @@
 
 A fast, self-hosted, Notion-like collaborative workspace, built on Next.js 15 (App Router) and Payload CMS 3.0 with PostgreSQL.
 
-The project structure, dependencies, and Payload CMS configuration are in place. The Notion-like shell — collapsible sidebar with a real page tree, workspace switcher, Cmd+K search (local stub), favorites, trash, and the page canvas (breadcrumbs, icon/cover, full width, lock) — is implemented under `app/(app)`. The block editor, Teable integration, and sync APIs are implemented in later phases.
+The project structure, dependencies, and Payload CMS configuration are in place. The Notion-like shell — collapsible sidebar with a real page tree, workspace switcher, Cmd+K search (local stub), favorites, trash, and the page canvas (breadcrumbs, icon/cover, full width, lock) — is implemented under `app/(app)`. The native Postgres-backed database engine and sync APIs are implemented in later phases.
 
 ### Stack
 
@@ -16,7 +16,7 @@ The project structure, dependencies, and Payload CMS configuration are in place.
 - `users` — auth-enabled, with `role` (`admin` / `member`)
 - `workspaces` — `name`, `slug`, `icon`, `owner`, `members`
 - `pages` — nested document tree (`parentPage`, `position`), `docState` (editor snapshot), `plainTextContent`, favorite/archive flags, `isFullWidth`/`isLocked` view flags
-- `teable-databases` — links a workspace to an embedded Teable table
+- `databases` / `database_rows` — native Postgres-backed workspace databases and rows
 
 ### Getting started
 
@@ -31,14 +31,4 @@ The project structure, dependencies, and Payload CMS configuration are in place.
 - `npm run lint` — ESLint
 - `npm run generate:types` — regenerate `payload-types.ts` from the collection configs
 - `npm run generate:importmap` — regenerate the Payload admin import map after adding custom admin components
-# NotionForge
 
-## MCP server
-
-Run `npm run mcp:notionforge` from the project root to expose NotionForge's Teable and page operations over stdio. The canonical app must be running at `http://localhost:3000`; set `NOTIONFORGE_URL` to override it. Configure a client such as Claude Desktop with:
-
-```json
-{ "mcpServers": { "notionforge": { "command": "npm", "args": ["run", "mcp:notionforge"], "cwd": "C:/path/to/notionharness" } } }
-```
-
-The server provides `list_teable_tables`, `get_table_schema`, `query_records`, `create_record`, `update_record`, `delete_record`, `get_page`, and `update_page_content`. Tool failures are returned as MCP error results; the Teable API key stays server-side in the app.

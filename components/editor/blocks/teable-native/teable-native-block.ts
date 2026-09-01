@@ -43,6 +43,9 @@ interface UserDatabaseOption {
  * connect/loading gate every other Teable block in this app has.
  */
 export class TeableNativeBlockComponent extends BlockComponent<TeableNativeBlockModel> {
+  // Kept disabled while legacy Teable blocks remain readable; all new blocks
+  // must choose the native Payload/user-database source picker.
+  private readonly _legacyCreationEnabled = false
   static override styles = css`
     ${unsafeCSS(dataViewCommonStyle('affine-teable-native'))}
     affine-teable-native {
@@ -177,7 +180,6 @@ export class TeableNativeBlockComponent extends BlockComponent<TeableNativeBlock
     if (sourceType === 'teable') {
       this._tableName = trimmed || 'Untitled'
       this.requestUpdate()
-      if (trimmed) void this._renameTable(this._tableName)
       return
     }
 
@@ -206,7 +208,10 @@ export class TeableNativeBlockComponent extends BlockComponent<TeableNativeBlock
     // Only actually create a table once the user has typed something — merely
     // focusing then blurring the title (e.g. to click "connect an existing
     // table" instead) must not create a stray table.
-    if (!this._titleTouched || this._creatingTable) return
+    // New blocks must use Payload/user-database sources. Existing Teable
+    // documents continue through the legacy branch above, but no new table is
+    // created from a title blur.
+    if (!this._legacyCreationEnabled || !this._titleTouched || this._creatingTable) return
 
     const name = trimmed || 'Untitled'
     this._tableName = name
@@ -487,7 +492,7 @@ export class TeableNativeBlockComponent extends BlockComponent<TeableNativeBlock
             ? this._renderSourcePicker()
             : html`
               <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-black/40 dark:text-white/40">
-                <button type="button" class="hover:text-black/60 dark:hover:text-white/60" @click=${() => this._openConnect()}>
+                <button type="button" class="hidden" @click=${() => this._openConnect()}>
                   Or connect an existing table…
                 </button>
                 <button type="button" class="hover:text-black/60 dark:hover:text-white/60" @click=${() => void this._openPayloadPicker()}>
