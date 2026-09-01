@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useOptimistic, useState, useTransition } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight, LogOut, Plus, Search, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight, ListTodo, LogOut, Plus, Search, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { ThemeToggle } from '@/components/theme/theme-toggle'
 import { authClient } from '@/lib/auth-client'
@@ -156,6 +156,19 @@ export function Sidebar({
           Ctrl K
         </kbd>
       </button>
+
+      <Link
+        href={`/workspace/${workspace.slug}/tasks`}
+        className={cn(
+          'mx-2 mt-1 flex items-center gap-2 rounded-md px-2 py-1.5 text-sm',
+          pathname.endsWith('/tasks')
+            ? 'bg-black/[.06] dark:bg-white/[.08]'
+            : 'text-black/60 hover:bg-black/[.06] dark:text-white/60 dark:hover:bg-white/[.08]',
+        )}
+      >
+        <ListTodo size={14} />
+        Tasks
+      </Link>
 
       <div className="mt-2 flex-1 overflow-y-auto px-2 pb-4">
         {favorites.length > 0 && (
