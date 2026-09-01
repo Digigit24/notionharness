@@ -171,10 +171,19 @@ function buildClientApp(permissionTimeoutMs: number) {
 // has no roadmap-level equivalent (UI hints, command lists, etc.).
 // ---------------------------------------------------------------------------
 
+/** Live-verified against the real hermes-acp binary: a `ContentChunk`'s
+ * `content` field is a SINGLE `ContentBlock` object (per the ACP schema's
+ * `ContentChunk.content: allOf [ContentBlock]`), not an array — every
+ * `agent_message_chunk`/`user_message_chunk`/`agent_thought_chunk` update
+ * carries one text piece per notification, streamed incrementally. Handling
+ * only the array shape silently dropped every real message (confirmed via
+ * scripts/hermes-acp-smoke.ts: a real agent reply produced zero `message`
+ * envelopes before this fix). Still accepts an array defensively in case a
+ * future/other agent batches blocks. */
 function extractTextContent(content: unknown): string | null {
-  if (!Array.isArray(content)) return null
+  const blocks = Array.isArray(content) ? content : [content]
   const parts: string[] = []
-  for (const c of content) {
+  for (const c of blocks) {
     if (c && typeof c === 'object' && (c as { type?: string }).type === 'text') {
       const t = (c as { text?: unknown }).text
       if (typeof t === 'string') parts.push(t)
