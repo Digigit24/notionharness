@@ -11,6 +11,7 @@
     "payload": "payload",
     "generate:types": "payload generate:types",
     "generate:importmap": "payload generate:importmap",
+    "mcp:notionforge": "tsx scripts/notionforge-mcp.ts",
     "test:pty": "tsx scripts/test-pty-terminal.ts",
     "test:daemon-ws": "tsx scripts/test-daemon-ws.ts",
     "test:run-worktrees": "tsx scripts/test-run-worktrees.ts"
