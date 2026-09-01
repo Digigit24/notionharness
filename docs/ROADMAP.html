@@ -1,0 +1,608 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notion Harness Twelve Month Roadmap</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>:root{color-scheme:light dark}html,body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
+<style>
+:root{
+  --ground:#F5F7F8;--surface:#FFFFFF;--surface-2:#EDF1F3;
+  --ink:#14191E;--muted:#59656F;--border:#D7DEE3;--border-strong:#B6C1C9;
+  --accent:#0C6F78;--accent-soft:#DCEDEF;
+  --signal:#9A5B12;--signal-soft:#F7ECDC;
+  --stop:#9E3730;--stop-soft:#F8E4E2;
+  --go:#2F6B41;--go-soft:#E1EFE5;
+  --shadow:0 1px 2px rgba(20,25,30,.06), 0 8px 24px -18px rgba(20,25,30,.35);
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --ground:#0D1114;--surface:#141A1E;--surface-2:#1B2328;
+  --ink:#E3E9EC;--muted:#93A1AB;--border:#263037;--border-strong:#3A4750;
+  --accent:#4FB8C0;--accent-soft:#122C30;
+  --signal:#D69C55;--signal-soft:#2B2115;
+  --stop:#DE8078;--stop-soft:#2E1A18;
+  --go:#7CBF92;--go-soft:#16261B;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -18px rgba(0,0,0,.9);
+}}
+:root[data-theme="dark"]{
+  --ground:#0D1114;--surface:#141A1E;--surface-2:#1B2328;
+  --ink:#E3E9EC;--muted:#93A1AB;--border:#263037;--border-strong:#3A4750;
+  --accent:#4FB8C0;--accent-soft:#122C30;
+  --signal:#D69C55;--signal-soft:#2B2115;
+  --stop:#DE8078;--stop-soft:#2E1A18;
+  --go:#7CBF92;--go-soft:#16261B;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -18px rgba(0,0,0,.9);
+}
+*{box-sizing:border-box}
+body{background:var(--ground);color:var(--ink);font-family:"Source Serif 4",Georgia,serif;font-size:17px;line-height:1.6;margin:0;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 24px 120px}
+.masthead{border-bottom:1px solid var(--border);padding:56px 0 28px;margin-bottom:44px}
+.eyebrow{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0 0 18px}
+h1{font-family:"Archivo",system-ui,sans-serif;font-weight:700;font-size:clamp(34px,5.4vw,52px);line-height:1.03;letter-spacing:-.024em;text-wrap:balance;margin:0 0 18px}
+.standfirst{font-size:19px;color:var(--muted);margin:0;max-width:62ch}
+.meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:26px;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11.5px}
+.meta span{border:1px solid var(--border);border-radius:2px;padding:4px 9px;color:var(--muted);background:var(--surface)}
+h2{font-family:"Archivo",system-ui,sans-serif;font-weight:600;font-size:26px;letter-spacing:-.015em;line-height:1.2;margin:0 0 6px;text-wrap:balance}
+.sec-num{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11px;letter-spacing:.14em;color:var(--accent);text-transform:uppercase;display:block;margin-bottom:10px}
+h3{font-family:"Archivo",system-ui,sans-serif;font-weight:600;font-size:18px;margin:30px 0 8px}
+p{margin:0 0 15px;max-width:70ch}
+ul,ol{margin:0 0 15px;padding-left:21px;max-width:70ch}
+li{margin-bottom:6px}
+li::marker{color:var(--muted)}
+strong{font-weight:600}
+code{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:.85em;background:var(--surface-2);border:1px solid var(--border);border-radius:3px;padding:1px 5px}
+.tablewrap{overflow-x:auto;margin:0 0 20px;border:1px solid var(--border);border-radius:3px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:14.5px;font-variant-numeric:tabular-nums}
+th{font-family:"Archivo",system-ui,sans-serif;font-weight:600;font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);text-align:left;padding:11px 14px;border-bottom:1px solid var(--border);white-space:nowrap}
+td{padding:11px 14px;border-bottom:1px solid var(--border);vertical-align:top;font-family:"Archivo",system-ui,sans-serif;font-size:14.5px;line-height:1.5}
+tr:last-child td{border-bottom:0}
+td code{font-size:12.5px}
+
+/* pillar */
+.pillar{margin:0 0 68px}
+.pillar-head{border-top:2px solid var(--ink);padding-top:20px;margin-bottom:8px}
+.pillar-tag{display:flex;flex-wrap:wrap;align-items:baseline;gap:14px;margin-bottom:10px}
+.pillar-no{font-family:"Archivo",system-ui,sans-serif;font-weight:700;font-size:34px;line-height:1;letter-spacing:-.03em;color:var(--accent)}
+.band{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;padding:4px 9px;border-radius:2px;background:var(--surface-2);color:var(--muted);font-weight:600}
+.band.now{background:var(--accent-soft);color:var(--accent)}
+.pillar-thesis{font-size:17.5px;color:var(--muted);margin:0;max-width:66ch}
+
+/* nodes */
+.node{display:grid;grid-template-columns:56px 1fr;gap:18px;padding:22px 0;border-top:1px solid var(--border)}
+.node:first-of-type{border-top:1px solid var(--border-strong)}
+.node-id{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:13px;font-weight:600;color:var(--accent);padding-top:3px}
+.node-id small{display:block;color:var(--muted);font-weight:400;font-size:10px;letter-spacing:.06em;margin-top:6px;text-transform:uppercase}
+.node h3{margin:0 0 8px;font-size:17.5px}
+.node p{margin-bottom:11px;font-size:16.5px}
+.node p:last-child,.node ul:last-child{margin-bottom:0}
+.node ul{font-family:"Archivo",system-ui,sans-serif;font-size:15px;line-height:1.5}
+.gate{font-family:"Archivo",system-ui,sans-serif;font-size:14px;background:var(--surface);border:1px solid var(--border-strong);border-radius:3px;padding:14px 16px;margin-top:20px}
+.gate b{font-weight:600;color:var(--accent);text-transform:uppercase;font-size:11px;letter-spacing:.09em;display:block;margin-bottom:4px}
+.callout{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--signal);border-radius:3px;padding:18px 20px;margin:0 0 20px;box-shadow:var(--shadow)}
+.callout.crit{border-left-color:var(--stop)}
+.callout.good{border-left-color:var(--go)}
+.callout h3{margin:0 0 8px;font-size:17px}
+.callout p:last-child{margin-bottom:0}
+pre{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:12.4px;line-height:1.75;background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:18px 20px;overflow-x:auto;margin:0 0 20px;color:var(--ink)}
+pre .c{color:var(--muted)}
+pre .t{color:var(--accent);font-weight:600}
+pre .s{color:var(--signal);font-weight:600}
+@media (max-width:680px){
+  body{font-size:16px}
+  .wrap{padding:0 18px 80px}
+  .node{grid-template-columns:1fr;gap:6px}
+  .node-id small{display:inline;margin-left:10px}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="masthead">
+  <p class="eyebrow">Supersedes ROADMAP_TEAMOS.md · HANDOFF.md · assistanceu/ROADMAP.md</p>
+  <h1>Notion Harness Twelve Month Roadmap</h1>
+  <p class="standfirst">Eight pillars, decimal-numbered so any node can be expanded in place. Hermes is the only engine. The UI is the product. Everything below assumes both.</p>
+  <div class="meta">
+    <span>v0.1 dogfood → v1.0 GA</span>
+    <span>13 locked decisions</span>
+    <span>Critical path: 1 → 2 → 3 → 4 → 5</span>
+  </div>
+</header>
+
+<section>
+  <span class="sec-num">Preamble</span>
+  <h2>The one-sentence strategy</h2>
+  <p><strong>Hermes solves the harness. You solve the interface. The product is a document workspace where agents are teammates, not a chat window with a task list bolted on.</strong></p>
+  <p>Every scope decision below resolves against that sentence. When something is ambiguous, ask: does this make Hermes usable by someone who would never open a terminal? If no, it waits.</p>
+
+  <h3>Locked decisions this plan is built on</h3>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>#</th><th>Decision</th></tr></thead>
+    <tbody>
+      <tr><td>D1</td><td>TeamOS is frozen and abandoned. Reference only.</td></tr>
+      <tr><td>D2</td><td>One Hermes profile per <b>agent</b>; project context injected per run.</td></tr>
+      <tr><td>D3</td><td>Teable demoted to an optional DataSource. <code>TEABLE_*</code> unset is a supported state.</td></tr>
+      <tr><td>D4</td><td><code>affine:database</code> never holds system tables. Generic <code>databases</code> + <code>database_rows</code> for user tables.</td></tr>
+      <tr><td>D5</td><td>Payload owns workspace tables. Raw <code>pg</code> owns <code>runs</code> / <code>run_messages</code> / <code>run_usage</code>.</td></tr>
+      <tr><td>D6</td><td>Hermes is the only engine — <code>hermes acp</code> for execution, Hermes HTTP for control plane. The <code>RunEvent</code> boundary stays regardless.</td></tr>
+      <tr><td>D7</td><td>UI base is shadcn/Radix primitives + assistant-ui thread, delivered through <code>@digitech/hermes-chat</code>.</td></tr>
+      <tr><td>D8</td><td>AI SDK is dropped from the streaming path. ACP events reach assistant-ui's runtime and Tool UI directly.</td></tr>
+      <tr><td>D9</td><td>Daemon is Node. One outbound WS to the server, plus a direct browser↔daemon socket when co-located. Persist-then-broadcast, merged by <code>seq</code>.</td></tr>
+      <tr><td>D10</td><td>Terminals are <code>node-pty</code> + xterm.js on a dedicated raw-byte socket, never inside the JSON event protocol.</td></tr>
+      <tr><td>D11</td><td>Multica is ideas only, never source (Apache-2.0 + no-hosted-service + UI branding rider).</td></tr>
+      <tr><td>D12</td><td>P0 hygiene: git, kill stale docs, one Postgres, decisions into <code>AGENTS.md</code>.</td></tr>
+      <tr><td>D13</td><td>UI north star: one <code>&lt;Thread&gt;</code> in three chromes · agents write blocks into pages · threads anchor to block selections · Inbox is home · approvals answerable anywhere · leader thread + worker lanes · Plan/Work/Review.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>The release train</h3>
+<pre>  <span class="s">M0–M1</span>   Pillar 1        <span class="t">v0.1  Dogfood</span>      you track your own work in it, no agents
+  <span class="s">M1–M3</span>   Pillar 2        <span class="t">v0.2  Workspace</span>    the Notion base is genuinely good
+  <span class="s">M3–M5</span>   Pillars 3 + 4   <span class="t">v0.3  First run</span>    a task assigned to an agent completes in-app
+  <span class="s">M5–M7</span>   Pillar 5        <span class="t">v0.5  Private beta</span> 5 outside users run real work
+  <span class="s">M7–M9</span>   Pillars 6 + 7   <span class="t">v0.8  The moat</span>     block-anchored work + teams. This is the demo.
+  <span class="s">M9–M12</span>  Pillar 8        <span class="t">v1.0  GA</span>           installable, configurable, sellable</pre>
+  <p>Pillars 3 and 4 run concurrently — they are two ends of the same wire and neither ships alone. Pillar 5 starts the moment 3+4 produce a single streaming run, even if the broker is still rough.</p>
+</section>
+
+<!-- ============ PILLAR 1 ============ -->
+<div class="pillar">
+  <div class="pillar-head">
+    <div class="pillar-tag"><span class="pillar-no">1</span><span class="band now">Month 0–1 · v0.1</span></div>
+    <h2>Foundation</h2>
+    <p class="pillar-thesis">Two weeks of work that make the next eleven months possible. None of it is a feature; all of it is load-bearing.</p>
+  </div>
+
+  <div class="node"><div class="node-id">1.1<small>2 days</small></div><div>
+    <h3>Version control</h3>
+    <p><code>git init</code> in notionharness. It has none. You are about to build per-project git worktrees and hand agents write access to a codebase with no undo. First commit, <code>.gitignore</code> for <code>.next</code>/<code>node_modules</code>/<code>.env</code>/<code>.sandbox-workspaces</code>, then a branch protection habit: agents work on branches, you merge.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">1.2<small>1 day</small></div><div>
+    <h3>Documentary truth</h3>
+    <p>You currently have three roadmaps written against dead assumptions and one handoff that is factually wrong. Any agent reading them makes bad decisions with total confidence.</p>
+    <ul>
+      <li>Delete <code>HANDOFF.md</code> — it claims TASK-7 is untouched; there are 57 files and a working 531-line DataSource.</li>
+      <li>Archive <code>ROADMAP_TEAMOS.md</code> and <code>assistanceu/ROADMAP.md</code> under <code>docs/archive/</code> with a header saying superseded.</li>
+      <li>Rewrite <code>AGENTS.md</code> to carry D1–D13, the Payload/raw-<code>pg</code> boundary, the "never paste Multica UI source" rule, and the surviving environment gotchas (Docker named volumes need a restart on dependency change; <code>DATABASE_URI</code> points at hosted Supabase, not the local container; server code uses the Local API with <code>overrideAccess</code>, never Payload REST).</li>
+    </ul>
+  </div></div>
+
+  <div class="node"><div class="node-id">1.3<small>1 day</small></div><div>
+    <h3>One data plane</h3>
+    <p>TeamOS sits on one Supabase project, notionforge on another. Consolidate onto one Postgres now, while there is nothing to migrate. Confirm <code>push: false</code> stays — migrations are the source of truth and Payload's dev-mode auto-push will otherwise offer to drop Better Auth's tables.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">1.4<small>1 day, decision only</small></div><div>
+    <h3>Deployment shape</h3>
+    <p>Long-lived SSE and WebSocket connections do not survive serverless. Decide once, now, because it constrains Pillar 4: either self-host Next on a Node process, or keep Next wherever you like and split the realtime hub into its own small Node service. <strong>Recommendation: separate realtime hub.</strong> It keeps the web app deployable anywhere, isolates the one process that must hold thousands of open sockets, and lets you scale or restart it without touching the app.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">1.5<small>4 days</small></div><div>
+    <h3>UI foundation</h3>
+    <p><code>components/ui/</code> currently holds one file. You are picking a base layer whether you decide to or not, so decide: install shadcn/Radix, define the token layer (color, type scale, spacing, radius, elevation) once, wire light/dark at the token level, and set the density. Everything in Pillars 2 and 5 is built on this — retrofitting a design system across sixty components is a month you will not get back.</p>
+    <p>Take shadcn's June 2026 chat primitives (<code>MessageScroller</code>, <code>Message</code>, <code>Bubble</code>, <code>Attachment</code>, <code>Marker</code>) at the same time; <code>MessageScroller</code> alone handles anchored turns, streamed replies, saved-thread restore and prepended history, which is the scroll behaviour everyone gets wrong.</p>
+  </div></div>
+
+  <div class="gate"><b>Gate 1</b>Repo under version control, one Postgres, one design system, and an <code>AGENTS.md</code> an agent can trust. Nothing shipped to a user.</div>
+</div>
+
+<!-- ============ PILLAR 2 ============ -->
+<div class="pillar">
+  <div class="pillar-head">
+    <div class="pillar-tag"><span class="pillar-no">2</span><span class="band">Month 1–3 · v0.2</span></div>
+    <h2>Workspace core</h2>
+    <p class="pillar-thesis">The Notion base, finished and dogfooded, with zero agents. If this is not already a better place to track work than what you use today, agents will not rescue it.</p>
+  </div>
+
+  <div class="node"><div class="node-id">2.1<small>1.5 weeks</small></div><div>
+    <h3>System tables — Payload collections</h3>
+    <p><code>workspaces</code> (with <code>task_prefix</code> + <code>task_counter</code>), <code>members</code>, <code>projects</code>, <code>tasks</code>, <code>task_statuses</code>, <code>task_links</code>, <code>followers</code>, <code>comments</code>, <code>activity</code>, <code>notifications</code>, <code>artifacts</code>. Migrations, generated types, access control, admin panel.</p>
+    <p>Three details that are cheap now and structural later: <code>position float</code> for fractional drag-ordering; <code>revision bigint</code> for optimistic concurrency; <code>last_activity_at</code> denormalised so board sorting never joins.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">2.2<small>3 days</small></div><div>
+    <h3>Status catalogue</h3>
+    <p>Workspaces define their own statuses, but every one carries a <code>category</code> that is one of seven fixed values — backlog, todo, in progress, in review, done, blocked, cancelled. Board grouping, automation and the broker read <b>category</b>; only the UI reads the name. This is how you get custom workflow without every consumer having to handle an unknown string, and it is genuinely impossible to retrofit.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">2.3<small>1 week</small></div><div>
+    <h3>The DataSource layer</h3>
+    <p>One interface, three implementations, one renderer. <code>PayloadDataSource</code> (system tables) and <code>UserDatabaseDataSource</code> (generic <code>databases</code> + <code>database_rows</code> with <code>cells jsonb</code>) are new; <code>TeableDataSource</code> already exists and becomes optional. The block takes a <code>source</code> prop.</p>
+    <p>This is what makes "the task grid looks like my editor" true by construction rather than by imitation — it is literally the same component. Per D4, <code>affine:database</code> is never used for anything queryable.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">2.4<small>1 week</small></div><div>
+    <h3>Editor hardening</h3>
+    <p>You are on BlockSuite 0.19.5 internals with a hand-rolled Markdown serializer, because no public adapter is exported. That is a standing liability: any new block flavour is <em>silently skipped</em> on export.</p>
+    <ul>
+      <li>Pin BlockSuite exactly; no caret ranges.</li>
+      <li>Every touchpoint behind <code>lib/blocksuite-*</code>, nothing importing BlockSuite directly from a component.</li>
+      <li>A <code>case</code> per database flavour in <code>serializeChildren</code>/<code>markdownToDoc</code>.</li>
+      <li>A round-trip test <em>per block flavour</em> in CI. Export → import → export must be byte-identical.</li>
+    </ul>
+  </div></div>
+
+  <div class="node"><div class="node-id">2.5<small>1.5 weeks</small></div><div>
+    <h3>Task and project surfaces</h3>
+    <p>Board (dnd-kit, paginated per column), list (virtualised, grouped), table (TanStack Table headless + virtual). Saved views with named scopes and a baseline diff so unsaved changes are visible. Filter chips, column picker. The side drawer with Overview / Activity / Sessions tabs — Sessions is empty until Pillar 4, and that is fine.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">2.6<small>1 week</small></div><div>
+    <h3>Activity spine, follows, notifications</h3>
+    <p>One polymorphic <code>activity</code> table behind every Activity tab in the product — task, project, page, later run. Creator auto-follows on create; follows drive notifications. Getting this as one table is what makes "every entity has a timeline" a week of work instead of a rewrite per entity, and it is your audit log when you sell this.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">2.7<small>1 week</small></div><div>
+    <h3>Dogfood</h3>
+    <p>Move your own work into it. Stop using the old board. Not a formality — this is the only honest test of Pillar 2, and everything after it compounds on whatever you accept here.</p>
+  </div></div>
+
+  <div class="gate"><b>Gate 2</b>You have run your own week inside it and did not want to go back. No agent has touched it.</div>
+</div>
+
+<!-- ============ PILLAR 3 ============ -->
+<div class="pillar">
+  <div class="pillar-head">
+    <div class="pillar-tag"><span class="pillar-no">3</span><span class="band">Month 3–5 · v0.3</span></div>
+    <h2>The Hermes seam</h2>
+    <p class="pillar-thesis">Two surfaces, one boundary. Confusing the execution path with the control plane is the mistake that costs a week.</p>
+  </div>
+
+  <div class="node"><div class="node-id">3.1<small>2 days</small></div><div>
+    <h3>The <code>RunEvent</code> contract</h3>
+<pre>type <span class="t">RunEvent</span> =
+  | { type:'message',    role, text }
+  | { type:'thought',    text }
+  | { type:'tool_call',  id, name, input, status }
+  | { type:'tool_result',id, output, isError }
+  | { type:'permission', id, title, detail, options }
+  | { type:'file_change',path, diff }
+  | { type:'terminal',   id, chunk }
+  | { type:'usage',      provider, model, tokens, costTicks }
+  | { type:'session',    externalId }   <span class="c">// pin immediately</span>
+  | { type:'done',       status:'ok'|'error'|'cancelled' }</pre>
+    <p>Every event carries a monotonic <code>seq</code> assigned by the daemon. Ordering comes from <code>seq</code>, never from timestamps or insertion order — batched inserts return unordered and this is the bug that silently scrambles transcripts.</p>
+    <p>Per D6 this boundary stays even though Hermes is the only engine. It is not hedging, it is keeping the UI from being welded to a wire format you do not own.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">3.2<small>2 weeks</small></div><div>
+    <h3>ACP execution adapter</h3>
+    <p><code>hermes acp</code> over stdio via <code>@agentclientprotocol/sdk</code>. <code>initialize</code> → <code>session/new</code> (or <code>session/resume</code>) → <code>session/prompt</code>, normalised to <code>RunEvent</code>.</p>
+    <ul>
+      <li><b>Pin the session id the instant it appears</b>, before the run can crash. This single line is the difference between a system that resumes and one that starts over.</li>
+      <li>Serve <code>terminal/*</code> for the agent's own shell calls — bounded tail buffer, rune-safe truncation, kill waits for the whole process group.</li>
+      <li>Handle <code>session/request_permission</code> as a real blocking request that reaches a human (Pillar 5.4), with a timeout that denies <em>once</em> rather than cancelling the turn.</li>
+      <li>MCP servers travel inside the session protocol (<code>session/new</code>'s <code>mcpServers</code>, resent on <code>session/resume</code>) — never written into the runtime's own config file.</li>
+      <li>Distinguish permanent resume rejection from transient failure. A resume that silently lands on a fresh thread must inject a continuity notice, not pretend nothing happened.</li>
+    </ul>
+  </div></div>
+
+  <div class="node"><div class="node-id">3.3<small>2 weeks</small></div><div>
+    <h3>Hermes control plane</h3>
+    <p>Everything ACP does not carry, and this is where your product value concentrates: profiles, skills, MCP servers, models and providers, cron, memory, session lists. You proxy Hermes's HTTP API and put a real interface on it. hermes-webui's <code>api/profiles.py</code> (~2,500 lines), <code>api/config.py</code> and <code>api/models.py</code> are your specification — they encode years of edge cases you would otherwise rediscover.</p>
+    <p>Do not reimplement any of it. Proxy, and own the UI.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">3.4<small>1 week</small></div><div>
+    <h3>Per-agent identity</h3>
+    <p>D2 in practice. Each agent gets its own Hermes profile. Per run, build a <code>HERMES_HOME</code> overlay so the agent sees only its own skills — but symlink <code>memories/</code> out to a persistent per-agent store and <code>state.db</code> out to a per-conversation store, so memory and transcript survive while the task directory is disposable. Shard sessions per conversation, not per agent: tasks in one conversation run serially, so a shard has one writer, and two tasks never share a SQLite file.</p>
+    <p>Known and accepted limitation: two concurrent runs of the same agent are last-writer-wins on memory, because Hermes rewrites those files whole. Surface it in the UI rather than pretending otherwise.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">3.5<small>1 week</small></div><div>
+    <h3>Agents and runtime profiles</h3>
+    <p><code>runtime_profiles</code> (<code>protocol_family</code>, <code>command_name</code>, <code>fixed_args</code>, <code>enabled</code>) separate from <code>runtimes</code> (a registered instance on a host). Profile says what it speaks; runtime says where it is and whether it is up. That separation is what makes an in-house Hermes fork with a different binary name work without a code change — and it is what makes your runtimes list meaningful.</p>
+    <p>Plus the <code>agents</code> collection: model, thinking level, instructions, <code>custom_env</code>, <code>custom_args</code>, <code>mcp_config</code>, skills, <code>max_concurrent_runs</code>, permission mode. And the agent editor UI, which is the first screen that makes Hermes usable by a non-developer.</p>
+  </div></div>
+
+  <div class="gate"><b>Gate 3</b>From a Node script, start a Hermes run, stream normalised <code>RunEvent</code>s, answer a permission request, and resume the session on a second turn.</div>
+</div>
+
+<!-- ============ PILLAR 4 ============ -->
+<div class="pillar">
+  <div class="pillar-head">
+    <div class="pillar-tag"><span class="pillar-no">4</span><span class="band">Month 3–5 · v0.3</span></div>
+    <h2>Runtime and daemon</h2>
+    <p class="pillar-thesis">The instant-feeling half. Built concurrently with Pillar 3 — they are two ends of the same wire.</p>
+  </div>
+
+  <div class="node"><div class="node-id">4.1<small>1 week</small></div><div>
+    <h3>Daemon skeleton</h3>
+    <p>Node, single binary via pkg or a bundled runtime. <code>harness daemon start</code>, per-profile state dir, pidfile, log file, health endpoint, foreground mode for launchd/systemd/Windows Service. Probes for <code>hermes</code> on <code>PATH</code> at startup and re-probes on binary change. Registers each detected runtime with the server; deregisters on shutdown with a structured reason so the UI can say <em>why</em> a runtime went offline, not just that it did.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">4.2<small>1 week</small></div><div>
+    <h3>Outbound control channel</h3>
+    <p>One WebSocket, daemon → server. Never the server dialling in. Works behind NAT and CGNAT with no port forwarding, no tunnel, no firewall rule. Work goes down it, events come up it, heartbeats every 15s. HTTP fallback for terminal reporting with a retry schedule, because a lost completion is the one message you cannot drop.</p>
+    <p>One subtlety worth stealing: if a claim frame is sent but the socket dies before the response arrives, the outcome is <em>uncertain</em> — do not retry over HTTP, or you double-claim. Wait, and let the lease sweeper resolve it.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">4.3<small>1.5 weeks</small></div><div>
+    <h3>The broker</h3>
+    <p>Raw <code>pg</code> per D5. Roughly 800 lines and the only genuinely novel engineering in the plan.</p>
+<pre>  <span class="s">ENQUEUE</span>  INSERT runs {queued, attempt:1}
+           blocked by a partial unique index: at most one
+           non-terminal run per (task, agent)
+
+  <span class="s">CLAIM</span>    UPDATE runs SET status='dispatched',
+             lease_expires_at = now() + 60s
+           WHERE id = (SELECT ... <span class="t">FOR UPDATE SKIP LOCKED</span>
+                       ORDER BY priority DESC, created_at ASC)
+           RETURNING *
+           refuse if another run for the same (task, agent) is
+           dispatched | running | waiting_directory
+
+  <span class="s">SETTLE</span>   complete | fail | cancel, with retry on the terminal POST
+           retryable failure + attempt &lt; max → new run, retry_of set,
+           attribution inherited
+           wipe mcp_overlay, revoke run token
+
+  <span class="s">RECOVER</span>  sweeper re-queues runs stuck 'dispatched' with
+           started_at IS NULL and an expired lease — the claim
+           committed but the response never got home</pre>
+    <p>Never select-then-update. Two hosts will both win.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">4.4<small>1.5 weeks</small></div><div>
+    <h3>Working copies</h3>
+    <p>Per repo per host: one bare clone as a shared object store; per run a <code>git worktree add -b agent/&lt;agent-slug&gt;/&lt;run-id&gt;</code> off it, so a run's <code>.git</code> is a pointer file rather than a copy. Re-derive the remote default branch with <code>git remote set-head origin --auto</code> so an upstream master→main rename doesn't pin you forever. Eviction is always safe — worst case the next run re-clones.</p>
+    <p>Local directories are the sharp edge: <code>in_place</code> guarded by a per-path mutex with a real <code>waiting_directory</code> run status surfaced in the UI, or <code>worktree</code> which skips the mutex because isolation is the point. Without this, two agents corrupt the same checkout and you will not immediately understand why.</p>
+    <p>Garbage collection with explicit TTLs, and never touching a directory a running task holds.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">4.5<small>1 week</small></div><div>
+    <h3>The hot path — direct browser ↔ daemon</h3>
+    <p>The differentiator. When browser and runtime are the same machine or the same Tailnet, the browser opens a second WebSocket straight to the daemon and tokens never touch your server. Sub-millisecond. Server-relayed is the automatic fallback when they are not co-located.</p>
+    <p>Persist-then-broadcast on both paths: push immediately to any connected browser (fast, dropping a frame is fine), batch-write to the server every ~150ms (durable, ordered). Client merges by <code>seq</code> and REST-backfills on reconnect. The fast path is <em>allowed</em> to be lossy precisely because the durable path heals it.</p>
+    <p>Multica and Devin are cloud-first and structurally cannot do this. Build it in this pillar, not later — it is much harder to retrofit than to design in.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">4.6<small>1 week</small></div><div>
+    <h3>Terminals</h3>
+    <p><code>node-pty</code> + xterm.js on a dedicated socket carrying raw bytes, never JSON-wrapped. Windows works via ConPTY — which is exactly what hermes-webui's Python terminal cannot do (<code>api/terminal.py</code> is Unix-only), and you develop on Windows.</p>
+    <p>Keep the distinction sharp: the agent's own shell calls arrive as ACP <code>terminal/*</code> run events; a human terminal on a runtime is a separate channel with a separate lifecycle and separate authorization.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">4.7<small>1 week</small></div><div>
+    <h3>Security posture</h3>
+    <ul>
+      <li><b>Run tokens.</b> A short-lived credential scoped to one <code>(run, agent, workspace, user)</code>, minted at claim, dead at settle. The agent never holds a workspace credential — which matters enormously once it can create and assign tasks through your MCP server.</li>
+      <li><b>Two attribution columns.</b> <code>originator_user</code> answers "whose authority" and is used only for authz. <code>accountable_user</code> answers "whose budget and audit trail" and is never consulted for authz. Collapsing them makes a delegated agent either over-privileged or unbillable.</li>
+      <li><b>Permission mode is an explicit product choice.</b> Bypass-everything is defensible for a trusted local agent and indefensible as a default. Make it a per-agent setting with a visible posture, and never claim isolation you are not enforcing — <code>lib/sandbox/config.ts</code> silently falls back from gVisor to <code>runc</code>, which on your machine is always.</li>
+      <li><b>Per-run MCP overlay</b> wiped on terminal status, so a live bearer token never lingers in a settled row.</li>
+    </ul>
+  </div></div>
+
+  <div class="gate"><b>Gate 3+4</b>A task assigned to an agent in the UI runs on a registered runtime, streams into the task's Activity tab in real time, asks for a permission that you answer, completes, and shows its branch, diff, duration and cost.</div>
+</div>
+
+<!-- ============ PILLAR 5 ============ -->
+<div class="pillar">
+  <div class="pillar-head">
+    <div class="pillar-tag"><span class="pillar-no">5</span><span class="band">Month 5–7 · v0.5</span></div>
+    <h2>The agentic interface</h2>
+    <p class="pillar-thesis">Where the product stops being infrastructure. Budget more time here than on the daemon — this is where "instant" is actually won or lost.</p>
+  </div>
+
+  <div class="node"><div class="node-id">5.1<small>2 weeks</small></div><div>
+    <h3>Re-seat <code>@digitech/hermes-chat</code></h3>
+    <p>The package is v0.3.0 and real — a working <code>&lt;HermesChat/&gt;</code>, four route handlers, a copilot picker, a history sidebar, two embed surfaces. Its brain is the TeamOS control plane, which no longer exists, so its Phase 6 (<code>HermesBackendAdapter</code>) moves from v0.7.0 to first.</p>
+    <p>Do it in one pass with D8: <b>drop AI SDK from the streaming path.</b> AI SDK's wire format is token-shaped; ACP events are structurally richer, and flattening <code>tool_call</code>, <code>permission</code> and <code>file_change</code> into text parts destroys exactly what the Tool UI needs. assistant-ui supports "your own server" as a runtime — go <code>RunEvent</code> → assistant-ui runtime directly.</p>
+    <p>Also retire the package's Phase 10 TipTap workspace editor. You have BlockSuite; do not build a second editor.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">5.2<small>1 week</small></div><div>
+    <h3>One Thread, three chromes</h3>
+    <p>Build the thread once, mount it three ways: a drawer tab on any entity, a full page with a session-list rail, and a lane in the team view. Same component, same data, same adapter. The universal failure mode in this category is shipping "sidebar chat" and "full chat" as separate code and watching them diverge inside a month.</p>
+    <p>Deliberately <b>not</b> a BlockSuite block. A chat block would put the transcript inside the CRDT, break export and search, and make streaming-while-typing a merge nightmare.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">5.3<small>1.5 weeks</small></div><div>
+    <h3>Tool UI catalogue</h3>
+    <p>A React component per tool kind, registered by name. <code>Bash</code> renders as a terminal card with exit status. <code>Edit</code>/<code>Write</code> render as a diff with syntax highlighting. <code>Read</code>/<code>Grep</code> collapse into a compact "looked at 7 files" row. Everything unrecognised falls back to structured JSON, never a wall of text.</p>
+    <p>This is the single highest-leverage visual work in the product. It is the difference between a transcript that reads like a colleague's summary and one that reads like a log file.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">5.4<small>1 week</small></div><div>
+    <h3>Approvals as first-class objects</h3>
+    <p>Everyone renders a permission request as a blocking modal in the tab where the run started — which means the agent stalls for six hours the moment you close the laptop. Make an approval an object: an inbox item, an inline thread card, a push notification, answerable from a phone.</p>
+    <p>This is what converts "agents work while I'm away" from a claim into a fact. Rendering approvals well is worth more than any three other features in this pillar.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">5.5<small>1.5 weeks</small></div><div>
+    <h3>The Inbox is the home screen</h3>
+    <p>With six agents running, a board is stale the second you look at it. What you need is <em>what needs me</em>: permission requests, failed runs, review-ready diffs, questions, mentions. Linear has an inbox. Nobody has an inbox whose items are agent interrupts.</p>
+    <p>This is the screen you would open thirty times a day, which makes it the product. Build it before the board gets any more polish.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">5.6<small>1.5 weeks</small></div><div>
+    <h3>The transcript pipeline</h3>
+    <p>Four pure passes over the event array, and the reason a 163-step run stays readable:</p>
+    <ol>
+      <li><b>Timeline</b> — sort by <code>seq</code>, coalesce adjacent text fragments, redact secrets.</li>
+      <li><b>Steps</b> — pair each <code>tool_call</code> with its <code>tool_result</code> into one step with a duration.</li>
+      <li><b>Groups</b> — fold three-plus consecutive same-tool calls into one row, but never shell commands.</li>
+      <li><b>Lanes and outcome</b> — a two-lane tool-vs-thinking timeline bar, and the header chips: "11 files +593 −12", "74 commands", "$4.38".</li>
+    </ol>
+    <p>Plus a filter by tool kind, a search box, and a step inspector panel.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">5.7<small>1 week</small></div><div>
+    <h3>Render performance</h3>
+    <p>The naive client re-renders the whole message list per token and feels worse at four agents than a good one does at twenty. Non-negotiables: batch cache writes on a ~50ms flush rather than per event; merge by <code>seq</code>; virtualise every list; and gate materialisation on whether a mounted component actually observes that run, so a workspace-wide broadcast does not build transcripts nobody is watching.</p>
+    <p>Measure it. A frame budget and a scripted 8-agent load test, in CI.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">5.8<small>4 days</small></div><div>
+    <h3>Cost and presence</h3>
+    <p><b>Cost on the card, not just in the modal.</b> "$4.38 · 18m · 163 steps" on a task card is information no project management tool on earth can show. Rollups per project, per agent, per week.</p>
+    <p><b>Agent presence.</b> Notion shows human cursors; show agent cursors. An agent touching a block appears as a live avatar on it. You already stream <code>file_change</code>, so it is nearly free — and it is the single detail that flips the feel from job queue to shared space.</p>
+  </div></div>
+
+  <div class="gate"><b>Gate 5</b>Five people outside your org run real work through it for two weeks and keep going. Approvals get answered from phones.</div>
+</div>
+
+<!-- ============ PILLAR 6 ============ -->
+<div class="pillar">
+  <div class="pillar-head">
+    <div class="pillar-tag"><span class="pillar-no">6</span><span class="band">Month 7–9 · v0.8</span></div>
+    <h2>The moat</h2>
+    <p class="pillar-thesis">The half nobody else can build quickly, because it needs a block editor and a harness in one application. This is the demo that raises money.</p>
+  </div>
+
+  <div class="node"><div class="node-id">6.1<small>2.5 weeks</small></div><div>
+    <h3>Agents write into the page</h3>
+    <p>Everywhere else the transcript is exhaust — you skim it and close it. Here the agent streams <em>blocks into the task's document</em> as it works: a plan block, then findings, then a summary, then a diff card. The page is the deliverable; the transcript is the audit trail hanging off it.</p>
+    <p>Mechanically: the run holds a scoped write handle to a block subtree, appends through the same Yjs path a human edit takes, and never touches blocks outside its subtree. After the run there is something worth keeping — which is the problem no agentic tool has solved.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">6.2<small>2 weeks</small></div><div>
+    <h3>Block-anchored threads</h3>
+    <p>The unit of work is not the task, it is a run scoped to a block selection. Select three paragraphs of a spec → "have Mika implement this" → a run whose input is those blocks, whose thread hangs off them like a Notion comment, whose output writes back adjacent.</p>
+    <p>Notion comments + inline chat + a real harness. It does not exist anywhere, and it is the reason the block editor was worth building in the first place.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">6.3<small>1 week</small></div><div>
+    <h3>Mentions and run cards as blocks</h3>
+    <p>Two things that <em>are</em> legitimately blocks: an <code>@agent</code> mention, and a run card — a lightweight embed that references a run by id and renders its live status, outcome chips and cost inline. Reference, never container. Both need a <code>case</code> in the Markdown serializer per 2.4.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">6.4<small>2 weeks</small></div><div>
+    <h3>Review surface</h3>
+    <p>Per-run diffs with file tree, side-by-side and inline modes, comment-on-a-line, approve-and-merge, request-changes-which-becomes-a-follow-up-run. Branch and worktree state visible. This is where the loop closes and a run becomes shipped work rather than a suggestion.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">6.5<small>1.5 weeks</small></div><div>
+    <h3>Plan / Work / Review modes</h3>
+    <p>Not view tabs — product modes with different affordances. <b>Plan</b> is the doc editor with an agent that argues with you. <b>Work</b> is the inbox plus the board. <b>Review</b> is diffs, approvals and cost. Most tools jam all three into one screen and each is mediocre; separating them lets each be excellent, and it matches how the work actually goes.</p>
+  </div></div>
+
+  <div class="gate"><b>Gate 6</b>A spec written in the editor, implemented by an agent that wrote its results back into the same page, reviewed and merged — without leaving the app.</div>
+</div>
+
+<!-- ============ PILLAR 7 ============ -->
+<div class="pillar">
+  <div class="pillar-head">
+    <div class="pillar-tag"><span class="pillar-no">7</span><span class="band">Month 8–10 · v0.8</span></div>
+    <h2>Teams and orchestration</h2>
+    <p class="pillar-thesis">Your stated USP, built as data and tools rather than as an engine. There is no scheduler anywhere in this pillar.</p>
+  </div>
+
+  <div class="node"><div class="node-id">7.1<small>1 week</small></div><div>
+    <h3>Teams with a leader</h3>
+    <p>Three columns: <code>teams.leader</code>, <code>tasks.assignee_type='team'</code>, <code>runs.is_leader_run</code>. Assigning work to a team creates a run for the leader. <code>delegated_from_run</code> records lineage. That is the entire orchestration model.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">7.2<small>1.5 weeks</small></div><div>
+    <h3>Delegation through your own MCP server</h3>
+    <p>Extend <code>scripts/notionforge-mcp.ts</code> with <code>create_task</code>, <code>assign_task</code>, <code>update_status</code>, <code>comment</code>, <code>list_project_tasks</code>, <code>read_page</code>, <code>write_blocks</code>. Give the leader that server, scoped by its run token per 4.7.</p>
+    <p>Delegation becomes something the leader <em>does</em>, through the same API a human uses, written to the same activity table. Every step is visible and auditable, and there is no orchestrator to debug or explain.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">7.3<small>2 weeks</small></div><div>
+    <h3>Leader thread with worker lanes</h3>
+    <p>Four streams of tokens is unreadable at four agents and impossible at eight. Instead: the leader's narration is the main thread, and each worker is a one-line lane — avatar, current tool, elapsed, last action — expanding on click. CI pipeline crossed with a chat.</p>
+    <p>Readable at eight agents, and it makes the leader's reasoning the story instead of the noise. Keep a 2×2 pane grid as an optional "wall" mode, because it demos well — but the lanes are what people will actually use.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">7.4<small>1.5 weeks</small></div><div>
+    <h3>Triggers and schedules</h3>
+    <p>An automation that creates a task and enqueues a run, from a schedule, a webhook, or a workspace event. Hermes already has per-profile cron and gateway channels — proxy them, do not rebuild them. Runs created this way carry <code>accountable_user = rule owner</code> and no originator, which is exactly the case the two-column attribution model in 4.7 exists to handle.</p>
+  </div></div>
+
+  <div class="gate"><b>Gate 7</b>A leader agent splits one request into four tasks, assigns them across two runtimes, and you follow all four from one readable screen.</div>
+</div>
+
+<!-- ============ PILLAR 8 ============ -->
+<div class="pillar">
+  <div class="pillar-head">
+    <div class="pillar-tag"><span class="pillar-no">8</span><span class="band">Month 9–12 · v1.0</span></div>
+    <h2>Product readiness</h2>
+    <p class="pillar-thesis">The gap between a thing that works for you and a thing a stranger can install, configure, trust and pay for.</p>
+  </div>
+
+  <div class="node"><div class="node-id">8.1<small>2 weeks</small></div><div>
+    <h3>Install and onboarding</h3>
+    <p>One command to a working install: Docker compose for the server, a signed daemon installer per platform, a pairing flow that does not involve pasting tokens. First-run wizard: create workspace → install or detect Hermes → create your first agent → run a starter task. Someone who has never used a terminal must reach a completed agent run.</p>
+    <p>This is the single biggest determinant of whether the product has users, and it is routinely under-budgeted. Two weeks is the floor.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">8.2<small>2 weeks</small></div><div>
+    <h3>Configuration surface</h3>
+    <p>Everything Hermes exposes, with a real interface: agents, runtimes and profiles, models and providers with auth, MCP servers as a workspace library bound per-agent with an explicit enable toggle, skills with files, permission modes, cron. <b>This is the product</b> — it is the entirety of "bring Hermes to people who would never open a terminal."</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">8.3<small>1.5 weeks</small></div><div>
+    <h3>Multi-tenancy and roles</h3>
+    <p>Postgres RLS keyed on workspace, roles (owner/admin/member), invitations, share links, per-agent visibility and invocation permissions. Audit log built on the activity table you already have. Do this before the first paying customer, not after.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">8.4<small>1.5 weeks</small></div><div>
+    <h3>Cost control and observability</h3>
+    <p>Usage rollups (hourly and daily, idempotent, with a dirty-queue so cascade deletes are not missed by a plain watermark). Per-workspace and per-agent spend caps with a fail-closed option. Health dashboard: runtimes up, runs in flight, queue depth, error rates, slow claims. Your own logs, viewable in-app rather than over SSH.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">8.5<small>2.5 weeks</small></div><div>
+    <h3>Plugin surface</h3>
+    <p>A zip with a manifest declaring <code>scopes</code>, typed <code>config</code>, UI <code>surfaces</code>, <code>hooks</code> (HTTP or remote-MCP, triggerable by agent / human / UI / event) and bundled <code>skills</code>.</p>
+    <p>Security model, copied in shape from the best one in open source: the plugin UI runs in an inner iframe with <code>sandbox="allow-scripts"</code> and <b>no</b> <code>allow-same-origin</code> — opaque origin, no cookies, no direct network. It talks to the host over a <code>MessageChannel</code> where identity comes from <em>which private port the message arrived on</em>, because origin is <code>"null"</code> and unusable. The host makes the real API call on the signed-in user's own session, so a plugin can never exceed what that user could do.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">8.6<small>2 weeks</small></div><div>
+    <h3>Desktop app</h3>
+    <p>Electron shell around the same React app, whose real job is <b>managing the local daemon</b>: spawn it, health-poll it, restart with backoff, tail its log into the UI, negotiate version upgrades, pick local directories natively. Also the single easiest install story, which loops back to 8.1.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">8.7<small>1.5 weeks</small></div><div>
+    <h3>Mobile, approvals-first</h3>
+    <p>Not a port. Three screens: inbox, approve/deny, and a readable run summary. Push notifications for permission requests and completions. Shares the data layer, reimplements the views natively.</p>
+    <p>The value is precise: it is what makes "agents work while I'm away" true, and it is the feature people will describe to other people.</p>
+  </div></div>
+
+  <div class="node"><div class="node-id">8.8<small>1 week</small></div><div>
+    <h3>Licensing and packaging</h3>
+    <p>Pick the licence deliberately. Multica's shape — Apache-2.0 plus a no-hosted-service condition plus UI branding — is a reasonable template for open-core with a commercial path, and you have read the actual text. Decide free vs paid tiers, seat model, and whether self-host is unlimited. Ship docs that are honest about what is unfinished.</p>
+  </div></div>
+
+  <div class="gate"><b>Gate 8 · v1.0</b>A stranger installs it, connects a runtime, creates an agent, ships a task, and pays you.</div>
+</div>
+
+<section>
+  <span class="sec-num">Guardrails</span>
+  <h2>Not doing, and why</h2>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Not doing</th><th>Reason</th></tr></thead>
+    <tbody>
+      <tr><td>Notion feature parity</td><td>A decade of work. Cap the editor at what a spec or task needs; every hour on block types is an hour not spent on the harness.</td></tr>
+      <tr><td>A second agent engine</td><td>D6. The <code>RunEvent</code> boundary means adding one later is a file, not a rewrite — so there is no reason to do it early.</td></tr>
+      <tr><td>Your own agent loop / memory / skills system</td><td>Hermes has all of it, battle-tested. Rebuilding it is the fastest way to lose a year.</td></tr>
+      <tr><td>Client-side tool calling</td><td>Tools belong to the agent and the harness. A UI that invents tools is a UI that lies about what ran.</td></tr>
+      <tr><td>Slack / WhatsApp / Discord connectors</td><td>Hermes's gateway already does 10+ platforms. Proxy it.</td></tr>
+      <tr><td>Rust daemon</td><td>The latency is in two network hops and the browser render. Rust optimises microseconds on the one step that is not the bottleneck, and costs you the ACP TypeScript SDK and a second toolchain.</td></tr>
+      <tr><td>A hosted cloud runtime fleet</td><td>Local-first is the differentiator and the direct browser↔daemon path depends on it. Cloud runtimes are a v2 business decision, not a v1 feature.</td></tr>
+      <tr><td>Real-time multiplayer editing polish</td><td>Yjs gives you correctness for free. Cursor colours and presence beyond agent avatars can wait indefinitely.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>The five things most likely to go wrong</h3>
+  <ol>
+    <li><b>BlockSuite 0.19.5 internals shift under you.</b> Mitigated by exact pinning, the wrapper module, and per-flavour round-trip tests — all in 2.4. Do not skip the tests.</li>
+    <li><b>Pillar 2 gets skipped in excitement.</b> Building the harness onto a mediocre workspace produces a mediocre product with impressive plumbing. Gate 2 is a real gate.</li>
+    <li><b>Render performance discovered too late.</b> 5.7 is scheduled, but the load test should exist from Gate 3+4 onward, not from month seven.</li>
+    <li><b>Hermes upstream changes its ACP surface.</b> You are single-vendor by choice. Pin the Hermes version you certify against, track its changelog deliberately, and keep the smoke test from Gate 3 in CI against a real binary.</li>
+    <li><b>Scope creep from your own roadmap.</b> This document has 44 nodes. Expand nodes into 1.1.1 form as you reach them — never before, or you will plan month nine in month one and be wrong about all of it.</li>
+  </ol>
+</section>
+
+</div>
+</body>
+</html>

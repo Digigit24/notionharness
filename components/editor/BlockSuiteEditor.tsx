@@ -1,7 +1,14 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { syncPageDoc } from '@/app/(app)/actions'
+import { TeableDatabaseBlockSchema } from '@/components/editor/blocks/teable-database/schema'
+import { TeableDatabaseBlockSpec } from '@/components/editor/blocks/teable-database/spec'
+import { registerTeableSlashMenuItem } from '@/components/editor/blocks/teable-database/slash-menu'
+import { TeableNativeBlockSchema } from '@/components/editor/blocks/teable-native/schema'
+import { TeableNativeBlockSpec } from '@/components/editor/blocks/teable-native/spec'
+import { registerTeableNativeSlashMenuItem } from '@/components/editor/blocks/teable-native/slash-menu'
+import { MentionSpec } from '@/components/editor/mentions/spec'
 import type { AffineEditorContainer } from '@blocksuite/presets'
 import type { Doc } from '@blocksuite/store'
 
@@ -15,9 +22,15 @@ function ensureBlockSuiteEffects() {
     blockSuiteEffectsReady = Promise.all([
       import('@blocksuite/blocks/effects'),
       import('@blocksuite/presets/effects'),
-    ]).then(([blocksModule, presetsModule]) => {
+      import('@/components/editor/blocks/teable-database/effects'),
+      import('@/components/editor/blocks/teable-native/effects'),
+      import('@/components/editor/mentions/effects'),
+    ]).then(([blocksModule, presetsModule, teableModule, teableNativeModule, mentionsModule]) => {
       blocksModule.effects()
       presetsModule.effects()
+      teableModule.effects()
+      teableNativeModule.effects()
+      mentionsModule.effects()
     })
   }
   return blockSuiteEffectsReady
@@ -38,16 +51,26 @@ function updateToBase64(update: Uint8Array): string {
 
 export function BlockSuiteEditor({
   pageId,
+  workspaceId,
+  workspaceSlug,
   initialTitle,
   initialDocState,
   locked,
 }: {
   pageId: number
+  workspaceId: number
+  // Optional: other embedding contexts (e.g. the record-detail drawer) mount
+  // this editor without workspace-routing context — features that need the
+  // slug (like the native Teable block's "open as full page" link) just
+  // no-op when it isn't set, rather than forcing every call site to pass one.
+  workspaceSlug?: string
   initialTitle: string
   initialDocState: unknown
   locked: boolean
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const [mountError, setMountError] = useState<string | null>(null)
+  const [retryToken, setRetryToken] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -56,65 +79,87 @@ export function BlockSuiteEditor({
     let saveTimer: ReturnType<typeof setTimeout> | null = null
     let onUpdate: (() => void) | null = null
 
+    setMountError(null)
+
     async function mount() {
-      await ensureBlockSuiteEffects()
-      if (cancelled) return
+      // Mounting spans dynamic imports, Yjs doc construction, and BlockSuite's
+      // own editor/widget initialization — any of these throwing previously
+      // left `containerRef`'s div silently empty (no editor, no slash menu,
+      // nothing clickable) with no visible signal of what went wrong. Surface
+      // it instead: log the real error and show a retry affordance.
+      try {
+        await ensureBlockSuiteEffects()
+        if (cancelled) return
 
-      const [{ AffineEditorContainer }, { DocCollection, Schema, Text }, { AffineSchemas }] = await Promise.all([
-        import('@blocksuite/presets'),
-        import('@blocksuite/store'),
-        import('@blocksuite/blocks/schemas'),
-      ])
-      if (cancelled) return
+        const [{ AffineEditorContainer }, { DocCollection, Schema, Text }, { AffineSchemas }, { PageEditorBlockSpecs }] =
+          await Promise.all([
+            import('@blocksuite/presets'),
+            import('@blocksuite/store'),
+            import('@blocksuite/blocks/schemas'),
+            import('@blocksuite/blocks'),
+          ])
+        if (cancelled) return
 
-      const schema = new Schema().register(AffineSchemas)
-      const collection = new DocCollection({ schema })
-      collection.meta.initialize()
+        const schema = new Schema().register(AffineSchemas).register([TeableDatabaseBlockSchema, TeableNativeBlockSchema])
+        const collection = new DocCollection({ schema })
+        collection.meta.initialize()
 
-      doc = collection.createDoc({ id: `page-${pageId}` })
+        doc = collection.createDoc({ id: `page-${pageId}` })
 
-      const storedUpdate =
-        initialDocState && typeof initialDocState === 'object' && 'update' in initialDocState
-          ? (initialDocState as { update: unknown }).update
-          : null
+        const storedUpdate =
+          initialDocState && typeof initialDocState === 'object' && 'update' in initialDocState
+            ? (initialDocState as { update: unknown }).update
+            : null
 
-      let hydrated = false
-      if (typeof storedUpdate === 'string' && storedUpdate.length > 0) {
-        try {
-          DocCollection.Y.applyUpdate(doc.spaceDoc, base64ToUpdate(storedUpdate), 'hydrate')
-          hydrated = true
-        } catch (err) {
-          console.error(`Failed to hydrate BlockSuite doc for page ${pageId}, starting fresh.`, err)
+        let hydrated = false
+        if (typeof storedUpdate === 'string' && storedUpdate.length > 0) {
+          try {
+            DocCollection.Y.applyUpdate(doc.spaceDoc, base64ToUpdate(storedUpdate), 'hydrate')
+            hydrated = true
+          } catch (err) {
+            console.error(`Failed to hydrate BlockSuite doc for page ${pageId}, starting fresh.`, err)
+          }
         }
+
+        doc.load(() => {
+          if (hydrated && doc?.root) return
+          const rootId = doc!.addBlock('affine:page', { title: new Text(initialTitle) })
+          doc!.addBlock('affine:surface', {}, rootId)
+          const noteId = doc!.addBlock('affine:note', {}, rootId)
+          doc!.addBlock('affine:paragraph', {}, noteId)
+        })
+
+        doc.awarenessStore.setReadonly(doc.blockCollection, locked)
+
+        editor = new AffineEditorContainer()
+        editor.pageSpecs = [...PageEditorBlockSpecs, ...TeableDatabaseBlockSpec, ...TeableNativeBlockSpec, ...MentionSpec]
+        editor.doc = doc
+        editor.mode = 'page'
+        editor.style.display = 'block'
+        editor.style.width = '100%'
+
+        if (containerRef.current) {
+          containerRef.current.dataset.workspaceId = String(workspaceId)
+          if (workspaceSlug) containerRef.current.dataset.workspaceSlug = workspaceSlug
+          containerRef.current.replaceChildren(editor)
+          registerTeableSlashMenuItem(containerRef.current)
+          registerTeableNativeSlashMenuItem(containerRef.current)
+        }
+
+        onUpdate = () => {
+          if (saveTimer) clearTimeout(saveTimer)
+          saveTimer = setTimeout(() => {
+            if (!doc) return
+            const update = DocCollection.Y.encodeStateAsUpdate(doc.spaceDoc)
+            void syncPageDoc(pageId, updateToBase64(update))
+          }, AUTOSAVE_DELAY_MS)
+        }
+        doc.spaceDoc.on('update', onUpdate)
+      } catch (err) {
+        if (cancelled) return
+        console.error(`Failed to mount BlockSuite editor for page ${pageId}.`, err)
+        setMountError(err instanceof Error ? err.message : 'Failed to load the editor.')
       }
-
-      doc.load(() => {
-        if (hydrated && doc?.root) return
-        const rootId = doc!.addBlock('affine:page', { title: new Text(initialTitle) })
-        doc!.addBlock('affine:surface', {}, rootId)
-        const noteId = doc!.addBlock('affine:note', {}, rootId)
-        doc!.addBlock('affine:paragraph', {}, noteId)
-      })
-
-      doc.awarenessStore.setReadonly(doc.blockCollection, locked)
-
-      editor = new AffineEditorContainer()
-      editor.doc = doc
-      editor.mode = 'page'
-      editor.style.display = 'block'
-      editor.style.width = '100%'
-
-      containerRef.current?.replaceChildren(editor)
-
-      onUpdate = () => {
-        if (saveTimer) clearTimeout(saveTimer)
-        saveTimer = setTimeout(() => {
-          if (!doc) return
-          const update = DocCollection.Y.encodeStateAsUpdate(doc.spaceDoc)
-          void syncPageDoc(pageId, updateToBase64(update))
-        }, AUTOSAVE_DELAY_MS)
-      }
-      doc.spaceDoc.on('update', onUpdate)
     }
 
     void mount()
@@ -125,7 +170,23 @@ export function BlockSuiteEditor({
       if (doc && onUpdate) doc.spaceDoc.off('update', onUpdate)
       editor?.remove()
     }
-  }, [pageId, initialTitle, initialDocState, locked])
+  }, [pageId, workspaceId, workspaceSlug, initialTitle, initialDocState, locked, retryToken])
 
-  return <div ref={containerRef} className="blocksuite-editor-root min-h-[200px] w-full" />
+  return (
+    <div>
+      <div ref={containerRef} className="blocksuite-editor-root min-h-[200px] w-full" />
+      {mountError && (
+        <div className="flex flex-col items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-400">
+          <span>Failed to load the editor: {mountError}</span>
+          <button
+            type="button"
+            onClick={() => setRetryToken((t) => t + 1)}
+            className="rounded px-2 py-1 text-xs hover:bg-red-100 dark:hover:bg-red-950/40"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+    </div>
+  )
 }

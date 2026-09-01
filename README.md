@@ -31,3 +31,14 @@ The project structure, dependencies, and Payload CMS configuration are in place.
 - `npm run lint` — ESLint
 - `npm run generate:types` — regenerate `payload-types.ts` from the collection configs
 - `npm run generate:importmap` — regenerate the Payload admin import map after adding custom admin components
+# NotionForge
+
+## MCP server
+
+Run `npm run mcp:notionforge` from the project root to expose NotionForge's Teable and page operations over stdio. The canonical app must be running at `http://localhost:3000`; set `NOTIONFORGE_URL` to override it. Configure a client such as Claude Desktop with:
+
+```json
+{ "mcpServers": { "notionforge": { "command": "npm", "args": ["run", "mcp:notionforge"], "cwd": "C:/path/to/notionharness" } } }
+```
+
+The server provides `list_teable_tables`, `get_table_schema`, `query_records`, `create_record`, `update_record`, `delete_record`, `get_page`, and `update_page_content`. Tool failures are returned as MCP error results; the Teable API key stays server-side in the app.

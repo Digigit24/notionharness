@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NotionForge — Notion Feature Parity Audit</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-soft: #f7f7f5;
+    --border: #e9e9e7;
+    --text: #37352f;
+    --text-muted: #787774;
+    --accent: #2383e2;
+    --p0-bg: #fdecec;
+    --p0-text: #c0392b;
+    --p0-border: #f5c6c6;
+    --p1-bg: #fef6e7;
+    --p1-text: #b9770e;
+    --p1-border: #f8e3b5;
+    --p2-bg: #eef6ee;
+    --p2-text: #2e7d32;
+    --p2-border: #c8e6c9;
+    --done-bg: #eaf5ea;
+    --done-text: #2e7d32;
+    --wip-bg: #fff8e1;
+    --wip-text: #b8860b;
+    --gap-bg: #fdecec;
+    --gap-text: #c0392b;
+    --code-bg: #f4f4f2;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg-soft);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+    line-height: 1.65;
+    font-size: 16px;
+  }
+  .wrap {
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 64px 24px 120px;
+  }
+  header.doc-header {
+    margin-bottom: 48px;
+  }
+  header.doc-header .eyebrow {
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--accent);
+    margin-bottom: 10px;
+  }
+  h1 {
+    font-size: 38px;
+    font-weight: 800;
+    margin: 0 0 12px;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+  }
+  .subtitle {
+    color: var(--text-muted);
+    font-size: 16px;
+    max-width: 640px;
+  }
+  .meta-row {
+    display: flex;
+    gap: 24px;
+    margin-top: 20px;
+    font-size: 13.5px;
+    color: var(--text-muted);
+    flex-wrap: wrap;
+  }
+  .meta-row span strong { color: var(--text); font-weight: 600; }
+
+  .callout {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    border-radius: 8px;
+    padding: 18px 20px;
+    margin: 28px 0 40px;
+    font-size: 15px;
+    color: var(--text);
+  }
+  .callout strong { color: var(--accent); }
+
+  section.block {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 32px 36px;
+    margin-bottom: 28px;
+  }
+  section.block h2 {
+    font-size: 22px;
+    font-weight: 750;
+    margin: 0 0 6px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  section.block h2 .num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    background: var(--bg-soft);
+    color: var(--text-muted);
+    font-size: 14px;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+  section.block > p.lede {
+    color: var(--text-muted);
+    margin: 0 0 20px;
+    font-size: 15px;
+  }
+  h3 {
+    font-size: 16px;
+    font-weight: 700;
+    margin: 24px 0 10px;
+  }
+  p { margin: 0 0 14px; }
+  code {
+    background: var(--code-bg);
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.88em;
+    color: #a72a2a;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 8px 0 20px;
+    font-size: 14.5px;
+  }
+  th {
+    text-align: left;
+    background: var(--bg-soft);
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: 12.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  td {
+    padding: 12px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  tr:last-child td { border-bottom: none; }
+
+  .badge {
+    display: inline-block;
+    padding: 3px 9px;
+    border-radius: 100px;
+    font-size: 12px;
+    font-weight: 700;
+    white-space: nowrap;
+    border: 1px solid transparent;
+  }
+  .badge.p0 { background: var(--p0-bg); color: var(--p0-text); border-color: var(--p0-border); }
+  .badge.p1 { background: var(--p1-bg); color: var(--p1-text); border-color: var(--p1-border); }
+  .badge.p2 { background: var(--p2-bg); color: var(--p2-text); border-color: var(--p2-border); }
+  .badge.done { background: var(--done-bg); color: var(--done-text); border-color: #c8e6c9; }
+  .badge.wip { background: var(--wip-bg); color: var(--wip-text); border-color: #f5e3ae; }
+  .badge.gap { background: var(--gap-bg); color: var(--gap-text); border-color: var(--p0-border); }
+
+  ul.clean { margin: 0 0 16px; padding-left: 22px; }
+  ul.clean li { margin-bottom: 8px; }
+
+  .highlight-box {
+    background: var(--p0-bg);
+    border: 1px solid var(--p0-border);
+    border-radius: 10px;
+    padding: 20px 22px;
+    margin: 18px 0;
+  }
+  .highlight-box h4 {
+    margin: 0 0 10px;
+    color: var(--p0-text);
+    font-size: 15px;
+    font-weight: 750;
+  }
+  .highlight-box ul.clean { margin-bottom: 0; }
+
+  .win-box {
+    background: var(--p2-bg);
+    border: 1px solid #c8e6c9;
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin: 16px 0;
+    font-size: 14.5px;
+  }
+  .win-box strong { color: var(--p2-text); }
+
+  .schema-list {
+    background: var(--code-bg);
+    border-radius: 8px;
+    padding: 16px 18px;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.8;
+    color: #555;
+    margin: 10px 0 20px;
+    word-break: break-word;
+  }
+
+  .priority-summary {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 14px;
+    margin-top: 12px;
+  }
+  .priority-card {
+    border-radius: 10px;
+    padding: 18px 20px;
+    border: 1px solid;
+  }
+  .priority-card.p0 { background: var(--p0-bg); border-color: var(--p0-border); }
+  .priority-card.p1 { background: var(--p1-bg); border-color: var(--p1-border); }
+  .priority-card.p2 { background: var(--p2-bg); border-color: var(--p2-border); }
+  .priority-card h4 {
+    margin: 0 0 8px;
+    font-size: 14px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .priority-card.p0 h4 { color: var(--p0-text); }
+  .priority-card.p1 h4 { color: var(--p1-text); }
+  .priority-card.p2 h4 { color: var(--p2-text); }
+  .priority-card p { margin: 0; font-size: 14.5px; color: var(--text); }
+
+  footer.doc-footer {
+    margin-top: 40px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 13px;
+    text-align: center;
+  }
+
+  @media (min-width: 640px) {
+    .priority-summary { grid-template-columns: repeat(3, 1fr); }
+  }
+  @media (max-width: 640px) {
+    section.block { padding: 24px 20px; }
+    .wrap { padding: 40px 16px 80px; }
+    h1 { font-size: 28px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="doc-header">
+    <div class="eyebrow">NotionForge · Internal Audit</div>
+    <h1>Notion Feature Parity — Gap Analysis</h1>
+    <p class="subtitle">A grounded comparison of NotionForge's current capabilities against real Notion, sourced from Notion's official API reference (property-object, page, block, database) and direct reads of this codebase — not assumed from memory.</p>
+    <div class="meta-row">
+      <span><strong>Scope:</strong> Property types, page model, views, block/content types, platform features</span>
+      <span><strong>Method:</strong> Live API docs + live BlockSuite schema reads + live code reads</span>
+    </div>
+  </header>
+
+  <div class="callout">
+    <strong>Bottom line:</strong> the single most consequential gap is that database rows aren't real pages yet (§2) — everything else is either already shipped, actively in flight, or a bounded, well-scoped addition. One genuine bug was also found and independently fixed: silent data loss on markdown export for stock block types (§5).
+  </div>
+
+  <section class="block">
+    <h2><span class="num">1</span> Property Types</h2>
+    <p class="lede">Notion's full property catalog (from <code>/reference/property-object</code>) cross-referenced against Teable's real field-type enum and NotionForge's current <code>FIELD_TYPE_OPTIONS</code> list.</p>
+    <table>
+      <thead>
+        <tr><th>Notion type</th><th>Teable equivalent</th><th>Status</th><th>Priority</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>title</td><td>every table's primary field</td><td><span class="badge done">have</span> Name field is always primary</td><td>—</td></tr>
+        <tr><td>rich_text</td><td>singleLineText / longText</td><td><span class="badge done">have</span></td><td>—</td></tr>
+        <tr><td>number</td><td>number</td><td><span class="badge done">have</span></td><td>—</td></tr>
+        <tr><td>checkbox</td><td>checkbox</td><td><span class="badge done">have</span></td><td>—</td></tr>
+        <tr><td>select</td><td>singleSelect</td><td><span class="badge done">have</span></td><td>—</td></tr>
+        <tr><td>multi_select</td><td>multipleSelect</td><td><span class="badge done">have</span></td><td>—</td></tr>
+        <tr><td>date</td><td>date</td><td><span class="badge done">have</span></td><td>—</td></tr>
+        <tr><td>relation</td><td>link</td><td><span class="badge done">shipped</span> generalized to any two collections</td><td><span class="badge p0">P0</span></td></tr>
+        <tr><td>people</td><td>user</td><td><span class="badge gap">read-only only</span> falls to default JSON/text — needs an editable widget</td><td><span class="badge p1">P1</span></td></tr>
+        <tr><td>files</td><td>attachment</td><td><span class="badge gap">not in FIELD_TYPE_OPTIONS</span> pure UI wiring gap, Teable already supports it</td><td><span class="badge p1">P1</span></td></tr>
+        <tr><td>created_time / last_edited_time</td><td>createdTime / lastModifiedTime</td><td><span class="badge wip">trivial</span> Teable has both types; Payload also stamps timestamps independently</td><td><span class="badge p1">P1</span></td></tr>
+        <tr><td>created_by / last_edited_by</td><td>createdBy / lastModifiedBy</td><td><span class="badge wip">trivial</span> just wire up as read-only display</td><td><span class="badge p2">P2</span></td></tr>
+        <tr><td>unique_id</td><td>autoNumber</td><td><span class="badge wip">trivial</span> already present in every record payload — just surface it</td><td><span class="badge p2">P2</span></td></tr>
+        <tr><td>button</td><td>button</td><td><span class="badge gap">real design needed</span> Notion's button triggers automation — not a quick wire-up</td><td><span class="badge p2">P2</span></td></tr>
+        <tr><td>formula</td><td>formula</td><td><span class="badge gap">real engineering</span> needs an expression editor UI</td><td><span class="badge p1">P1</span></td></tr>
+        <tr><td>rollup</td><td>rollup / conditionalRollup</td><td><span class="badge gap">real engineering</span> needs relation + an aggregation-function picker</td><td><span class="badge p1">P1</span></td></tr>
+        <tr><td>status</td><td><em>no distinct type</em></td><td><span class="badge gap">simulated only</span> Teable has no native "status" type — must be a singleSelect + naming convention</td><td><span class="badge p1">P1</span></td></tr>
+        <tr><td>url / email / phone_number</td><td><em>no dedicated types</em></td><td><span class="badge gap">cosmetic gap</span> maps to plain text, no format validation</td><td><span class="badge p2">P2</span></td></tr>
+        <tr><td>verification</td><td><em>none</em></td><td><span class="badge gap">Notion-only concept</span> no Teable equivalent, low value</td><td><span class="badge p2">P2</span></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="block">
+    <h2><span class="num">2</span> "Database Rows Are Pages" — the big architectural gap</h2>
+    <p class="lede">The single most consequential finding in this audit.</p>
+    <p>Confirmed directly from Notion's <code>/reference/page</code> and <code>/reference/block</code> docs: a database row is fundamentally a page inside a database — a complete page entity that can contain any block types as content, independently of its structured property columns. Every Notion page also carries its own <code>icon</code>, <code>cover</code>, <code>properties</code>, and separately-fetched block content.</p>
+    <p>NotionForge's <code>record-detail-popover.tsx</code> is, today, purely a property-editing modal: a fixed-position dialog with a title derived from the row's Name field (not editable as a real title) and one field editor per Teable field. No icon, no cover, no rich-content body, no own URL — closing it just closes the modal. There's nowhere else to navigate.</p>
+    <div class="highlight-box">
+      <h4>What closing this gap concretely requires</h4>
+      <ul class="clean">
+        <li>A database row becomes addressable as its own page — a real route, e.g. reusing the existing <code>/workspace/[slug]/p/[pageId]</code> pattern or a new <code>/workspace/[slug]/row/[teableTableId]/[recordId]</code>.</li>
+        <li>An actual content body — either each Teable record gets a <em>paired</em> <code>pages</code> row (via <code>parentPage</code> or a new <code>teableRecordId</code> link) carrying its own <code>docState</code>/BlockSuite doc, or some other doc-per-row storage scheme.</li>
+        <li>Icon/cover need a home — Teable's <code>attachment</code> type could hold a cover field per table; "icon" has no Teable equivalent at all and would need a NotionForge-side convention.</li>
+        <li>The popover UI itself likely needs to become a full-screen/routed page view with a real editor mounted, not a small modal.</li>
+      </ul>
+    </div>
+    <p><span class="badge p0">P0</span> Nothing else in this audit approaches "feels like Notion" without this.</p>
+  </section>
+
+  <section class="block">
+    <h2><span class="num">3</span> Nested Pages</h2>
+    <p><code>collections/Pages.ts</code> already has a self-referential <code>parentPage</code> relationship, explicitly documented as "Parent page for infinite nesting; empty for a top-level page."</p>
+    <div class="win-box"><strong>Already works today</strong> at the regular-page level — this is not a gap.</div>
+    <p style="margin-top:16px;">Database rows nesting sub-pages, however, is confirmed <strong>not supported</strong>: a Teable record has no relationship to the <code>pages</code> collection right now. This is the same root cause as §2 — once a row becomes a real page, nested sub-pages fall out for free from the existing <code>parentPage</code> mechanism.</p>
+    <p><span class="badge p0">P0</span> Same fix as §2.</p>
+  </section>
+
+  <section class="block">
+    <h2><span class="num">4</span> Views</h2>
+    <table>
+      <thead><tr><th>View</th><th>Status</th><th>Priority</th></tr></thead>
+      <tbody>
+        <tr><td>Table</td><td><span class="badge done">done</span></td><td>—</td></tr>
+        <tr><td>Kanban (Board)</td><td><span class="badge done">done</span> Status-grouped, drag-drop, own filter</td><td>—</td></tr>
+        <tr><td>Calendar</td><td><span class="badge done">done</span> Date-driven, own filter</td><td>—</td></tr>
+        <tr><td>Gallery</td><td><span class="badge gap">not started</span> Teable's own view-type enum already includes <code>gallery</code> — closer to "wire up an existing view type" than a from-scratch build</td><td><span class="badge p1">P1</span></td></tr>
+        <tr><td>List</td><td><span class="badge gap">not started</span> no Teable view-type equivalent — a thin custom re-skin of the grid</td><td><span class="badge p2">P2</span></td></tr>
+        <tr><td>Timeline</td><td><span class="badge gap">not started</span> no Teable equivalent — the most complex of the six (date-range bars, drag-to-resize)</td><td><span class="badge p2">P2</span></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="block">
+    <h2><span class="num">5</span> Block / Content Types</h2>
+    <p class="lede">Notion's catalog (from <code>/reference/block</code>) cross-referenced against the actual registered <code>AffineSchemas</code> in the installed BlockSuite version.</p>
+    <h3>Currently registered BlockSuite schemas</h3>
+    <div class="schema-list">CodeBlockSchema · ParagraphBlockSchema · RootBlockSchema · ListBlockSchema · NoteBlockSchema · DividerBlockSchema · ImageBlockSchema · SurfaceBlockSchema · BookmarkBlockSchema · FrameBlockSchema · DatabaseBlockSchema · SurfaceRefBlockSchema · DataViewBlockSchema · AttachmentBlockSchema · EmbedYoutubeBlockSchema · EmbedFigmaBlockSchema · EmbedGithubBlockSchema · EmbedHtmlBlockSchema · EmbedLinkedDocBlockSchema · EmbedSyncedDocBlockSchema · EmbedLoomBlockSchema · EdgelessTextBlockSchema · LatexBlockSchema</div>
+
+    <h3>Have</h3>
+    <p>Paragraph / headings / quote (via paragraph's <code>type</code>), bulleted / numbered / todo lists, code, divider, image, bookmark, attachment, several embeds (YouTube / Figma / GitHub / HTML / Loom), and <code>EmbedSyncedDocBlockSchema</code> (whole-doc embed — conceptually adjacent to, but not the same as, Notion's fragment-level <code>synced_block</code>).</p>
+
+    <h3>Confirmed genuinely missing</h3>
+    <p>Not present in <code>AffineSchemas</code> at all — would need real new BlockSuite blocks, the same class of work as building the Teable block was:</p>
+    <ul class="clean">
+      <li><strong>Toggle lists, callouts</strong> — very common in real Notion docs. <span class="badge p1">P1</span></li>
+      <li><strong>Column / layout blocks, table-of-contents, breadcrumb</strong> <span class="badge p2">P2</span></li>
+    </ul>
+
+    <div class="highlight-box">
+      <h4>Separate finding — a real bug, not a missing feature (now fixed)</h4>
+      <p style="margin-bottom:0;">The markdown-export serializer originally only had cases for paragraph / list / code / divider / the Teable block — every other insertable block type (image, bookmark, attachment, embeds, latex, frame) silently vanished on export with zero warning. This has since been <strong>fixed</strong>: every block type now produces either real content or a visible placeholder, and the fallback case is a code-level guarantee — proven unreachable for any block BlockSuite's own model layer will actually let you insert.</p>
+    </div>
+
+    <div class="win-box"><strong>Worth noting as a win:</strong> Notion's <code>child_database</code> (an inline database block) maps directly to what NotionForge's Teable database block already is — effectively already at conceptual parity.</div>
+  </section>
+
+  <section class="block">
+    <h2><span class="num">6</span> Other Notable Gaps</h2>
+    <p class="lede">Flagged, not deep-dived.</p>
+    <table>
+      <thead><tr><th>Feature</th><th>Status</th><th>Priority</th></tr></thead>
+      <tbody>
+        <tr><td>Templates (reusable page/row templates)</td><td>nothing today</td><td><span class="badge p1">P1</span></td></tr>
+        <tr><td>Comments / discussion threads</td><td>no comment concept in the schema</td><td><span class="badge p1">P1</span></td></tr>
+        <tr><td>Page history / versions</td><td>nothing today — Yjs's CRDT history is a future asset here</td><td><span class="badge p2">P2</span></td></tr>
+        <tr><td>Sharing / permissions granularity</td><td>Better Auth gives login; no per-page/workspace permission model yet</td><td><span class="badge p1">P1</span></td></tr>
+        <tr><td>@mentions (pages / people / dates)</td><td>not wired into the app</td><td><span class="badge p1">P1</span></td></tr>
+        <tr><td>Synced content (fragment-level)</td><td>partially adjacent to <code>EmbedSyncedDocBlockSchema</code>, not fragment sync</td><td><span class="badge p2">P2</span></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="block">
+    <h2><span class="num">7</span> Priority Summary</h2>
+    <div class="priority-summary">
+      <div class="priority-card p0">
+        <h4>P0 — blocks "feels like Notion"</h4>
+        <p>Database-rows-as-pages + nested sub-pages (same root fix). Markdown-export data loss — fixed. Relations — shipped.</p>
+      </div>
+      <div class="priority-card p1">
+        <h4>P1</h4>
+        <p>Formula/rollup UI, status-as-grouped-select, files/people editable widgets, Gallery view, toggle/callout blocks, templates, comments, permissions, @mentions.</p>
+      </div>
+      <div class="priority-card p2">
+        <h4>P2</h4>
+        <p>Created/last-edited/unique-id/button metadata fields, url/email/phone validation, List/Timeline views, column/TOC/breadcrumb blocks, page history, synced blocks.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer class="doc-footer">
+    NotionForge internal documentation · Notion parity audit
+  </footer>
+
+</div>
+</body>
+</html>

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { ChevronRight, Lock, LockOpen, Maximize2, Minimize2, MoreHorizontal, Trash2 } from 'lucide-react'
@@ -19,6 +19,7 @@ import {
   toggleLocked,
 } from '@/app/(app)/actions'
 import type { Page, Workspace } from '@/payload-types'
+import { TeableProperties } from '@/components/database/teable-properties'
 
 export function PageCanvas({
   workspace,
@@ -31,8 +32,20 @@ export function PageCanvas({
 }) {
   const router = useRouter()
   const [title, setTitle] = useState(page.title)
-  const locked = !!page.isLocked
-  const fullWidth = !!page.isFullWidth
+  const [rowFields, setRowFields] = useState<Record<string, unknown> | null>(null)
+  useEffect(() => {
+    if (!page.linkedTeableTableId || !page.linkedTeableRecordId) return
+    fetch(`/api/teable/tables/${page.linkedTeableTableId}/records/${page.linkedTeableRecordId}`).then((res) => res.ok ? res.json() : null).then((record) => setRowFields(record?.fields || null)).catch(() => setRowFields(null))
+  }, [page.linkedTeableRecordId, page.linkedTeableTableId])
+
+  // Local optimistic state, same reasoning as `title` above: `page` is a
+  // server-rendered prop with no reactivity of its own, so without a local
+  // copy the *active* tab has to wait on a full `router.refresh()` round-trip
+  // just to reflect its own click. `revalidatePath(..., 'layout')` in the
+  // server actions remains the correctness fallback for a fresh load / other
+  // tabs — this is purely about instant feedback in the tab that clicked.
+  const [locked, setLocked] = useState(!!page.isLocked)
+  const [fullWidth, setFullWidth] = useState(!!page.isFullWidth)
   const isGradientCover = page.coverImage?.startsWith('gradient:')
 
   return (
@@ -80,6 +93,7 @@ export function PageCanvas({
                   type="button"
                   onClick={() => {
                     close()
+                    setFullWidth(!fullWidth)
                     void toggleFullWidth(page.id, workspace.slug, !fullWidth)
                   }}
                   className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-black/[.06] dark:hover:bg-white/[.08]"
@@ -91,6 +105,7 @@ export function PageCanvas({
                   type="button"
                   onClick={() => {
                     close()
+                    setLocked(!locked)
                     void toggleLocked(page.id, workspace.slug, !locked)
                   }}
                   className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-black/[.06] dark:hover:bg-white/[.08]"
@@ -136,7 +151,12 @@ export function PageCanvas({
         </div>
       )}
 
-      <div className={cn('mx-auto w-full flex-1 px-8 pb-24 pt-8 md:px-16', fullWidth ? 'max-w-none' : 'max-w-3xl')}>
+      <div
+        className={cn(
+          'mx-auto w-full flex-1 pb-24 pt-8',
+          fullWidth ? 'max-w-none px-4 md:px-6' : 'max-w-4xl px-6 md:px-12',
+        )}
+      >
         <div className="mb-1 flex flex-col gap-2">
           {page.icon &&
             (locked ? (
@@ -173,13 +193,17 @@ export function PageCanvas({
             if (title !== page.title) void renamePage(page.id, workspace.slug, title)
           }}
           placeholder="Untitled"
-          className="w-full bg-transparent text-4xl font-bold leading-tight outline-none placeholder:text-black/20 disabled:cursor-not-allowed dark:placeholder:text-white/20"
+          className="page-canvas-title w-full bg-transparent text-5xl font-bold leading-tight outline-none placeholder:text-black/20 disabled:cursor-not-allowed dark:placeholder:text-white/20"
         />
+
+        {rowFields && <TeableProperties fields={rowFields} />}
 
         <div className="mt-8">
           <BlockSuiteEditor
             key={page.id}
             pageId={page.id}
+            workspaceId={workspace.id}
+            workspaceSlug={workspace.slug}
             initialTitle={page.title || 'Untitled'}
             initialDocState={page.docState}
             locked={locked}

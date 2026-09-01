@@ -23,12 +23,16 @@ export const TeableDatabases: CollectionConfig = {
       type: 'text',
       required: true,
       admin: {
-        description: 'Teable base/table ID',
+        description: 'Teable table ID',
       },
     },
     {
-      name: 'embeddedViewUrl',
+      name: 'teableBaseId',
       type: 'text',
+      required: true,
+      admin: {
+        description: 'Teable base ID (required by the Teable REST API alongside the table ID)',
+      },
     },
   ],
 }

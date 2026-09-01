@@ -3,6 +3,7 @@
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { getPayloadClient } from '@/lib/payload'
+import { getCurrentPayloadUser } from '@/lib/current-user'
 import { descendantIds } from '@/lib/tree'
 import { applyDocSync } from '@/lib/blocksuite-doc'
 import type { Page } from '@/payload-types'
@@ -20,12 +21,6 @@ function slugify(name: string) {
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/(^-|-$)/g, '') || 'workspace'
   )
-}
-
-async function getBootstrapUser() {
-  const payload = await getPayloadClient()
-  const users = await payload.find({ collection: 'users', limit: 1, sort: 'createdAt', overrideAccess: true })
-  return users.docs[0] ?? null
 }
 
 async function nextPosition(
@@ -48,8 +43,8 @@ async function nextPosition(
 
 export async function createWorkspace(name: string) {
   const payload = await getPayloadClient()
-  const user = await getBootstrapUser()
-  if (!user) throw new Error('Create a user at /admin first.')
+  const user = await getCurrentPayloadUser()
+  if (!user) throw new Error('You must be logged in to create a workspace.')
 
   let slug = slugify(name)
   const clash = await payload.find({
@@ -129,13 +124,21 @@ export async function toggleFavorite(pageId: number, workspaceSlug: string, valu
 export async function toggleFullWidth(pageId: number, workspaceSlug: string, value: boolean) {
   const payload = await getPayloadClient()
   await payload.update({ collection: 'pages', id: pageId, data: { isFullWidth: value }, overrideAccess: true })
-  revalidatePath(`/workspace/${workspaceSlug}`)
+  // `'layout'` (not the default `'page'`) so this invalidates the currently-open
+  // `/p/[pageId]` route too, not just the workspace index — a bare
+  // `revalidatePath('/workspace/${workspaceSlug}')` only revalidates that exact
+  // path, leaving whatever page the user is actually viewing stale.
+  revalidatePath(`/workspace/${workspaceSlug}`, 'layout')
 }
 
 export async function toggleLocked(pageId: number, workspaceSlug: string, value: boolean) {
   const payload = await getPayloadClient()
   await payload.update({ collection: 'pages', id: pageId, data: { isLocked: value }, overrideAccess: true })
-  revalidatePath(`/workspace/${workspaceSlug}`)
+  // See toggleFullWidth's comment — 'layout' so a fresh load/other tab of the
+  // currently-open `/p/[pageId]` route picks this up too, not just the
+  // workspace index. The active tab itself reflects the toggle instantly via
+  // PageCanvas's local `locked` state; this is the correctness fallback.
+  revalidatePath(`/workspace/${workspaceSlug}`, 'layout')
 }
 
 // Debounced autosave target for the BlockSuite editor — no revalidatePath here,

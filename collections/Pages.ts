@@ -33,6 +33,8 @@ export const Pages: CollectionConfig = {
       required: true,
       hasMany: false,
     },
+    { name: 'linkedTeableTableId', type: 'text', index: true },
+    { name: 'linkedTeableRecordId', type: 'text', index: true },
     {
       name: 'parentPage',
       type: 'relationship',

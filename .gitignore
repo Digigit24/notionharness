@@ -44,3 +44,8 @@ next-env.d.ts
 # scratch/test artifacts
 sync-body.json
 dev.log
+*.tmp
+
+# agent tooling scratch state (not app source)
+/.aionrs/
+/.opencode/

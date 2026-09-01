@@ -7,7 +7,7 @@ import { ChevronDown, ChevronRight, Copy, FileText, MoreHorizontal, Plus, Star, 
 import { cn } from '@/lib/cn'
 import { PopoverMenu } from '@/components/ui/popover-menu'
 import { buildPageTree, type PageNode } from '@/lib/tree'
-import { archivePage, createPage, duplicatePage, movePage, toggleFavorite } from '@/app/(app)/actions'
+import { archivePage, duplicatePage, movePage, toggleFavorite } from '@/app/(app)/actions'
 import type { Page, Workspace } from '@/payload-types'
 
 type DropZone = 'before' | 'after' | 'inside'
@@ -28,12 +28,14 @@ export function PageTree({
   activePageId,
   expandedIds,
   onToggleExpand,
+  onCreatePage,
 }: {
   pages: Page[]
   workspace: Workspace
   activePageId?: number
   expandedIds: Set<number>
   onToggleExpand: (id: number, forceOpen?: boolean) => void
+  onCreatePage: (parentPageId: number | null) => void
 }) {
   const tree = buildPageTree(pages.filter((p) => !p.isArchived))
   const [dnd, setDnd] = useState<DndState>(EMPTY_DND)
@@ -68,6 +70,7 @@ export function PageTree({
             activePageId={activePageId}
             expandedIds={expandedIds}
             onToggleExpand={onToggleExpand}
+            onCreatePage={onCreatePage}
           />
         ))}
         {tree.length === 0 && <p className="px-3 py-1.5 text-xs text-black/40 dark:text-white/40">No pages yet</p>}
@@ -83,6 +86,7 @@ function PageTreeItem({
   activePageId,
   expandedIds,
   onToggleExpand,
+  onCreatePage,
 }: {
   node: PageNode
   depth: number
@@ -90,6 +94,7 @@ function PageTreeItem({
   activePageId?: number
   expandedIds: Set<number>
   onToggleExpand: (id: number, forceOpen?: boolean) => void
+  onCreatePage: (parentPageId: number | null) => void
 }) {
   const router = useRouter()
   const ctx = useContext(DndCtx)!
@@ -178,7 +183,7 @@ function PageTreeItem({
             onClick={(e) => {
               e.stopPropagation()
               onToggleExpand(node.id, true)
-              void createPage({ workspaceId: workspace.id, workspaceSlug: workspace.slug, parentPageId: node.id })
+              onCreatePage(node.id)
             }}
             className="flex h-5 w-5 items-center justify-center rounded hover:bg-black/10 dark:hover:bg-white/10"
           >
@@ -243,6 +248,7 @@ function PageTreeItem({
             activePageId={activePageId}
             expandedIds={expandedIds}
             onToggleExpand={onToggleExpand}
+            onCreatePage={onCreatePage}
           />
         ))}
     </div>

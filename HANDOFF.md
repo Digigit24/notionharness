@@ -1,68 +1,40 @@
-# Handoff — TASK-6 (Sync & Markdown Bridge APIs)
+# Handoff — NotionForge
 
-Written 2026-08-31 by Mika (Multica agent) for continuation in a local Claude CLI session.
-Issue: **TASK-6** (`01a05921-ef86-76be-9d58-7054fea52d79`), status **`in_review`**, parent project **Notion Harness** (`01a058ba-594b-771b-a5a5-6c2a3db05b8d`).
+Written 2026-09-01. Compact reference for continuation — not exhaustive, see git history / `docs/notion-parity-audit.html` for deeper context.
 
-## Where things stand
+## Environment
 
-Stages 1–3 of the parent project are done/in_review:
+- App: **production build**, not dev mode. Container `notionforge-app`, port 3000. Entrypoint runs `npm install && npm run build && npm run start` on every start — **source edits do NOT hot-reload**. After any code change: `docker restart notionforge-app` and wait ~2min for the rebuild.
+- If a rebuild ever crashes with a no-stack-trace error right after "Creating an optimized production build": stale `.next` cache (named volume `notionforge-next-cache`). Fix: `docker exec notionforge-app sh -c "rm -rf /app/.next/*"` then restart.
+- **DB safety rule**: never run a standalone script that calls `getPayloadClient()` against the shared Supabase DB — `payload.config.ts` has `push: false` now (prevents auto schema-push), but a script with actual schema drift can still hang/prompt. Verify through the live container instead.
+- Teable self-hosted at `http://localhost:3100` (separate `teable-selfhost` Docker stack). From inside `notionforge-app`, reach it via `host.docker.internal:3100`, not `localhost`. Two credentials in `.env`: `TEABLE_API_KEY` (narrow, day-to-day CRUD) and `TEABLE_API_KEY_CREATOR` (broader, table/base creation only) — deliberately separate, don't merge.
 
-- **TASK-4** (Shell & Navigation UI) — `done`
-- **TASK-5** (BlockSuite Document Editor Integration) — `done`
-- **TASK-6** (this issue: Sync & Markdown Bridge APIs) — `in_review`, delivered and verified, awaiting your acceptance
-- **TASK-7** (Custom Teable Database Block) — `backlog`, blocked on a Teable instance/credentials. **Not started, not touched.**
+## What's done
 
-This repo is **not a git repository** (no `.git`) — there's nothing to branch/PR/diff against; all changes below are just sitting in the working tree.
+- **Auth**: Better Auth (own tables, separate from Payload's `users`), dark/light mode, pushed to `github.com/Digigit24/notionharness`.
+- **Database engine**: Teable as headless data source (no iframe, ever — locked decision). Two block types exist:
+  - `affine:embed-teable-database` (boxed, custom-rendered) — older, still works, not the primary path anymore.
+  - `affine:embed-teable-native` (**the real one**, slash menu: type `/Database`) — forks BlockSuite's actual `DataViewBlockComponent` + a custom `TeableDataSource extends DataSourceBase`, so Table/Kanban/Calendar views are BlockSuite's genuine native UI, not hand-rolled. BlockSuite's own disconnected native commands are hidden from the slash menu to avoid confusion.
+- **Relations**: real Teable `link` fields, generalized to any two tables in a workspace, working both directions.
+- **Rows-as-pages (v1)**: every Teable record can pair with a real Payload `pages` doc (`linkedTeableTableId`/`linkedTeableRecordId`). Row-click opens BlockSuite's own native `RecordDetail` panel (not a custom one) in a side drawer, with a real BlockSuite editor mounted for the row's content. Hover-expand icon on the title column works (was broken — BlockSuite's icon only renders on a column matching a special `'title'` property type, which Teable has none of; fixed by pointing it at Teable's primary field).
+- **@mentions**: real BlockSuite inline-mention primitive, wired to Better Auth's real user list via `/api/users`.
+- **MCP server**: `scripts/notionforge-mcp.ts`, 8 tools wrapping the Teable proxy + page markdown import/export.
+- **Sandbox orchestrator**: `lib/sandbox/*`, Docker-per-session isolation via `dockerode`, verified (16/16 real isolation checks) — not wired into any UI yet, infra only.
+- **Optimistic UI**: sidebar page creation, full-width/lock toggles — instant local state, background persistence.
+- Known recurring CSS gotcha (fixed where found so far): BlockSuite's Lit components inject **unlayered, unscoped global CSS** into `<head>` (their own architecture choice — "shadowless" for editor performance). Per CSS cascade-layers spec, any unlayered rule beats Tailwind's layered utilities regardless of specificity. Fix pattern used repeatedly: a targeted class + `!important` in `app/globals.css` (see `.page-canvas-title`, `affine-menu .affine-menu-body`). If something looks subtly wrong (size, spacing, alignment) on an element that sits near BlockSuite in the DOM, suspect this mechanism first.
 
-## What TASK-6 delivered
+## What's next (agreed, not yet dispatched)
 
-New shared server-side doc utility:
-- `lib/blocksuite-doc.ts` — headless BlockSuite `DocCollection`/`Doc` setup (mirrors `components/editor/BlockSuiteEditor.tsx`'s hydration logic, minus the browser-only `effects()` calls). Exports `loadDoc`, `encodeDocUpdate`, `extractPlainText`, `docToMarkdown`, `markdownToDoc`, `applyDocSync`.
+1. **View Settings panel** — consolidate property visibility (new), filter/sort (exists inline, migrate in), group (exists on Kanban, generalize to Table), copy-link, data-source section. Explicitly **not** doing Automations/AI Autofill (no such engine in this stack) or Conditional color (needs a Teable-support check first).
+2. **Relations → RecordDetail**: clicking a relation chip should open the related record's real detail panel (same `openRecordDetailPanel` already built for the hover-icon), not just the current link/unlink picker.
 
-New API routes:
-- `app/api/pages/[id]/sync/route.ts` — `POST { update: base64 }` → saves `docState` + re-derives `plainTextContent`.
-- `app/api/pages/[id]/export-markdown/route.ts` — `GET` → Markdown with frontmatter (`title`, `exportedAt`).
-- `app/api/pages/[id]/import-markdown/route.ts` — `POST` (raw markdown body or `{ markdown }` JSON) → parses into blocks, updates `docState`/`plainTextContent`/`title`.
-- `app/api/search/route.ts` — `GET ?q=&workspaceId=` → Payload `where` query over `title`/`plainTextContent` (Postgres `ILIKE` via `like` operator), excludes archived.
+## Parked, not started
 
-Wiring/edits to existing files:
-- `app/(app)/actions.ts` — `syncPageDoc` Server Action (the live editor's 500ms autosave target) now calls the shared `applyDocSync` helper, so `plainTextContent` stays fresh from every keystroke, not just from the new REST route.
-- `lib/search.ts` — rewritten from a local-array stub to an async `fetch('/api/search?...')` call.
-- `components/sidebar/search-modal.tsx` — now debounces (200ms) and calls `searchPages(query, workspace.id)`; dropped the now-unused `pages` prop.
-- `components/sidebar/sidebar.tsx` — dropped the `pages={pages}` prop passed into `SearchModal` (one line).
+- Hermes Gateway / AG-UI / CopilotKit chat integration — paused by explicit user request, needs a fresh feasibility spike (does Hermes Gateway's `/v1` stream match AG-UI's protocol) before resuming.
+- Full Notion parity gaps not yet built: formula/rollup properties, Gallery/List/Timeline views, toggle/callout blocks, templates, comments, page history, granular permissions. Full breakdown with priorities: `docs/notion-parity-audit.html`.
 
-**Bug found + fixed during review** (flagged by @Ritik: "h1 is not bigger than h2"):
-- Root cause: `@toeverything/theme` (the package that defines BlockSuite's actual `--affine-font-h-1..6` / `--affine-quote-color` / etc. CSS custom-property **values**) was only a transitive dependency and its `style.css` was never imported anywhere. Every block-level design token was undefined, so headings/quotes/code/dividers all lost their intended styling, not just heading sizes.
-- Fix: added `@toeverything/theme` as a direct dependency (`package.json` + `package-lock.json`) and added `import "@toeverything/theme/style.css"` to `app/layout.tsx` (before `globals.css`).
-- Verified by fetching the actual compiled `layout.css` served to the browser post-fix: `--affine-font-h-1: 28px`, `h-2: 26px`, `h-3: 24px`, `h-4: 22px`, `h-5: 20px`, `h-6: 18px` — all distinct now, plus quote/code/divider colors resolve correctly too.
+## House rules that mattered all session
 
-## Verification performed (all against the live running app, not just typecheck)
-
-- Export → import that same Markdown back → re-export was **byte-identical** (only the `exportedAt` timestamp differed).
-- Built a fresh Yjs update out-of-band, POSTed to `/sync` — `docState`/`plainTextContent` updated correctly and round-tripped.
-- `/api/search` matched on both title and body text; `[]` for non-matching queries.
-- `/workspace/demo` and `/workspace/demo/p/1` kept returning 200 and mounting cleanly after every write.
-- `npx tsc --noEmit` and `eslint` clean on all changed/added files.
-- Demo page 1 (`/workspace/demo/p/1`) was left with a **clean sample doc** (via `import-markdown`) covering all supported block types — heading, paragraph, quote, todo list, code, divider — as a live demonstration, replacing earlier test filler content.
-
-## Running / dev environment gotchas
-
-- The app runs in a Docker container named **`notionforge-app`** (port 3000, bind-mounted to this directory — edits to files here are live inside the container immediately, no rebuild needed for source changes). A **second** container, `notionforge-postgres`, is also running locally but is **not** what the app actually talks to.
-- `.env`'s `DATABASE_URI` points to a **hosted Supabase Postgres** instance, not the local `notionforge-postgres` container — don't waste time debugging data issues against the local Postgres container, it's unused by this app.
-- `notionforge-app`'s `node_modules` and `.next` are Docker **named volumes**, installed once at container creation. If you add/change npm dependencies (like the `@toeverything/theme` fix above), you need to `docker restart notionforge-app` — its startup command is `npm install && npm run dev -- -H 0.0.0.0`, so a restart re-triggers `npm install` and picks up new deps. A plain file edit does **not** need a restart; a `package.json` change does.
-- No `curl` inside the container — if you need to test from inside it, use Node's `fetch`/`http`, or run `curl` from the host against `localhost:3000` (ports are published).
-- To run a one-off Node/tsx script against the installed BlockSuite packages, the script file must physically live under `/app` inside the container (module resolution fails from `/tmp` due to how `tsx`/Next resolve node_modules).
-- Payload's REST API (`/api/pages`, `/api/workspaces`, etc.) requires normal Payload access/auth — it will 403 for anonymous requests. All app-internal code paths use the Local API (`getPayloadClient()` + `overrideAccess: true`) instead, bypassing that; keep following that pattern for any new server-side code.
-
-## Known follow-ups / things worth a second look
-
-- The Markdown export/import is a **hand-rolled serializer** (walks `affine:*` block flavours directly), not an official BlockSuite adapter — none is publicly exported in the installed `0.19.5` packages (`MarkdownAdapter` etc. are internal, not in the package `exports` map). It covers everything TASK-5's editor can currently produce (paragraph/h1-h6/quote, bulleted/numbered/todo lists, code, divider). **If TASK-7 or any future stage adds new block types** (e.g. the Teable database block), `lib/blocksuite-doc.ts`'s `serializeChildren`/`markdownToDoc` will need a matching `case` added, or those blocks will silently be skipped on export.
-- Nested/indented lists round-trip at the data level (recursive walk supports depth), but the Markdown import parser is intentionally flat (doesn't re-derive nesting from leading whitespace) — fine for what the slash menu currently produces, worth revisiting if deep nesting becomes a real use case.
-- I did not commit anything (no git repo here) — if you want version control, `git init` + first commit is still outstanding for the whole project.
-
-## Next task (parked, not started)
-
-**TASK-7 — Custom Teable Database Block Integration** (`01a05921-f885-7c50-8c05-13283ee4de06`), status `backlog`. Explicitly blocked on external setup: needs a running Teable instance (self-hosted via Docker, or Teable Cloud) and `TEABLE_API_URL`/`TEABLE_API_KEY` credentials, handed off through the workspace's own secret handling — not pasted into a comment/file. Nothing has been done on it. Someone needs to stand up Teable and provide credentials before it can be promoted to `todo`.
-
----
-Stopping here per instruction — no further tasks started. This file can be deleted once you've absorbed it; it was written for continuation purposes only, not as a permanent project doc.
+- Verify against Teable's **live OpenAPI spec** (`/docs-json` on the running instance), never guess endpoint shapes — several bugs (record PATCH shape, filter/sort using PUT not PATCH, field type-change needing a separate `/convert` endpoint) only surfaced by checking the real spec.
+- `tsc --noEmit` + `eslint` clean does **not** guarantee `npm run build` succeeds (Next.js's SWC bundler is stricter, e.g. rejects certain decorator syntax TS tolerates). Always run a real build before calling a task done.
+- No browser access exists anywhere on this team — verification is API/DB/source-level. Flag pixel-level claims as unconfirmed rather than asserting them.

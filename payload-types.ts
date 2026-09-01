@@ -188,6 +188,8 @@ export interface Page {
    */
   coverImage?: string | null;
   workspace: number | Workspace;
+  linkedTeableTableId?: string | null;
+  linkedTeableRecordId?: string | null;
   /**
    * Parent page for infinite nesting; empty for a top-level page
    */
@@ -228,10 +230,13 @@ export interface TeableDatabase {
   name: string;
   workspace: number | Workspace;
   /**
-   * Teable base/table ID
+   * Teable table ID
    */
   teableTableId: string;
-  embeddedViewUrl?: string | null;
+  /**
+   * Teable base ID (required by the Teable REST API alongside the table ID)
+   */
+  teableBaseId: string;
   updatedAt: string;
   createdAt: string;
 }
@@ -367,6 +372,8 @@ export interface PagesSelect<T extends boolean = true> {
   icon?: T;
   coverImage?: T;
   workspace?: T;
+  linkedTeableTableId?: T;
+  linkedTeableRecordId?: T;
   parentPage?: T;
   position?: T;
   docState?: T;
@@ -386,7 +393,7 @@ export interface TeableDatabasesSelect<T extends boolean = true> {
   name?: T;
   workspace?: T;
   teableTableId?: T;
-  embeddedViewUrl?: T;
+  teableBaseId?: T;
   updatedAt?: T;
   createdAt?: T;
 }

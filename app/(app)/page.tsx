@@ -5,16 +5,11 @@ import { CreateWorkspaceForm } from '@/components/workspace/create-workspace-for
 
 export default async function Home() {
   const payload = await getPayloadClient()
-  const [workspaces, users] = await Promise.all([
-    payload.find({ collection: 'workspaces', limit: 100, sort: 'name', overrideAccess: true }),
-    payload.find({ collection: 'users', limit: 1, overrideAccess: true }),
-  ])
+  const workspaces = await payload.find({ collection: 'workspaces', limit: 100, sort: 'name', overrideAccess: true })
 
   if (workspaces.docs.length === 1) {
     redirect(`/workspace/${workspaces.docs[0].slug}`)
   }
-
-  const hasUser = users.docs.length > 0
 
   return (
     <div className="flex min-h-screen w-full flex-col items-center justify-center gap-8 bg-[#f7f7f5] px-6 py-16 dark:bg-[#191919]">
@@ -40,17 +35,7 @@ export default async function Home() {
         </div>
       )}
 
-      {hasUser ? (
-        <CreateWorkspaceForm />
-      ) : (
-        <p className="max-w-sm text-center text-sm text-black/50 dark:text-white/50">
-          Visit{' '}
-          <Link href="/admin" className="underline">
-            /admin
-          </Link>{' '}
-          to create your first user, then come back here to set up a workspace.
-        </p>
-      )}
+      <CreateWorkspaceForm />
     </div>
   )
 }

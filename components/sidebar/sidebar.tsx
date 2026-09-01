@@ -1,11 +1,12 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useOptimistic, useState, useTransition } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight, Plus, Search, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight, LogOut, Plus, Search, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { ThemeToggle } from '@/components/theme/theme-toggle'
+import { authClient } from '@/lib/auth-client'
 import { PageTree } from './page-tree'
 import { WorkspaceSwitcher } from './workspace-switcher'
 import { SearchModal } from './search-modal'
@@ -16,10 +17,12 @@ export function Sidebar({
   workspace,
   workspaces,
   pages,
+  userEmail,
 }: {
   workspace: Workspace
   workspaces: Workspace[]
   pages: Page[]
+  userEmail: string
 }) {
   const router = useRouter()
   const pathname = usePathname()
@@ -27,6 +30,33 @@ export function Sidebar({
     const match = pathname.match(/\/p\/(\d+)/)
     return match ? Number(match[1]) : undefined
   }, [pathname])
+
+  // Optimistic new-page insertion: `createPage` is a Server Action that ends
+  // in `redirect()`, which is slow (server round-trip + destination page
+  // render) — inserting a placeholder here makes the sidebar tree update
+  // instantly on click. `pages` always resets `optimisticPages` back to the
+  // real, revalidated list the moment the server action's redirect lands
+  // (Sidebar stays mounted across that navigation since it lives in the
+  // layout, not the page), so no manual reconciliation is needed.
+  const [optimisticPages, addOptimisticPage] = useOptimistic(pages, (state, newPage: Page) => [...state, newPage])
+  const [, startCreateTransition] = useTransition()
+
+  function handleCreatePage(parentPageId: number | null) {
+    const now = new Date().toISOString()
+    const placeholder: Page = {
+      id: -Date.now(),
+      title: '',
+      workspace: workspace.id,
+      parentPage: parentPageId,
+      position: Number.MAX_SAFE_INTEGER,
+      createdAt: now,
+      updatedAt: now,
+    }
+    startCreateTransition(async () => {
+      addOptimisticPage(placeholder)
+      await createPage({ workspaceId: workspace.id, workspaceSlug: workspace.slug, parentPageId })
+    })
+  }
 
   const storageKey = `notionforge:sidebar:${workspace.slug}`
   const [ready, setReady] = useState(false)
@@ -74,6 +104,12 @@ export function Sidebar({
       else next.add(id)
       return next
     })
+  }
+
+  async function logOut() {
+    await authClient.signOut()
+    router.push('/login')
+    router.refresh()
   }
 
   const favorites = useMemo(() => pages.filter((p) => p.isFavorite && !p.isArchived), [pages])
@@ -149,7 +185,7 @@ export function Sidebar({
           <button
             type="button"
             title="New page"
-            onClick={() => void createPage({ workspaceId: workspace.id, workspaceSlug: workspace.slug, parentPageId: null })}
+            onClick={() => handleCreatePage(null)}
             className="flex h-5 w-5 items-center justify-center rounded hover:bg-black/10 dark:hover:bg-white/10"
           >
             <Plus size={13} />
@@ -157,11 +193,12 @@ export function Sidebar({
         </div>
 
         <PageTree
-          pages={pages}
+          pages={optimisticPages}
           workspace={workspace}
           activePageId={activePageId}
           expandedIds={expandedIds}
           onToggleExpand={toggleExpand}
+          onCreatePage={handleCreatePage}
         />
 
         <div className="mt-3">
@@ -213,9 +250,21 @@ export function Sidebar({
         </div>
       </div>
 
-      <div className="flex items-center justify-between border-t border-black/5 px-2 py-2 dark:border-white/10">
-        <span className="text-xs text-black/40 dark:text-white/40">Appearance</span>
-        <ThemeToggle />
+      <div className="flex items-center justify-between gap-1 border-t border-black/5 px-2 py-2 dark:border-white/10">
+        <span className="truncate text-xs text-black/40 dark:text-white/40" title={userEmail}>
+          {userEmail}
+        </span>
+        <div className="flex shrink-0 items-center gap-1">
+          <ThemeToggle />
+          <button
+            type="button"
+            onClick={() => void logOut()}
+            title="Log out"
+            className="flex h-7 w-7 items-center justify-center rounded-md hover:bg-black/[.06] dark:hover:bg-white/[.08]"
+          >
+            <LogOut size={14} />
+          </button>
+        </div>
       </div>
 
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} workspace={workspace} />

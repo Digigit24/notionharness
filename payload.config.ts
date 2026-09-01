@@ -30,6 +30,13 @@ export default buildConfig({
     pool: {
       connectionString: process.env.DATABASE_URI || '',
     },
+    // Migrations are the source of truth for this project (see `migrations/`).
+    // Without this, Payload's dev-mode schema-drift auto-push kicks in on every
+    // fresh client init and prompts interactively when the live DB has tables
+    // it doesn't recognize (e.g. Better Auth's own tables) — that prompt hangs
+    // forever in a non-interactive script and, worse, offers to DROP unknown
+    // tables if confirmed. Disabling push forces migration-only schema changes.
+    push: false,
   }),
   sharp,
 })
