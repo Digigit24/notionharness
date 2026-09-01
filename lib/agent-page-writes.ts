@@ -1,6 +1,6 @@
 import type { Payload } from 'payload'
 import { Text } from '@/lib/blocksuite-store'
-import { getNote, loadDocForWrite } from '@/lib/blocksuite-doc'
+import { getNote, loadDocForWrite, seedEmptyDoc } from '@/lib/blocksuite-doc'
 
 /**
  * ROADMAP 6.1 — "the run holds a scoped write handle to a block subtree,
@@ -35,8 +35,17 @@ function toParagraphType(level: 1 | 2 | 3): 'h1' | 'h2' | 'h3' {
  * later appends for the same run target the same handle.
  */
 export async function createRunSubtree(payload: Payload, pageId: number, label: string): Promise<RunSubtreeHandle> {
-  const { doc, persist } = await loadDocForWrite(payload, pageId)
-  const note = getNote(doc)
+  const { doc, title, persist } = await loadDocForWrite(payload, pageId)
+  let note = getNote(doc)
+  if (!note) {
+    // A page created via `ensureTaskPage` (or any other direct
+    // `payload.create`) has no BlockSuite doc structure at all until
+    // someone opens it in the browser editor — seed the same
+    // page/surface/note/paragraph shape the client creates on first mount,
+    // so there's a note to attach the run's subtree under.
+    seedEmptyDoc(doc, title)
+    note = getNote(doc)
+  }
   if (!note) {
     throw new Error(`Page ${pageId} has no note block to attach a run subtree to.`)
   }
@@ -57,16 +66,16 @@ export async function appendBlockToSubtree(
   pageId: number,
   subtree: RunSubtreeHandle,
   spec: AgentBlockSpec,
-): Promise<void> {
+): Promise<string> {
   const { doc, persist } = await loadDocForWrite(payload, pageId)
   const handleBlock = doc.getBlock(subtree)
   if (!handleBlock) {
     throw new Error(`Run subtree ${subtree} no longer exists on page ${pageId}.`)
   }
-  if (spec.kind === 'heading') {
-    doc.addBlock('affine:paragraph', { type: toParagraphType(spec.level), text: new Text(spec.text) }, subtree)
-  } else {
-    doc.addBlock('affine:paragraph', { type: 'text', text: new Text(spec.text) }, subtree)
-  }
+  const blockId =
+    spec.kind === 'heading'
+      ? doc.addBlock('affine:paragraph', { type: toParagraphType(spec.level), text: new Text(spec.text) }, subtree)
+      : doc.addBlock('affine:paragraph', { type: 'text', text: new Text(spec.text) }, subtree)
   await persist()
+  return blockId
 }
