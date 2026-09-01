@@ -8,6 +8,7 @@ import * as migration_20260902_050000_tasks_revision_numeric from './20260902_05
 import * as migration_20260902_060000_followers_page_entity_type from './20260902_060000_followers_page_entity_type';
 import * as migration_20260902_061000_agent_runtime_profiles from './20260902_061000_agent_runtime_profiles';
 import * as migration_20260902_070000_tasks_agents from './20260902_070000_tasks_agents';
+import * as migration_20260902_080000_tasks_page from './20260902_080000_tasks_page';
 
 export const migrations = [
   {
@@ -59,5 +60,10 @@ export const migrations = [
     up: migration_20260902_070000_tasks_agents.up,
     down: migration_20260902_070000_tasks_agents.down,
     name: '20260902_070000_tasks_agents'
+  },
+  {
+    up: migration_20260902_080000_tasks_page.up,
+    down: migration_20260902_080000_tasks_page.down,
+    name: '20260902_080000_tasks_page'
   },
 ];
