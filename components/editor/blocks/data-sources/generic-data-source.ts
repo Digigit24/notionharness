@@ -33,7 +33,14 @@ export interface GenericField {
    * backend with no foreign type system, like `UserDatabaseDataSource` —
    * simply a BlockSuite property-preset type directly). */
   type: string
-  options?: { choices?: GenericChoice[] }
+  options?: {
+    choices?: GenericChoice[]
+    /** NOTION-PARITY 1 — only meaningful when `type === 'relation'`. See
+     * `data-sources/relation-property.ts` for the full property implementation. */
+    targetDatabaseId?: number
+    /** Defaults to `'many'` (Notion/Airtable convention) when unset. */
+    cardinality?: 'one' | 'many'
+  }
   /** This field is the backend's own "primary"/title column, if it has that
    * concept (Teable does; a plain user database may not). Used to seed the
    * table view's `header.titleColumn` — see `refresh()` below. */
