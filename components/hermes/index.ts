@@ -26,4 +26,17 @@ export type { AttachmentProps } from './Attachment'
 export { Marker, TypingIndicator } from './Marker'
 export type { MarkerProps, MarkerType } from './Marker'
 
+// Thread layout variants (P5.2 chromes)
+export { ThreadDrawerTab } from './ThreadDrawerTab'
+export type { ThreadDrawerTabProps } from './ThreadDrawerTab'
+
+export { ThreadFullPage } from './ThreadFullPage'
+export type { ThreadFullPageProps } from './ThreadFullPage'
+
+export { ThreadLaneView } from './ThreadLaneView'
+export type { ThreadLaneViewProps } from './ThreadLaneView'
+
+// Hook for converting run events to thread data
+export { useThreadData } from './use-thread-data'
+
 export { ThreadDemo } from './demo'
