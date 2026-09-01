@@ -38,15 +38,15 @@ async function main(): Promise<void> {
   const afterCreate = loadDoc(page.id, 'Disposable page', page.docState).doc
   const note = getNote(afterCreate)
   const handle = afterCreate.getBlock(subtree)
-  check('createRunSubtree creates a toggle block under the page note', Boolean(note && handle && note.children.includes(handle)))
+  check('createRunSubtree creates a toggle block under the page note', Boolean(note && handle && note.children.some((child) => child.id === handle.id)))
 
   const firstChild = await appendBlockToSubtree(payload, page.id, subtree, { kind: 'heading', level: 2, text: 'Agent heading' })
   const secondChild = await appendBlockToSubtree(payload, page.id, subtree, { kind: 'paragraph', text: 'Agent finding' })
   const afterAppend = loadDoc(page.id, 'Disposable page', page.docState).doc
   const persistedHandle = afterAppend.getBlock(subtree)
   check('appendBlockToSubtree returns two child ids', Boolean(firstChild && secondChild && firstChild !== secondChild))
-  check('appendBlockToSubtree writes children under its handle', Boolean(persistedHandle && persistedHandle.children.some((child) => child.id === firstChild) && persistedHandle.children.some((child) => child.id === secondChild)))
-  check('subtree content contains expected fixture text', texts(persistedHandle).includes('Agent heading') && texts(persistedHandle).includes('Agent finding'))
+  check('appendBlockToSubtree writes children under its handle', Boolean(persistedHandle && persistedHandle.model.children.some((child) => child.id === firstChild) && persistedHandle.model.children.some((child) => child.id === secondChild)))
+  check('subtree content contains expected fixture text', texts(persistedHandle?.model).includes('Agent heading') && texts(persistedHandle?.model).includes('Agent finding'))
 
   await appendBlockToSubtree(payload, page.id, subtree, { kind: 'paragraph', text: 'Human branch edit' })
   const base = page.docState.update
@@ -61,7 +61,7 @@ async function main(): Promise<void> {
   await applyDocSync(payload, page.id, humanUpdate)
   const merged = loadDoc(page.id, 'Disposable page', page.docState).doc
   const mergedHandle = merged.getBlock(subtree)
-  check('independent agent and human CRDT writes both survive sync', Boolean(mergedHandle && mergedHandle.children.length >= 5 && texts(mergedHandle).includes('Agent fork edit') && texts(mergedHandle).includes('Human fork edit')))
+  check('independent agent and human CRDT writes both survive sync', Boolean(mergedHandle && mergedHandle.model.children.length >= 5 && texts(mergedHandle.model).includes('Agent fork edit') && texts(mergedHandle.model).includes('Human fork edit')))
 
   check('appendBlockToSubtree has no external parent-id argument', appendBlockToSubtree.length === 4)
   check('appendBlockToSubtree exposes no unrestricted update/delete operation', !appendBlockToSubtree.toString().includes('updateBlock') && !appendBlockToSubtree.toString().includes('deleteBlock'))
