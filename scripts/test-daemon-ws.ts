@@ -1,5 +1,6 @@
 import { WebSocket, WebSocketServer } from 'ws'
 import { ControlChannel } from '../lib/daemon/control-channel'
+import type { RunEventEnvelope } from '../lib/run-events'
 
 const stub = new WebSocketServer({ port: 0, host: '127.0.0.1' })
 await new Promise<void>(resolve => stub.on('listening', resolve))
@@ -29,7 +30,7 @@ const channel = new ControlChannel({
 })
 channel.start()
 await new Promise(resolve => setTimeout(resolve, 100))
-channel.sendRunEvent({ runId: 'run-1', seq: 1, type: 'terminal.output', payload: { bytes: 'hello' } })
+channel.sendRunEvent({ runId: 'run-1', seq: 1, event: { type: 'terminal', id: 'term-1', chunk: 'hello' } } satisfies RunEventEnvelope)
 await Promise.race([reconnected, new Promise((_, reject) => setTimeout(() => reject(new Error('reconnect timeout')), 2_000))])
 if (!sawEvent) throw new Error('RunEvent was not framed and received')
 channel.stop()
