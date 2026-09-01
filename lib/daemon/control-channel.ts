@@ -1,19 +1,12 @@
 /** Outbound-only control-plane channel. Run events use JSON here; terminals use a separate raw-byte socket. */
 import { EventEmitter } from 'node:events'
 import { WebSocket } from 'ws'
-
-export interface RunEvent {
-  runId: string
-  seq: number
-  type: string
-  payload: Record<string, unknown>
-  occurredAt?: string
-}
+import type { RunEventEnvelope } from '../run-events'
 
 export type ControlMessage =
   | { type: 'register'; daemonId: string; metadata?: Record<string, unknown> }
   | { type: 'heartbeat'; daemonId: string; at: string }
-  | { type: 'run_event'; event: RunEvent }
+  | { type: 'run_event'; event: RunEventEnvelope }
 
 export type ControlCommand =
   | { type: 'ack'; messageId?: string }
@@ -67,7 +60,7 @@ export class ControlChannel extends EventEmitter {
     this.emit('state', 'stopped')
   }
 
-  sendRunEvent(event: RunEvent): boolean {
+  sendRunEvent(event: RunEventEnvelope): boolean {
     return this.send({ type: 'run_event', event })
   }
 
