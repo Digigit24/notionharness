@@ -81,6 +81,9 @@ export interface Config {
     activity: Activity;
     notifications: Notification;
     artifacts: Artifact;
+    'runtime-profiles': RuntimeProfile;
+    runtimes: Runtime;
+    agents: Agent;
     'payload-kv': PayloadKv;
     'payload-locked-documents': PayloadLockedDocument;
     'payload-preferences': PayloadPreference;
@@ -102,6 +105,9 @@ export interface Config {
     activity: ActivitySelect<false> | ActivitySelect<true>;
     notifications: NotificationsSelect<false> | NotificationsSelect<true>;
     artifacts: ArtifactsSelect<false> | ArtifactsSelect<true>;
+    'runtime-profiles': RuntimeProfilesSelect<false> | RuntimeProfilesSelect<true>;
+    runtimes: RuntimesSelect<false> | RuntimesSelect<true>;
+    agents: AgentsSelect<false> | AgentsSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
     'payload-locked-documents': PayloadLockedDocumentsSelect<false> | PayloadLockedDocumentsSelect<true>;
     'payload-preferences': PayloadPreferencesSelect<false> | PayloadPreferencesSelect<true>;
@@ -480,6 +486,107 @@ export interface Artifact {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "runtime-profiles".
+ */
+export interface RuntimeProfile {
+  id: number;
+  name: string;
+  workspace: number | Workspace;
+  protocolFamily: 'acp' | 'mcp';
+  commandName: string;
+  fixedArgs?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  enabled?: boolean | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "runtimes".
+ */
+export interface Runtime {
+  id: number;
+  name: string;
+  workspace: number | Workspace;
+  runtimeProfile: number | RuntimeProfile;
+  host: string;
+  connectionInfo?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  status: 'up' | 'down' | 'unknown';
+  lastCheckedAt?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "agents".
+ */
+export interface Agent {
+  id: number;
+  name: string;
+  workspace: number | Workspace;
+  runtimeProfile: number | RuntimeProfile;
+  model?: string | null;
+  thinkingLevel?: ('low' | 'medium' | 'high') | null;
+  instructions?: string | null;
+  customEnv?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  customArgs?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  mcpConfig?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  skills?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  maxConcurrentRuns?: number | null;
+  permissionMode: 'ask' | 'auto' | 'deny';
+  enabled?: boolean | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "payload-kv".
  */
 export interface PayloadKv {
@@ -557,6 +664,18 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'artifacts';
         value: number | Artifact;
+      } | null)
+    | ({
+        relationTo: 'runtime-profiles';
+        value: number | RuntimeProfile;
+      } | null)
+    | ({
+        relationTo: 'runtimes';
+        value: number | Runtime;
+      } | null)
+    | ({
+        relationTo: 'agents';
+        value: number | Agent;
       } | null);
   globalSlug?: string | null;
   user: {
@@ -796,6 +915,56 @@ export interface ArtifactsSelect<T extends boolean = true> {
   task?: T;
   name?: T;
   url?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "runtime-profiles_select".
+ */
+export interface RuntimeProfilesSelect<T extends boolean = true> {
+  name?: T;
+  workspace?: T;
+  protocolFamily?: T;
+  commandName?: T;
+  fixedArgs?: T;
+  enabled?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "runtimes_select".
+ */
+export interface RuntimesSelect<T extends boolean = true> {
+  name?: T;
+  workspace?: T;
+  runtimeProfile?: T;
+  host?: T;
+  connectionInfo?: T;
+  status?: T;
+  lastCheckedAt?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "agents_select".
+ */
+export interface AgentsSelect<T extends boolean = true> {
+  name?: T;
+  workspace?: T;
+  runtimeProfile?: T;
+  model?: T;
+  thinkingLevel?: T;
+  instructions?: T;
+  customEnv?: T;
+  customArgs?: T;
+  mcpConfig?: T;
+  skills?: T;
+  maxConcurrentRuns?: T;
+  permissionMode?: T;
+  enabled?: T;
   updatedAt?: T;
   createdAt?: T;
 }
