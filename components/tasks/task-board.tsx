@@ -226,7 +226,7 @@ function TaskListView({ columns, tasksByStatus, runMetrics, activeTaskIds, onOpe
 
 function TaskMeta({ task }: { task: Task }) { const project = typeof task.project === 'object' ? task.project?.name : null; const assignee = typeof task.assignee === 'object' ? task.assignee?.name : null; return <span className="ml-3 shrink-0 text-xs text-black/40 dark:text-white/40">{project || assignee || ''}</span> }
 
-function TaskTableView({ tasks, columns, runMetrics, activeTaskIds: _activeTaskIds, onOpenTask }: { tasks: Task[]; columns: ColumnData[]; runMetrics: Record<number, TaskRunMetrics>; activeTaskIds: Set<number>; onOpenTask: (id: number) => void }) {
+function TaskTableView({ tasks, columns, runMetrics, activeTaskIds, onOpenTask }: { tasks: Task[]; columns: ColumnData[]; runMetrics: Record<number, TaskRunMetrics>; activeTaskIds: Set<number>; onOpenTask: (id: number) => void }) {
   const [sorting, setSorting] = useState<SortingState>([])
   const statusById = useMemo(() => new Map(columns.map((column) => [column.status.id, column.status.name])), [columns])
   const columnDefs = useMemo<ColumnDef<Task>[]>(() => [
