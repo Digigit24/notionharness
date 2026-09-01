@@ -389,6 +389,83 @@ export interface Task {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "agents".
+ */
+export interface Agent {
+  id: number;
+  name: string;
+  workspace: number | Workspace;
+  runtimeProfile: number | RuntimeProfile;
+  model?: string | null;
+  thinkingLevel?: ('low' | 'medium' | 'high') | null;
+  instructions?: string | null;
+  customEnv?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  customArgs?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  mcpConfig?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  skills?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  maxConcurrentRuns?: number | null;
+  permissionMode: 'ask' | 'auto' | 'deny';
+  enabled?: boolean | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "runtime-profiles".
+ */
+export interface RuntimeProfile {
+  id: number;
+  name: string;
+  workspace: number | Workspace;
+  protocolFamily: 'acp' | 'mcp';
+  commandName: string;
+  fixedArgs?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  enabled?: boolean | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "task-links".
  */
 export interface TaskLink {
@@ -487,29 +564,6 @@ export interface Artifact {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
- * via the `definition` "runtime-profiles".
- */
-export interface RuntimeProfile {
-  id: number;
-  name: string;
-  workspace: number | Workspace;
-  protocolFamily: 'acp' | 'mcp';
-  commandName: string;
-  fixedArgs?:
-    | {
-        [k: string]: unknown;
-      }
-    | unknown[]
-    | string
-    | number
-    | boolean
-    | null;
-  enabled?: boolean | null;
-  updatedAt: string;
-  createdAt: string;
-}
-/**
- * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "runtimes".
  */
 export interface Runtime {
@@ -529,60 +583,6 @@ export interface Runtime {
     | null;
   status: 'up' | 'down' | 'unknown';
   lastCheckedAt?: string | null;
-  updatedAt: string;
-  createdAt: string;
-}
-/**
- * This interface was referenced by `Config`'s JSON-Schema
- * via the `definition` "agents".
- */
-export interface Agent {
-  id: number;
-  name: string;
-  workspace: number | Workspace;
-  runtimeProfile: number | RuntimeProfile;
-  model?: string | null;
-  thinkingLevel?: ('low' | 'medium' | 'high') | null;
-  instructions?: string | null;
-  customEnv?:
-    | {
-        [k: string]: unknown;
-      }
-    | unknown[]
-    | string
-    | number
-    | boolean
-    | null;
-  customArgs?:
-    | {
-        [k: string]: unknown;
-      }
-    | unknown[]
-    | string
-    | number
-    | boolean
-    | null;
-  mcpConfig?:
-    | {
-        [k: string]: unknown;
-      }
-    | unknown[]
-    | string
-    | number
-    | boolean
-    | null;
-  skills?:
-    | {
-        [k: string]: unknown;
-      }
-    | unknown[]
-    | string
-    | number
-    | boolean
-    | null;
-  maxConcurrentRuns?: number | null;
-  permissionMode: 'ask' | 'auto' | 'deny';
-  enabled?: boolean | null;
   updatedAt: string;
   createdAt: string;
 }
