@@ -99,6 +99,13 @@ async function executeRun(run: Run): Promise<{ status: 'completed' | 'failed'; e
 
   await markRunStarted(run.id)
 
+  if (!run.runToken) {
+    // Should be unreachable after this task's fix — `claimNextRun` always
+    // mints one now — but surfaced loudly rather than silently sending the
+    // agent a turn with no RUN_TOKEN at all if something upstream regresses.
+    console.warn(`[dispatcher] Run ${run.id} was claimed with no run_token — page-writes auth will fail for this run.`)
+  }
+
   const { source, rootDir, baseBranch } = resolveRunWorktreeConfig()
   const manager = new RunWorktreeManager({ rootDir })
   const worktree = await manager.create(source, String(run.id), baseBranch)
@@ -121,7 +128,16 @@ async function executeRun(run: Run): Promise<{ status: 'completed' | 'failed'; e
       conversationId: run.taskId ?? run.id,
       enabledSkills: agent.skills,
       args: [...stringArray(runtimeProfile.fixedArgs), ...stringArray(agent.customArgs)],
-      env: stringEnv(agent.customEnv),
+      // Pillar 4.7 — `run.runToken` is minted fresh by `claimNextRun` and
+      // reaches the agent's own process the same way every other
+      // identity-scoped value does (HERMES_HOME, per `sendTurnWithIdentity`)
+      // — an env var, not a config file or CLI arg, so it never lands on
+      // disk anywhere this overlay's cleanup wouldn't already reach. This is
+      // only "the credential exists and reaches the agent's environment" —
+      // giving the agent an actual mechanism (MCP tool, etc.) to spend it
+      // against `POST /api/daemon/page-writes` is separate, real future
+      // work, not invented here.
+      env: { ...stringEnv(agent.customEnv), ...(run.runToken ? { RUN_TOKEN: run.runToken } : {}) },
       onEvent: (envelope) => {
         // Best-effort, fire-and-forget: a dropped live event must never
         // abort the turn itself. `envelopes` in `result` below is still the

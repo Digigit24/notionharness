@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { getBrokerPool } from './db'
 import type { Run, RunStatus } from './types'
 
@@ -87,14 +88,24 @@ export async function enqueueRun(input: {
 
 /** CLAIM (docs/ROADMAP.html §4.3) — one UPDATE with a `FOR UPDATE SKIP LOCKED`
  * subquery selecting the row to claim, never select-then-update ("Two hosts
- * will both win" otherwise). Returns null if nothing is queued. */
+ * will both win" otherwise). Returns null if nothing is queued.
+ *
+ * Per 4.7, "minted at claim, dead at settle": `run_token` — the bearer
+ * credential `POST /api/daemon/page-writes` checks — is generated here, in
+ * the same atomic UPDATE as status/worker_id/lease, not as a separate step
+ * that could race with another claim or leave a claimed-but-not-yet-tokened
+ * window. `settleRun` already wipes it back to NULL on every terminal
+ * transition (see below); minting it anywhere but claim would either miss
+ * that "dead at settle" guarantee or need its own extra round trip. */
 export async function claimNextRun(workerId: string, leaseMs = DEFAULT_LEASE_MS): Promise<Run | null> {
   const pool = getBrokerPool()
+  const runToken = randomBytes(32).toString('hex')
   const res = await pool.query<RunRow>(
     `UPDATE runs
      SET status = 'dispatched',
          worker_id = $1,
          lease_expires_at = now() + ($2::text || ' milliseconds')::interval,
+         run_token = $3,
          updated_at = now()
      WHERE id = (
        SELECT id FROM runs
@@ -104,7 +115,7 @@ export async function claimNextRun(workerId: string, leaseMs = DEFAULT_LEASE_MS)
        LIMIT 1
      )
      RETURNING *`,
-    [workerId, leaseMs],
+    [workerId, leaseMs, runToken],
   )
   return res.rows[0] ? rowToRun(res.rows[0]) : null
 }

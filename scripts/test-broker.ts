@@ -57,7 +57,8 @@ async function main() {
     assert(claimed!.id === run.id, `expected to claim run ${run.id}, got ${claimed!.id}`)
     assert(claimed!.status === 'dispatched', `expected dispatched, got ${claimed!.status}`)
     assert(claimed!.leaseExpiresAt !== null, 'expected lease_expires_at to be set on claim')
-    console.log(`[ok] claimNextRun -> claimed run ${claimed!.id}, status=${claimed!.status}, lease set`)
+    assert(!!claimed!.runToken && claimed!.runToken.length >= 32, `expected a real run_token minted at claim, got ${JSON.stringify(claimed!.runToken)}`)
+    console.log(`[ok] claimNextRun -> claimed run ${claimed!.id}, status=${claimed!.status}, lease set, run_token minted`)
 
     // A second immediate claim must find nothing (no other queued run).
     const secondClaim = await claimNextRun('test-worker-2', 5_000)
@@ -98,13 +99,18 @@ async function main() {
     assert(settled.status === 'completed', `expected completed, got ${settled.status}`)
     assert(settled.completedAt !== null, 'expected completed_at to be set')
     assert(retry === null, 'expected no retry on a clean completion')
-    console.log('[ok] settleRun(completed) -> settled, no retry spawned')
+    assert(settled.runToken === null, `expected run_token wiped at settle, got ${JSON.stringify(settled.runToken)}`)
+    console.log('[ok] settleRun(completed) -> settled, no retry spawned, run_token wiped')
 
     // --- SETTLE with retry ---
     const retryableRun = await enqueueRun({ accountableUser: userId, maxAttempts: 3 })
     createdRunIds.push(retryableRun.id)
     const claimedForFailure = await claimNextRun('test-worker-3', 5_000)
     assert(claimedForFailure!.id === retryableRun.id, 'expected to claim the retryable run')
+    assert(
+      !!claimedForFailure!.runToken && claimedForFailure!.runToken !== claimed!.runToken,
+      'expected each claim to mint its own distinct run_token, not reuse one',
+    )
     const failResult = await settleRun(retryableRun.id, 'failed', { error: 'simulated failure', retryable: true })
     assert(failResult.settled.status === 'failed', `expected failed, got ${failResult.settled.status}`)
     assert(failResult.retry !== null, 'expected a retry run to be spawned')
