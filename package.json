@@ -15,7 +15,8 @@
     "test:pty": "tsx scripts/test-pty-terminal.ts",
     "test:daemon-ws": "tsx scripts/test-daemon-ws.ts",
     "test:run-worktrees": "tsx scripts/test-run-worktrees.ts",
-    "test:render-performance": "tsx scripts/test-render-performance.ts"
+    "test:render-performance": "tsx scripts/test-render-performance.ts",
+    "test:runEvent-adapter": "tsx scripts/test-runEvent-adapter.ts"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.4.0",
