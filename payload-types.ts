@@ -399,7 +399,7 @@ export interface TaskLink {
 export interface Follower {
   id: number;
   user: number | User;
-  entityType: 'task' | 'project';
+  entityType: 'task' | 'project' | 'page';
   entityId: string;
   updatedAt: string;
   createdAt: string;

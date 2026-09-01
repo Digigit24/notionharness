@@ -15,10 +15,19 @@ const TASKS_PER_COLUMN_PAGE = 30
 
 export default async function TasksView({
   params,
+  searchParams,
 }: {
   params: Promise<{ workspaceSlug: string }>
+  searchParams: Promise<{ task?: string }>
 }) {
   const { workspaceSlug } = await params
+  const { task: taskParam } = await searchParams
+  // ROADMAP P2.6 — notifications link to `?task=<id>` so clicking one opens
+  // straight into that task's drawer. Only works if the task is already in
+  // one of its column's first `TASKS_PER_COLUMN_PAGE` — a task further down
+  // (behind "Load more") just won't auto-open; degrades silently rather than
+  // adding a dedicated single-task fetch for this pass.
+  const initialSelectedTaskId = taskParam ? Number(taskParam) : null
   const payload = await getPayloadClient()
 
   const [workspace, currentUser] = await Promise.all([
@@ -94,6 +103,7 @@ export default async function TasksView({
       assignableUsers={assignableUsers}
       currentUserId={currentUser?.id ?? null}
       pageSize={TASKS_PER_COLUMN_PAGE}
+      initialSelectedTaskId={Number.isFinite(initialSelectedTaskId) ? initialSelectedTaskId : null}
     />
   )
 }

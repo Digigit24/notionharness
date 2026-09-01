@@ -1,4 +1,5 @@
 import type { CollectionConfig } from 'payload'
+import { recordActivity } from '@/lib/activity'
 
 export const Pages: CollectionConfig = {
   slug: 'pages',
@@ -113,6 +114,65 @@ export const Pages: CollectionConfig = {
       defaultValue: false,
     },
   ],
+  hooks: {
+    afterChange: [
+      // ROADMAP P2.6 — generalizing the activity spine beyond tasks: at
+      // least create/rename for pages, via the same `recordActivity`
+      // mechanism (see `lib/activity.ts`), not a second one. Pages has no
+      // `createdBy`-style field (unlike Tasks), so both branches read the
+      // actor from `req.context.actorId`, threaded by the calling server
+      // action (`createPage`/`renamePage` in `app/(app)/actions.ts`) via
+      // Payload's built-in hook-only `context` option — best-effort, a
+      // failure here must never fail the page write itself.
+      //
+      // Deliberately NOT hooked into `docState`/`plainTextContent` updates:
+      // those come from `syncPageDoc`, a debounced autosave that fires on
+      // every keystroke and must stay silent (see that action's own
+      // comment) — an activity row per keystroke would drown out every
+      // other entity's timeline. Title is the only diffed field for
+      // `update`, so autosave writes correctly produce no activity at all.
+      async ({ doc, previousDoc, operation, req }) => {
+        const actorId = typeof req.context?.actorId === 'number' ? req.context.actorId : null
+        if (operation === 'create') {
+          try {
+            await recordActivity({
+              payload: req.payload,
+              entityType: 'page',
+              entityId: String(doc.id),
+              actor: actorId,
+              action: 'created',
+              details: { title: doc.title },
+            })
+            if (actorId) {
+              await req.payload.create({
+                collection: 'followers',
+                data: { user: actorId, entityType: 'page', entityId: String(doc.id) },
+                overrideAccess: true,
+              })
+            }
+          } catch (err) {
+            console.error('[pages] Failed to record creation activity/auto-follow.', err)
+          }
+          return
+        }
+
+        if (operation === 'update' && previousDoc && previousDoc.title !== doc.title) {
+          try {
+            await recordActivity({
+              payload: req.payload,
+              entityType: 'page',
+              entityId: String(doc.id),
+              actor: actorId,
+              action: 'renamed',
+              details: { from: previousDoc.title, to: doc.title },
+            })
+          } catch (err) {
+            console.error('[pages] Failed to record rename activity.', err)
+          }
+        }
+      },
+    ],
+  },
 }
 
 export default Pages

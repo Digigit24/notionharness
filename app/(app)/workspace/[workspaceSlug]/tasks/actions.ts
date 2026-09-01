@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { getPayloadClient } from '@/lib/payload'
+import { getCurrentPayloadUser } from '@/lib/current-user'
 import type { Task } from '@/payload-types'
 
 async function nextColumnPosition(
@@ -68,12 +69,18 @@ export async function moveTaskToStatus({
   statusId: number
 }): Promise<Task> {
   const payload = await getPayloadClient()
-  const position = await nextColumnPosition(payload, workspaceId, statusId)
+  const [position, user] = await Promise.all([
+    nextColumnPosition(payload, workspaceId, statusId),
+    getCurrentPayloadUser(),
+  ])
   const task = await payload.update({
     collection: 'tasks',
     id: taskId,
     data: { status: statusId, position },
     overrideAccess: true,
+    // ROADMAP P2.6 — read by Tasks.ts's afterChange hook to attribute the
+    // status_changed activity row to whoever dragged the card.
+    context: { actorId: user?.id },
   })
   revalidatePath(`/workspace/${workspaceSlug}/tasks`)
   return task
@@ -89,11 +96,13 @@ export async function updateTaskFields({
   data: Partial<Pick<Task, 'title' | 'status' | 'assignee' | 'project'>>
 }): Promise<Task> {
   const payload = await getPayloadClient()
+  const user = await getCurrentPayloadUser()
   const task = await payload.update({
     collection: 'tasks',
     id: taskId,
     data,
     overrideAccess: true,
+    context: { actorId: user?.id },
   })
   revalidatePath(`/workspace/${workspaceSlug}/tasks`)
   return task
