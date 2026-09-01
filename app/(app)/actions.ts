@@ -6,7 +6,7 @@ import { getPayloadClient } from '@/lib/payload'
 import { getCurrentPayloadUser } from '@/lib/current-user'
 import { descendantIds } from '@/lib/tree'
 import { applyDocSync } from '@/lib/blocksuite-doc'
-import type { Page } from '@/payload-types'
+import type { Page, TaskStatus } from '@/payload-types'
 
 function parentIdOf(page: Page): number | null {
   if (!page.parentPage) return null
@@ -20,6 +20,30 @@ function slugify(name: string) {
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/(^-|-$)/g, '') || 'workspace'
+  )
+}
+
+// ROADMAP P2.2 — a sensible starting set, not the full 7-category vocabulary:
+// the other categories (inReview/blocked/cancelled) are real, supported
+// values a workspace can use once 2.5's status-management UI exists to add
+// them — seeding all 7 by default would be more scaffolding than most teams
+// start with actually needing.
+const DEFAULT_TASK_STATUSES: Array<{ name: string; category: TaskStatus['category'] }> = [
+  { name: 'Backlog', category: 'backlog' },
+  { name: 'To Do', category: 'todo' },
+  { name: 'In Progress', category: 'inProgress' },
+  { name: 'Done', category: 'done' },
+]
+
+async function seedDefaultTaskStatuses(payload: Awaited<ReturnType<typeof getPayloadClient>>, workspaceId: number) {
+  await Promise.all(
+    DEFAULT_TASK_STATUSES.map((status, index) =>
+      payload.create({
+        collection: 'task-statuses',
+        data: { workspace: workspaceId, name: status.name, category: status.category, position: (index + 1) * 10 },
+        overrideAccess: true,
+      }),
+    ),
   )
 }
 
@@ -60,6 +84,8 @@ export async function createWorkspace(name: string) {
     data: { name, slug, owner: user.id },
     overrideAccess: true,
   })
+
+  await seedDefaultTaskStatuses(payload, workspace.id)
 
   revalidatePath('/')
   redirect(`/workspace/${workspace.slug}`)

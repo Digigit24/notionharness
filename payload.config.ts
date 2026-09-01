@@ -10,6 +10,15 @@ import { Workspaces } from './collections/Workspaces'
 import { Pages } from './collections/Pages'
 import { Databases } from './collections/Databases'
 import { DatabaseRows } from './collections/DatabaseRows'
+import { Projects } from './collections/Projects'
+import { TaskStatuses } from './collections/TaskStatuses'
+import { Tasks } from './collections/Tasks'
+import { TaskLinks } from './collections/TaskLinks'
+import { Followers } from './collections/Followers'
+import { Comments } from './collections/Comments'
+import { Activity } from './collections/Activity'
+import { Notifications } from './collections/Notifications'
+import { Artifacts } from './collections/Artifacts'
 
 const filename = fileURLToPath(import.meta.url)
 const dirname = path.dirname(filename)
@@ -21,7 +30,22 @@ export default buildConfig({
       baseDir: path.resolve(dirname),
     },
   },
-  collections: [Users, Workspaces, Pages, Databases, DatabaseRows],
+  collections: [
+    Users,
+    Workspaces,
+    Pages,
+    Databases,
+    DatabaseRows,
+    Projects,
+    TaskStatuses,
+    Tasks,
+    TaskLinks,
+    Followers,
+    Comments,
+    Activity,
+    Notifications,
+    Artifacts,
+  ],
   editor: lexicalEditor(),
   secret: process.env.PAYLOAD_SECRET || '',
   typescript: {

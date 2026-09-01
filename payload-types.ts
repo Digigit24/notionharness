@@ -72,6 +72,15 @@ export interface Config {
     pages: Page;
     databases: Database;
     'database-rows': DatabaseRow;
+    projects: Project;
+    'task-statuses': TaskStatus;
+    tasks: Task;
+    'task-links': TaskLink;
+    followers: Follower;
+    comments: Comment;
+    activity: Activity;
+    notifications: Notification;
+    artifacts: Artifact;
     'payload-kv': PayloadKv;
     'payload-locked-documents': PayloadLockedDocument;
     'payload-preferences': PayloadPreference;
@@ -84,6 +93,15 @@ export interface Config {
     pages: PagesSelect<false> | PagesSelect<true>;
     databases: DatabasesSelect<false> | DatabasesSelect<true>;
     'database-rows': DatabaseRowsSelect<false> | DatabaseRowsSelect<true>;
+    projects: ProjectsSelect<false> | ProjectsSelect<true>;
+    'task-statuses': TaskStatusesSelect<false> | TaskStatusesSelect<true>;
+    tasks: TasksSelect<false> | TasksSelect<true>;
+    'task-links': TaskLinksSelect<false> | TaskLinksSelect<true>;
+    followers: FollowersSelect<false> | FollowersSelect<true>;
+    comments: CommentsSelect<false> | CommentsSelect<true>;
+    activity: ActivitySelect<false> | ActivitySelect<true>;
+    notifications: NotificationsSelect<false> | NotificationsSelect<true>;
+    artifacts: ArtifactsSelect<false> | ArtifactsSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
     'payload-locked-documents': PayloadLockedDocumentsSelect<false> | PayloadLockedDocumentsSelect<true>;
     'payload-preferences': PayloadPreferencesSelect<false> | PayloadPreferencesSelect<true>;
@@ -171,6 +189,14 @@ export interface Workspace {
   icon?: string | null;
   owner: number | User;
   members?: (number | User)[] | null;
+  /**
+   * Short, human-readable task-id prefix for this workspace (e.g. "ENG") — combined with taskCounter for IDs like ENG-142. Not yet surfaced in any UI.
+   */
+  taskPrefix?: string | null;
+  /**
+   * Last-issued sequence number for this workspace's human-readable task IDs — increment and read atomically when actually wiring ENG-142-style IDs.
+   */
+  taskCounter?: number | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -284,6 +310,176 @@ export interface DatabaseRow {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "projects".
+ */
+export interface Project {
+  id: number;
+  name: string;
+  workspace: number | Workspace;
+  /**
+   * Emoji or icon identifier
+   */
+  icon?: string | null;
+  description?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "task-statuses".
+ */
+export interface TaskStatus {
+  id: number;
+  workspace: number | Workspace;
+  /**
+   * Free-text, per-workspace label (e.g. "Backlog", "In Progress", "Blocked on design"). Never read by anything except the UI — see category.
+   */
+  name: string;
+  /**
+   * The fixed vocabulary every consumer (board grouping, automation, the broker) reads instead of name.
+   */
+  category: 'backlog' | 'todo' | 'inProgress' | 'inReview' | 'done' | 'blocked' | 'cancelled';
+  /**
+   * Optional display color token for the status chip/column header.
+   */
+  color?: string | null;
+  /**
+   * Manual ordering of statuses within a workspace (e.g. left-to-right board column order).
+   */
+  position?: number | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "tasks".
+ */
+export interface Task {
+  id: number;
+  title: string;
+  workspace: number | Workspace;
+  project?: (number | null) | Project;
+  status: number | TaskStatus;
+  assignee?: (number | null) | User;
+  /**
+   * Who created this task — passed explicitly by the caller (see class comment above for why this can't be read off req.user).
+   */
+  createdBy: number | User;
+  /**
+   * Fractional manual ordering (e.g. within a board column) — see collection comment.
+   */
+  position?: number | null;
+  /**
+   * Optimistic-concurrency counter, incremented automatically on every update. Clients should send back the revision they read; rejecting/merging a stale write is not yet wired up.
+   */
+  revision?: number | null;
+  /**
+   * Denormalized "most recently active" timestamp, updated automatically on every change, so sorting never has to join activity.
+   */
+  lastActivityAt?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "task-links".
+ */
+export interface TaskLink {
+  id: number;
+  fromTask: number | Task;
+  toTask: number | Task;
+  linkType: 'blocks' | 'relatesTo' | 'parentOf';
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "followers".
+ */
+export interface Follower {
+  id: number;
+  user: number | User;
+  entityType: 'task' | 'project';
+  entityId: string;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "comments".
+ */
+export interface Comment {
+  id: number;
+  task: number | Task;
+  author: number | User;
+  body: string;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "activity".
+ */
+export interface Activity {
+  id: number;
+  entityType: 'task' | 'project' | 'page' | 'run';
+  entityId: string;
+  /**
+   * Nullable: system/automation-generated activity has no human actor.
+   */
+  actor?: (number | null) | User;
+  /**
+   * Verb describing what happened (e.g. "created", "commented", "status_changed").
+   */
+  action: string;
+  /**
+   * Action-specific details (e.g. { from: "todo", to: "done" } for a status_changed action).
+   */
+  payload?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "notifications".
+ */
+export interface Notification {
+  id: number;
+  user: number | User;
+  activity?: (number | null) | Activity;
+  /**
+   * Fallback display text for a notification with no backing activity row.
+   */
+  message?: string | null;
+  isRead?: boolean | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "artifacts".
+ */
+export interface Artifact {
+  id: number;
+  task: number | Task;
+  name: string;
+  /**
+   * Reference to the artifact's content — a URL for now.
+   */
+  url: string;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "payload-kv".
  */
 export interface PayloadKv {
@@ -325,6 +521,42 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'database-rows';
         value: number | DatabaseRow;
+      } | null)
+    | ({
+        relationTo: 'projects';
+        value: number | Project;
+      } | null)
+    | ({
+        relationTo: 'task-statuses';
+        value: number | TaskStatus;
+      } | null)
+    | ({
+        relationTo: 'tasks';
+        value: number | Task;
+      } | null)
+    | ({
+        relationTo: 'task-links';
+        value: number | TaskLink;
+      } | null)
+    | ({
+        relationTo: 'followers';
+        value: number | Follower;
+      } | null)
+    | ({
+        relationTo: 'comments';
+        value: number | Comment;
+      } | null)
+    | ({
+        relationTo: 'activity';
+        value: number | Activity;
+      } | null)
+    | ({
+        relationTo: 'notifications';
+        value: number | Notification;
+      } | null)
+    | ({
+        relationTo: 'artifacts';
+        value: number | Artifact;
       } | null);
   globalSlug?: string | null;
   user: {
@@ -406,6 +638,8 @@ export interface WorkspacesSelect<T extends boolean = true> {
   icon?: T;
   owner?: T;
   members?: T;
+  taskPrefix?: T;
+  taskCounter?: T;
   updatedAt?: T;
   createdAt?: T;
 }
@@ -451,6 +685,117 @@ export interface DatabaseRowsSelect<T extends boolean = true> {
   database?: T;
   cells?: T;
   position?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "projects_select".
+ */
+export interface ProjectsSelect<T extends boolean = true> {
+  name?: T;
+  workspace?: T;
+  icon?: T;
+  description?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "task-statuses_select".
+ */
+export interface TaskStatusesSelect<T extends boolean = true> {
+  workspace?: T;
+  name?: T;
+  category?: T;
+  color?: T;
+  position?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "tasks_select".
+ */
+export interface TasksSelect<T extends boolean = true> {
+  title?: T;
+  workspace?: T;
+  project?: T;
+  status?: T;
+  assignee?: T;
+  createdBy?: T;
+  position?: T;
+  revision?: T;
+  lastActivityAt?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "task-links_select".
+ */
+export interface TaskLinksSelect<T extends boolean = true> {
+  fromTask?: T;
+  toTask?: T;
+  linkType?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "followers_select".
+ */
+export interface FollowersSelect<T extends boolean = true> {
+  user?: T;
+  entityType?: T;
+  entityId?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "comments_select".
+ */
+export interface CommentsSelect<T extends boolean = true> {
+  task?: T;
+  author?: T;
+  body?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "activity_select".
+ */
+export interface ActivitySelect<T extends boolean = true> {
+  entityType?: T;
+  entityId?: T;
+  actor?: T;
+  action?: T;
+  payload?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "notifications_select".
+ */
+export interface NotificationsSelect<T extends boolean = true> {
+  user?: T;
+  activity?: T;
+  message?: T;
+  isRead?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "artifacts_select".
+ */
+export interface ArtifactsSelect<T extends boolean = true> {
+  task?: T;
+  name?: T;
+  url?: T;
   updatedAt?: T;
   createdAt?: T;
 }
