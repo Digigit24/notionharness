@@ -5,6 +5,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { Thread } from '@/components/hermes'
 import { useThreadData } from './use-thread-data'
 import type { Agent } from '@/payload-types'
+import type { Run, RunMessageRow } from '@/lib/broker/types'
 
 /**
  * ThreadDrawerTab
@@ -15,7 +16,7 @@ import type { Agent } from '@/payload-types'
 export interface ThreadDrawerTabProps {
   taskId: number
   agents: Agent[]
-  loader: (taskId: number) => Promise<Array<{ run: any; events: any[] }>>
+  loader: (taskId: number) => Promise<Array<{ run: Run; events: RunMessageRow[] }>>
 }
 
 export function ThreadDrawerTab({ taskId, agents, loader }: ThreadDrawerTabProps) {

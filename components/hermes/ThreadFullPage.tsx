@@ -3,8 +3,8 @@
 import { useState } from 'react'
 import { Thread } from '@/components/hermes'
 import { useThreadData } from './use-thread-data'
-import type { ChatThread } from '@/lib/hermes/runEvent-adapter'
 import type { Agent } from '@/payload-types'
+import type { Run, RunMessageRow } from '@/lib/broker/types'
 
 /**
  * ThreadFullPage
@@ -16,7 +16,7 @@ export interface ThreadFullPageProps {
   taskId: number
   taskTitle?: string
   agents: Agent[]
-  loader: (taskId: number) => Promise<Array<{ run: any; events: any[] }>>
+  loader: (taskId: number) => Promise<Array<{ run: Run; events: RunMessageRow[] }>>
 }
 
 export function ThreadFullPage({ taskId, taskTitle, agents, loader }: ThreadFullPageProps) {

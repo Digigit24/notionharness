@@ -3,6 +3,7 @@
 import { Thread } from '@/components/hermes'
 import { useThreadData } from './use-thread-data'
 import type { Agent } from '@/payload-types'
+import type { Run, RunMessageRow } from '@/lib/broker/types'
 
 /**
  * ThreadLaneView
@@ -14,7 +15,7 @@ export interface ThreadLaneViewProps {
   taskId: number
   taskTitle?: string
   agents: Agent[]
-  loader: (taskId: number) => Promise<Array<{ run: any; events: any[] }>>
+  loader: (taskId: number) => Promise<Array<{ run: Run; events: RunMessageRow[] }>>
   height?: string
 }
 

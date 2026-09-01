@@ -2,9 +2,10 @@
 
 import { useMemo } from 'react'
 import { adaptRunEventsToThread } from '@/lib/hermes/runEvent-adapter'
-import type { ChatThread, RunEventEnvelope } from '@/lib/hermes/runEvent-adapter'
+import type { ChatThread } from '@/lib/hermes/runEvent-adapter'
 import { useRunEventStream } from '@/components/runs/use-run-event-stream'
 import type { RunMessageRow, Run } from '@/lib/broker/types'
+import type { RunEventEnvelope } from '@/lib/run-events'
 
 /**
  * Hook: load and adapt run events to ChatThread
