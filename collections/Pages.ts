@@ -33,8 +33,34 @@ export const Pages: CollectionConfig = {
       required: true,
       hasMany: false,
     },
-    { name: 'linkedTeableTableId', type: 'text', index: true },
-    { name: 'linkedTeableRecordId', type: 'text', index: true },
+    {
+      name: 'linkedSourceType',
+      type: 'select',
+      options: [
+        { label: 'User Database', value: 'userDatabase' },
+        { label: 'Payload Collection', value: 'payload' },
+      ],
+      admin: {
+        description:
+          'Which DataSource backend this page mirrors a row from, if any — set together with linkedSourceId/linkedRecordId. Empty for a regular, unlinked page.',
+      },
+    },
+    {
+      name: 'linkedSourceId',
+      type: 'text',
+      index: true,
+      admin: {
+        description: "The linked backend's own identifier: a `databases` doc id for 'userDatabase', or a collection slug for 'payload'.",
+      },
+    },
+    {
+      name: 'linkedRecordId',
+      type: 'text',
+      index: true,
+      admin: {
+        description: 'The specific row/document id within linkedSourceId.',
+      },
+    },
     {
       name: 'parentPage',
       type: 'relationship',

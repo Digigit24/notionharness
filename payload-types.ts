@@ -192,8 +192,18 @@ export interface Page {
    */
   coverImage?: string | null;
   workspace: number | Workspace;
-  linkedTeableTableId?: string | null;
-  linkedTeableRecordId?: string | null;
+  /**
+   * Which DataSource backend this page mirrors a row from, if any — set together with linkedSourceId/linkedRecordId. Empty for a regular, unlinked page.
+   */
+  linkedSourceType?: ('userDatabase' | 'payload') | null;
+  /**
+   * The linked backend's own identifier: a `databases` doc id for 'userDatabase', or a collection slug for 'payload'.
+   */
+  linkedSourceId?: string | null;
+  /**
+   * The specific row/document id within linkedSourceId.
+   */
+  linkedRecordId?: string | null;
   /**
    * Parent page for infinite nesting; empty for a top-level page
    */
@@ -433,8 +443,9 @@ export interface PagesSelect<T extends boolean = true> {
   icon?: T;
   coverImage?: T;
   workspace?: T;
-  linkedTeableTableId?: T;
-  linkedTeableRecordId?: T;
+  linkedSourceType?: T;
+  linkedSourceId?: T;
+  linkedRecordId?: T;
   parentPage?: T;
   position?: T;
   docState?: T;

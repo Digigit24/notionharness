@@ -19,7 +19,7 @@ import {
   toggleLocked,
 } from '@/app/(app)/actions'
 import type { Page, Workspace } from '@/payload-types'
-import { TeableProperties } from '@/components/database/teable-properties'
+import { RowProperties } from '@/components/database/row-properties'
 
 export function PageCanvas({
   workspace,
@@ -34,9 +34,16 @@ export function PageCanvas({
   const [title, setTitle] = useState(page.title)
   const [rowFields, setRowFields] = useState<Record<string, unknown> | null>(null)
   useEffect(() => {
-    if (!page.linkedTeableTableId || !page.linkedTeableRecordId) return
-    fetch(`/api/teable/tables/${page.linkedTeableTableId}/records/${page.linkedTeableRecordId}`).then((res) => res.ok ? res.json() : null).then((record) => setRowFields(record?.fields || null)).catch(() => setRowFields(null))
-  }, [page.linkedTeableRecordId, page.linkedTeableTableId])
+    if (!page.linkedSourceType || !page.linkedSourceId || !page.linkedRecordId) return
+    const path =
+      page.linkedSourceType === 'userDatabase'
+        ? `/api/user-databases/${page.linkedSourceId}/rows/${page.linkedRecordId}`
+        : `/api/payload-datasource/${page.linkedSourceId}/records/${page.linkedRecordId}`
+    fetch(path)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((body) => setRowFields(body?.doc?.cells ?? body?.doc?.fields ?? null))
+      .catch(() => setRowFields(null))
+  }, [page.linkedSourceType, page.linkedSourceId, page.linkedRecordId])
 
   // Local optimistic state, same reasoning as `title` above: `page` is a
   // server-rendered prop with no reactivity of its own, so without a local
@@ -196,7 +203,7 @@ export function PageCanvas({
           className="page-canvas-title w-full bg-transparent text-5xl font-bold leading-tight outline-none placeholder:text-black/20 disabled:cursor-not-allowed dark:placeholder:text-white/20"
         />
 
-        {rowFields && <TeableProperties fields={rowFields} />}
+        {rowFields && <RowProperties fields={rowFields} />}
 
         <div className="mt-8">
           <BlockSuiteEditor
