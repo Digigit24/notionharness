@@ -10,7 +10,7 @@ export class AffineMention extends WithDisposable(ShadowlessElement) {
   // Plain (non-decorator) reactive-property declaration — this app's build
   // doesn't support the `@property()` + `accessor` combo BlockSuite's own
   // (separately pre-built) components use, so match this codebase's existing
-  // no-decorator Lit convention instead (see teable-native-block.ts).
+  // no-decorator Lit convention instead (see native-database-block.ts).
   static override properties = {
     delta: { type: Object },
   }

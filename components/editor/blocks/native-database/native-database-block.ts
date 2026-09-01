@@ -11,7 +11,7 @@ import {
 } from '@/lib/blocksuite-data-view'
 import { computed, signal } from '@preact/signals-core'
 import { css, html, unsafeCSS } from 'lit'
-import type { TeableNativeBlockModel, TeableNativeSourceType } from './schema'
+import type { NativeDatabaseBlockModel, NativeDatabaseSourceType } from './schema'
 import { TeableDataSource } from './teable-data-source'
 import { PayloadDataSource } from '../data-sources/payload-data-source'
 import { UserDatabaseDataSource } from '../data-sources/user-database-data-source'
@@ -32,23 +32,31 @@ interface UserDatabaseOption {
 /**
  * Renders BlockSuite's own native table/kanban `DataView` UI (unmodified —
  * the drag-and-drop grid/board, column headers, filter bar all come straight
- * from `@blocksuite/data-view`'s `view-presets`) against a `TeableDataSource`
+ * from `@blocksuite/data-view`'s `view-presets`) against any of the three
+ * `GenericDataSource` backends (`TeableDataSource` for legacy reads,
+ * `PayloadDataSource`, `UserDatabaseDataSource` — see `_effectiveSourceType`)
  * instead of local Yjs cell storage, so the "genuinely native look" is
- * backed by real, persisted Teable data.
+ * backed by real, persisted data regardless of which backend a given block
+ * connects to.
  *
  * Forked from `@blocksuite/blocks`' `DataViewBlockComponent`
  * (`node_modules/@blocksuite/blocks/src/data-view-block/data-view-block.ts`)
  * — same `DataView.render()` wiring, trimmed of features this app doesn't
  * have configured (peek-view service, telemetry service) and with the
- * connect/loading gate every other Teable block in this app has.
+ * connect/loading gate every source-backed block in this app has.
+ *
+ * NOTION-PARITY 4 — renamed from `TeableNativeBlockComponent` (this file was
+ * `teable-native-block.ts`) once the block stopped being Teable-specific;
+ * the persisted flavour string (`affine:embed-teable-native`) is
+ * deliberately unchanged — see `schema.ts`'s comment.
  */
-export class TeableNativeBlockComponent extends BlockComponent<TeableNativeBlockModel> {
+export class NativeDatabaseBlockComponent extends BlockComponent<NativeDatabaseBlockModel> {
   // Kept disabled while legacy Teable blocks remain readable; all new blocks
   // must choose the native Payload/user-database source picker.
   private readonly _legacyCreationEnabled = false
   static override styles = css`
-    ${unsafeCSS(dataViewCommonStyle('affine-teable-native'))}
-    affine-teable-native {
+    ${unsafeCSS(dataViewCommonStyle('affine-native-database'))}
+    affine-native-database {
       display: block;
       border-radius: 8px;
       background-color: var(--affine-background-primary-color, #fff);
@@ -82,7 +90,7 @@ export class TeableNativeBlockComponent extends BlockComponent<TeableNativeBlock
   /** `model.sourceType` is the source of truth once set; `null` means a
    * pre-P2.3 document, which is always a legacy Teable connection if it has
    * a `teableDatabaseId` at all — see `schema.ts`'s comment on `sourceType`. */
-  private get _effectiveSourceType(): TeableNativeSourceType | null {
+  private get _effectiveSourceType(): NativeDatabaseSourceType | null {
     if (this.model.sourceType) return this.model.sourceType
     if (this.model.teableDatabaseId !== null) return 'teable'
     return null
@@ -645,7 +653,7 @@ export class TeableNativeBlockComponent extends BlockComponent<TeableNativeBlock
           dataSource,
           headerWidget: this._headerWidget,
           clipboard: this.std.clipboard,
-          notification: { toast: (message: string) => console.warn('[teable-native]', message) },
+          notification: { toast: (message: string) => console.warn('[native-database]', message) },
           eventTrace: () => {},
           detailPanelConfig: {
             openDetailPanel: (_target, data) => {
@@ -697,6 +705,6 @@ export class TeableNativeBlockComponent extends BlockComponent<TeableNativeBlock
 
 declare global {
   interface HTMLElementTagNameMap {
-    'affine-teable-native': TeableNativeBlockComponent
+    'affine-native-database': NativeDatabaseBlockComponent
   }
 }

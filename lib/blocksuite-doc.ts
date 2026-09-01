@@ -1,6 +1,6 @@
 import { DocCollection, Schema, Text, type Doc } from '@/lib/blocksuite-store'
 import { AffineSchemas } from '@/lib/blocksuite-blocks'
-import { TeableNativeBlockSchema } from '@/components/editor/blocks/teable-native/schema'
+import { NativeDatabaseBlockSchema } from '@/components/editor/blocks/native-database/schema'
 import type { Payload } from 'payload'
 
 // Server-side (Node) mirror of the headless doc setup in `BlockSuiteEditor.tsx`,
@@ -146,7 +146,7 @@ export function snapshotToMarkdownTable(snapshot: TeableDatabaseSnapshot): strin
 }
 
 function createCollection() {
-  const schema = new Schema().register(AffineSchemas).register([TeableNativeBlockSchema])
+  const schema = new Schema().register(AffineSchemas).register([NativeDatabaseBlockSchema])
   const collection = new DocCollection({ schema })
   collection.meta.initialize()
   return collection

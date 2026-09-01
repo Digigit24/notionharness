@@ -19,9 +19,9 @@ function ensureEffects() {
   if (!effectsReady) {
     effectsReady = Promise.all([
       loadBlockSuiteEffects(),
-      import('@/components/editor/blocks/teable-native/effects'),
-    ]).then(([, teableNativeModule]) => {
-      teableNativeModule.effects()
+      import('@/components/editor/blocks/native-database/effects'),
+    ]).then(([, nativeDatabaseModule]) => {
+      nativeDatabaseModule.effects()
     })
   }
   return effectsReady
@@ -39,11 +39,11 @@ export function TeableFullPageView({ teableDatabaseId }: { teableDatabaseId: num
       await ensureEffects()
       if (cancelled) return
 
-      const [{ presets, store, schemas, blocks }, { TeableNativeBlockSchema }, { TeableNativeBlockSpec }] =
+      const [{ presets, store, schemas, blocks }, { NativeDatabaseBlockSchema }, { NativeDatabaseBlockSpec }] =
         await Promise.all([
           loadBlockSuiteRuntime(),
-          import('@/components/editor/blocks/teable-native/schema'),
-          import('@/components/editor/blocks/teable-native/spec'),
+          import('@/components/editor/blocks/native-database/schema'),
+          import('@/components/editor/blocks/native-database/spec'),
         ])
       const { AffineEditorContainer } = presets
       const { DocCollection, Schema } = store
@@ -51,7 +51,7 @@ export function TeableFullPageView({ teableDatabaseId }: { teableDatabaseId: num
       const { PageEditorBlockSpecs } = blocks
       if (cancelled) return
 
-      const schema = new Schema().register(AffineSchemas).register([TeableNativeBlockSchema])
+      const schema = new Schema().register(AffineSchemas).register([NativeDatabaseBlockSchema])
       const collection = new DocCollection({ schema })
       collection.meta.initialize()
       doc = collection.createDoc({ id: `teable-fullpage-${teableDatabaseId}` })
@@ -64,7 +64,7 @@ export function TeableFullPageView({ teableDatabaseId }: { teableDatabaseId: num
       })
 
       editor = new AffineEditorContainer()
-      editor.pageSpecs = [...PageEditorBlockSpecs, ...TeableNativeBlockSpec]
+      editor.pageSpecs = [...PageEditorBlockSpecs, ...NativeDatabaseBlockSpec]
       editor.doc = doc
       editor.mode = 'page'
       editor.style.display = 'block'

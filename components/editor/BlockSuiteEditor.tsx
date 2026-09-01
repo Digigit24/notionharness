@@ -2,9 +2,9 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { syncPageDoc } from '@/app/(app)/actions'
-import { TeableNativeBlockSchema } from '@/components/editor/blocks/teable-native/schema'
-import { TeableNativeBlockSpec } from '@/components/editor/blocks/teable-native/spec'
-import { registerTeableNativeSlashMenuItem } from '@/components/editor/blocks/teable-native/slash-menu'
+import { NativeDatabaseBlockSchema } from '@/components/editor/blocks/native-database/schema'
+import { NativeDatabaseBlockSpec } from '@/components/editor/blocks/native-database/spec'
+import { registerNativeDatabaseSlashMenuItem } from '@/components/editor/blocks/native-database/slash-menu'
 import { MentionSpec } from '@/components/editor/mentions/spec'
 import type { AffineEditorContainer } from '@/lib/blocksuite-presets'
 import type { Doc } from '@/lib/blocksuite-store'
@@ -20,10 +20,10 @@ function ensureBlockSuiteEffects() {
   if (!blockSuiteEffectsReady) {
     blockSuiteEffectsReady = Promise.all([
       loadBlockSuiteEffects(),
-      import('@/components/editor/blocks/teable-native/effects'),
+      import('@/components/editor/blocks/native-database/effects'),
       import('@/components/editor/mentions/effects'),
-    ]).then(([, teableNativeModule, mentionsModule]) => {
-      teableNativeModule.effects()
+    ]).then(([, nativeDatabaseModule, mentionsModule]) => {
+      nativeDatabaseModule.effects()
       mentionsModule.effects()
     })
   }
@@ -92,7 +92,7 @@ export function BlockSuiteEditor({
         const { PageEditorBlockSpecs } = blocks
         if (cancelled) return
 
-        const schema = new Schema().register(AffineSchemas).register([TeableNativeBlockSchema])
+        const schema = new Schema().register(AffineSchemas).register([NativeDatabaseBlockSchema])
         const collection = new DocCollection({ schema })
         collection.meta.initialize()
 
@@ -124,7 +124,7 @@ export function BlockSuiteEditor({
         doc.awarenessStore.setReadonly(doc.blockCollection, locked)
 
         editor = new AffineEditorContainer()
-        editor.pageSpecs = [...PageEditorBlockSpecs, ...TeableNativeBlockSpec, ...MentionSpec]
+        editor.pageSpecs = [...PageEditorBlockSpecs, ...NativeDatabaseBlockSpec, ...MentionSpec]
         editor.doc = doc
         editor.mode = 'page'
         editor.style.display = 'block'
@@ -134,7 +134,7 @@ export function BlockSuiteEditor({
           containerRef.current.dataset.workspaceId = String(workspaceId)
           if (workspaceSlug) containerRef.current.dataset.workspaceSlug = workspaceSlug
           containerRef.current.replaceChildren(editor)
-          registerTeableNativeSlashMenuItem(containerRef.current)
+          registerNativeDatabaseSlashMenuItem(containerRef.current)
         }
 
         onUpdate = () => {
