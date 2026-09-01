@@ -1,15 +1,17 @@
 // ROADMAP P3.4 — composes the HERMES_HOME overlay (`./home-overlay.ts`) with
-// the ACP stdio seam (`./acp-client.ts`, Pillar 3.1/3.2 — deliberately left
-// untouched here) so a caller gets one call that runs a turn under the
-// correct per-agent identity and always cleans up its disposable task
-// directory afterward, success or failure.
+// the ACP stdio seam (`./acp-client.ts`, Pillar 3.1/3.2) so a caller gets
+// one call that runs a turn under the correct per-agent identity and always
+// cleans up its disposable task directory afterward, success or failure.
+// (The dispatcher-wiring task also added `onEvent` live streaming and
+// relaxed `env`'s type on `acp-client.ts` — additive, no behavior change to
+// existing callers.)
 import { sendTurn, type SendTurnOptions, type SendTurnResult } from './acp-client'
 import { buildHermesHomeOverlay, type BuildHermesHomeOverlayOptions } from './home-overlay'
 
 export type SendTurnWithIdentityOptions = Omit<SendTurnOptions, 'env'> &
   Pick<BuildHermesHomeOverlayOptions, 'agentId' | 'conversationId' | 'enabledSkills'> &
   Pick<BuildHermesHomeOverlayOptions, 'baseHermesHome' | 'agentMemoryRoot' | 'conversationStateRoot' | 'taskRoot'> & {
-    env?: NodeJS.ProcessEnv
+    env?: Record<string, string | undefined>
   }
 
 export interface SendTurnWithIdentityResult extends SendTurnResult {
@@ -53,6 +55,7 @@ export async function sendTurnWithIdentity(opts: SendTurnWithIdentityOptions): P
       permissionTimeoutMs: opts.permissionTimeoutMs,
       mcpServers: opts.mcpServers,
       turnTimeoutMs: opts.turnTimeoutMs,
+      onEvent: opts.onEvent,
       env: { ...process.env, ...opts.env, HERMES_HOME: overlay.homeDir },
     })
     return { ...result, missingSkills: overlay.missingSkills, hardlinkFallbackFor: overlay.hardlinkFallbackFor }

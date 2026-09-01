@@ -62,8 +62,16 @@ export interface SendTurnOptions {
    * concurrent runs over a single connection.
    */
   runId: string
-  /** Extra environment merged into the child process environment. */
-  env?: NodeJS.ProcessEnv
+  /**
+   * Extra environment merged into the child process environment
+   * (`{...process.env, ...opts.env}` — see `spawnBinary`/`sendTurnWithIdentity`).
+   * Typed as a plain string record, not `NodeJS.ProcessEnv` itself: that
+   * interface requires `NODE_ENV` to be present, which an arbitrary partial
+   * override (an agent's own `customEnv` JSON field, for instance) has no
+   * reason to carry — this is only ever a partial overlay on top of the
+   * real `process.env`, never trusted to be complete on its own.
+   */
+  env?: Record<string, string | undefined>
   /** Extra args passed to the binary. */
   args?: string[]
   /** Permission request timeout in ms — defaults to 50ms (smoke-harness tuned). */
@@ -72,6 +80,15 @@ export interface SendTurnOptions {
   mcpServers?: unknown[]
   /** Wall-clock cap for the whole turn in ms — defaults to 60s. */
   turnTimeoutMs?: number
+  /**
+   * Called synchronously for every envelope the instant it's produced, in
+   * the same `seq` order as the final `envelopes` array — additive, doesn't
+   * change existing callers. Lets a real dispatcher append each event to
+   * the broker's `run_messages` as it happens (roadmap: "streams into the
+   * task's Activity tab in real time") instead of only ever seeing the
+   * whole transcript after the turn already ended.
+   */
+  onEvent?: (envelope: RunEventEnvelope) => void
 }
 
 export interface SendTurnResult {
@@ -336,7 +353,9 @@ export async function sendTurn(opts: SendTurnOptions): Promise<SendTurnResult> {
     return seq
   }
   const pushEvent = (event: RunEvent): void => {
-    envelopes.push({ runId: opts.runId, seq: allocSeq(), event })
+    const envelope = { runId: opts.runId, seq: allocSeq(), event }
+    envelopes.push(envelope)
+    opts.onEvent?.(envelope)
   }
   let pinnedSessionId: string | null = null
   let agentName = 'unknown'

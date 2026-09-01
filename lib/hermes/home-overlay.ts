@@ -217,7 +217,20 @@ export async function buildHermesHomeOverlay(opts: BuildHermesHomeOverlayOptions
     missingSkills,
     hardlinkFallbackFor,
     cleanup: async () => {
-      await rm(homeDir, { recursive: true, force: true })
+      // Best-effort, never throws: confirmed live (dispatcher-wiring task,
+      // real hermes-acp binary) that a passthrough hardlink like
+      // `.mcp-discovery.lock` can still be held open by the OS for a brief
+      // moment after the agent process exits, and Windows (unlike POSIX)
+      // refuses to unlink an open file — `EBUSY`. `maxRetries`/`retryDelay`
+      // ride out that transient window; if cleanup still can't fully
+      // finish, it's logged and swallowed rather than thrown, because a
+      // disposable directory failing to delete immediately must never turn
+      // an otherwise-successful turn into a reported failure.
+      try {
+        await rm(homeDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+      } catch (err) {
+        console.warn(`[hermes] Failed to fully clean up overlay directory ${homeDir} (leaving it for later GC).`, err)
+      }
     },
   }
 }
