@@ -7,10 +7,9 @@ import {
   type TypeInstance,
   type ViewManager,
   type ViewMeta,
-} from '@blocksuite/data-view'
-import { propertyPresets } from '@blocksuite/data-view/property-presets'
-import { viewPresets, viewConverts } from '@blocksuite/data-view/view-presets'
-import type { InsertToPosition } from '@blocksuite/affine-shared/utils'
+} from '@/lib/blocksuite-data-view'
+import { propertyPresets, viewPresets, viewConverts } from '@/lib/blocksuite-data-view'
+import type { InsertToPosition } from '@/lib/blocksuite-affine-shared'
 import { computed, signal, type ReadonlySignal } from '@preact/signals-core'
 
 // Real Teable-backed `DataSource` for BlockSuite's native `DataView` renderer

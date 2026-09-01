@@ -1,8 +1,8 @@
-import { ShadowlessElement } from '@blocksuite/block-std'
-import { WithDisposable } from '@blocksuite/global/utils'
-import { type DeltaInsert, ZERO_WIDTH_NON_JOINER, ZERO_WIDTH_SPACE } from '@blocksuite/inline'
+import { ShadowlessElement } from '@/lib/blocksuite-block-std'
+import { WithDisposable } from '@/lib/blocksuite-global'
+import { type DeltaInsert, ZERO_WIDTH_NON_JOINER, ZERO_WIDTH_SPACE } from '@/lib/blocksuite-inline'
 import { css, html, nothing } from 'lit'
-import type { AffineTextAttributes } from '@blocksuite/affine-shared/types'
+import type { AffineTextAttributes } from '@/lib/blocksuite-affine-shared'
 
 // Non-interactive v1 chip: renders "@Name" inline. No click/hover popup yet —
 // that's a reasonable follow-up, not a blocker for mentions to exist at all.

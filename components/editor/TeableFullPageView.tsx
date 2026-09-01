@@ -1,8 +1,10 @@
 'use client'
 
 import { useEffect, useRef } from 'react'
-import type { AffineEditorContainer } from '@blocksuite/presets'
-import type { Doc } from '@blocksuite/store'
+import type { AffineEditorContainer } from '@/lib/blocksuite-presets'
+import type { Doc } from '@/lib/blocksuite-store'
+import { ensureBlockSuiteEffects as loadBlockSuiteEffects } from '@/lib/blocksuite-effects'
+import { loadBlockSuiteRuntime } from '@/lib/blocksuite-runtime'
 
 // Reuses the exact same BlockSuite bootstrapping as `BlockSuiteEditor.tsx`,
 // but the doc is ephemeral (never persisted/synced back to Payload — there's
@@ -16,12 +18,9 @@ let effectsReady: Promise<void> | null = null
 function ensureEffects() {
   if (!effectsReady) {
     effectsReady = Promise.all([
-      import('@blocksuite/blocks/effects'),
-      import('@blocksuite/presets/effects'),
+      loadBlockSuiteEffects(),
       import('@/components/editor/blocks/teable-native/effects'),
-    ]).then(([blocksModule, presetsModule, teableNativeModule]) => {
-      blocksModule.effects()
-      presetsModule.effects()
+    ]).then(([, teableNativeModule]) => {
       teableNativeModule.effects()
     })
   }
@@ -40,15 +39,16 @@ export function TeableFullPageView({ teableDatabaseId }: { teableDatabaseId: num
       await ensureEffects()
       if (cancelled) return
 
-      const [{ AffineEditorContainer }, { DocCollection, Schema }, { AffineSchemas }, { PageEditorBlockSpecs }, { TeableNativeBlockSchema }, { TeableNativeBlockSpec }] =
+      const [{ presets, store, schemas, blocks }, { TeableNativeBlockSchema }, { TeableNativeBlockSpec }] =
         await Promise.all([
-          import('@blocksuite/presets'),
-          import('@blocksuite/store'),
-          import('@blocksuite/blocks/schemas'),
-          import('@blocksuite/blocks'),
+          loadBlockSuiteRuntime(),
           import('@/components/editor/blocks/teable-native/schema'),
           import('@/components/editor/blocks/teable-native/spec'),
         ])
+      const { AffineEditorContainer } = presets
+      const { DocCollection, Schema } = store
+      const { AffineSchemas } = schemas
+      const { PageEditorBlockSpecs } = blocks
       if (cancelled) return
 
       const schema = new Schema().register(AffineSchemas).register([TeableNativeBlockSchema])

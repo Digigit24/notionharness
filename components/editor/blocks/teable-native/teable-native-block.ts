@@ -1,4 +1,4 @@
-import { BlockComponent, type EventName, type UIEventHandler } from '@blocksuite/block-std'
+import { BlockComponent, type EventName, type UIEventHandler } from '@/lib/blocksuite-block-std'
 import {
   DatabaseSelection,
   DataView,
@@ -7,8 +7,7 @@ import {
   renderUniLit,
   type DataViewSelection,
   type DataViewWidgetProps,
-} from '@blocksuite/data-view'
-import { widgetPresets } from '@blocksuite/data-view/widget-presets'
+} from '@/lib/blocksuite-data-view'
 import { computed, signal } from '@preact/signals-core'
 import { css, html, unsafeCSS } from 'lit'
 import type { TeableNativeBlockModel } from './schema'

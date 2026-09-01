@@ -9,8 +9,10 @@ import { TeableNativeBlockSchema } from '@/components/editor/blocks/teable-nativ
 import { TeableNativeBlockSpec } from '@/components/editor/blocks/teable-native/spec'
 import { registerTeableNativeSlashMenuItem } from '@/components/editor/blocks/teable-native/slash-menu'
 import { MentionSpec } from '@/components/editor/mentions/spec'
-import type { AffineEditorContainer } from '@blocksuite/presets'
-import type { Doc } from '@blocksuite/store'
+import type { AffineEditorContainer } from '@/lib/blocksuite-presets'
+import type { Doc } from '@/lib/blocksuite-store'
+import { ensureBlockSuiteEffects as loadBlockSuiteEffects } from '@/lib/blocksuite-effects'
+import { loadBlockSuiteRuntime } from '@/lib/blocksuite-runtime'
 
 const AUTOSAVE_DELAY_MS = 500
 
@@ -20,14 +22,11 @@ let blockSuiteEffectsReady: Promise<void> | null = null
 function ensureBlockSuiteEffects() {
   if (!blockSuiteEffectsReady) {
     blockSuiteEffectsReady = Promise.all([
-      import('@blocksuite/blocks/effects'),
-      import('@blocksuite/presets/effects'),
+      loadBlockSuiteEffects(),
       import('@/components/editor/blocks/teable-database/effects'),
       import('@/components/editor/blocks/teable-native/effects'),
       import('@/components/editor/mentions/effects'),
-    ]).then(([blocksModule, presetsModule, teableModule, teableNativeModule, mentionsModule]) => {
-      blocksModule.effects()
-      presetsModule.effects()
+    ]).then(([, teableModule, teableNativeModule, mentionsModule]) => {
       teableModule.effects()
       teableNativeModule.effects()
       mentionsModule.effects()
@@ -91,13 +90,11 @@ export function BlockSuiteEditor({
         await ensureBlockSuiteEffects()
         if (cancelled) return
 
-        const [{ AffineEditorContainer }, { DocCollection, Schema, Text }, { AffineSchemas }, { PageEditorBlockSpecs }] =
-          await Promise.all([
-            import('@blocksuite/presets'),
-            import('@blocksuite/store'),
-            import('@blocksuite/blocks/schemas'),
-            import('@blocksuite/blocks'),
-          ])
+        const { presets, store, schemas, blocks } = await loadBlockSuiteRuntime()
+        const { AffineEditorContainer } = presets
+        const { DocCollection, Schema, Text } = store
+        const { AffineSchemas } = schemas
+        const { PageEditorBlockSpecs } = blocks
         if (cancelled) return
 
         const schema = new Schema().register(AffineSchemas).register([TeableDatabaseBlockSchema, TeableNativeBlockSchema])
