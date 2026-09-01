@@ -19,7 +19,7 @@ export interface ThreadFullPageProps {
   loader: (taskId: number) => Promise<Array<{ run: Run; events: RunMessageRow[] }>>
 }
 
-export function ThreadFullPage({ taskId, taskTitle, agents, loader }: ThreadFullPageProps) {
+export function ThreadFullPage({ taskId, taskTitle, _agents, loader }: ThreadFullPageProps) {
   const observed = true
   const threads = useThreadData(taskId, observed, loader)
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)

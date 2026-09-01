@@ -3,7 +3,6 @@
 import Link from 'next/link'
 import { useRef } from 'react'
 import { Maximize2 } from 'lucide-react'
-import { useVirtualizer } from '@tanstack/react-virtual'
 import { Thread } from '@/components/hermes'
 import { useThreadData } from './use-thread-data'
 import type { Agent } from '@/payload-types'
@@ -22,7 +21,7 @@ export interface ThreadDrawerTabProps {
   expandHref?: string
 }
 
-export function ThreadDrawerTab({ taskId, agents, loader, expandHref }: ThreadDrawerTabProps) {
+export function ThreadDrawerTab({ taskId, _agents, loader, expandHref }: ThreadDrawerTabProps) {
   const observed = true
   const threads = useThreadData(taskId, observed, loader)
   const parentRef = useRef<HTMLDivElement>(null)
