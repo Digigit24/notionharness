@@ -5,6 +5,7 @@ import {
   dataViewCommonStyle,
   defineUniComponent,
   renderUniLit,
+  widgetPresets,
   type DataViewSelection,
   type DataViewWidgetProps,
 } from '@/lib/blocksuite-data-view'
