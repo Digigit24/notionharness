@@ -14,7 +14,8 @@
     "seed:teable": "tsx scripts/seed-teable-databases.ts",
     "mcp:notionforge": "tsx scripts/notionforge-mcp.ts",
     "test:mcp": "tsx scripts/test-mcp.ts",
-    "test:pty": "tsx scripts/test-pty-terminal.ts"
+    "test:pty": "tsx scripts/test-pty-terminal.ts",
+    "test:daemon-ws": "tsx scripts/test-daemon-ws.ts"
   },
   "dependencies": {
     "@blocksuite/block-std": "0.19.5",
