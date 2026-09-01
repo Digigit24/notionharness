@@ -19,15 +19,26 @@ type PairedPage = {
  * pickers/Server Actions `page-canvas.tsx` uses for a regular page header.
  * Properties themselves are rendered natively by `createRecordDetail` — this
  * only owns the page-identity bits it doesn't cover.
+ *
+ * `sourceType`/`sourceId` identify the DataSource backend the row comes from
+ * (`'userDatabase'` or `'payload'`, matching `collections/Pages.ts`'s
+ * `linkedSourceType`) — a `'teable'` source (still a valid caller value, see
+ * `teable-native-block.ts`, even though it's not a valid pairing target)
+ * simply surfaces the route's own "can't be paired" error below, same as any
+ * other fetch failure.
  */
 export function RecordDetailHeader({
-  teableTableId,
+  sourceType,
+  sourceId,
   recordId,
+  workspaceId,
   workspaceSlug,
   openDoc,
 }: {
-  teableTableId: string
+  sourceType: 'teable' | 'userDatabase' | 'payload'
+  sourceId: string
   recordId: string
+  workspaceId?: number | null
   workspaceSlug: string | null
   openDoc: (docId: string) => void
 }) {
@@ -36,7 +47,9 @@ export function RecordDetailHeader({
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    fetch(`/api/pages/for-teable-record?teableTableId=${encodeURIComponent(teableTableId)}&recordId=${encodeURIComponent(recordId)}`)
+    const qs = new URLSearchParams({ sourceType, sourceId, recordId })
+    if (workspaceId != null) qs.set('workspaceId', String(workspaceId))
+    fetch(`/api/pages/for-database-record?${qs}`)
       .then(async (r) => {
         const body = await r.json()
         if (!r.ok) throw new Error(body.error)
@@ -47,7 +60,7 @@ export function RecordDetailHeader({
         setTitle(body.title)
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Unable to open record page.'))
-  }, [teableTableId, recordId])
+  }, [sourceType, sourceId, recordId, workspaceId])
 
   if (error) return <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
   if (!page) return <p className="text-sm text-black/40 dark:text-white/40">Loading…</p>

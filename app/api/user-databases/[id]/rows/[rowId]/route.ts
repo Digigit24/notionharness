@@ -1,6 +1,26 @@
 import { NextResponse } from 'next/server'
 import { getPayloadClient } from '@/lib/payload'
 
+/** Resolves a single `database-rows` doc — used by the rows-as-pages fetch (a
+ * paired page's header shows this row's current field values). */
+export async function GET(_req: Request, { params }: { params: Promise<{ id: string; rowId: string }> }) {
+  const { rowId } = await params
+  const recordId = Number(rowId)
+  if (!Number.isFinite(recordId)) {
+    return NextResponse.json({ error: 'Invalid id' }, { status: 400 })
+  }
+
+  const payload = await getPayloadClient()
+  const doc = await payload
+    .findByID({ collection: 'database-rows', id: recordId, depth: 0, overrideAccess: true, disableErrors: true })
+    .catch(() => null)
+  if (!doc) {
+    return NextResponse.json({ error: 'Row not found.' }, { status: 404 })
+  }
+
+  return NextResponse.json({ doc })
+}
+
 /** Merges new cell values into a row's `cells` map (never replaces the whole
  * object — a cell edit for one property must not clobber concurrently-edited
  * cells for others). */

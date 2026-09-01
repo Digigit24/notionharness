@@ -46,7 +46,9 @@ let panelKeydownHandler: ((e: KeyboardEvent) => void) | null = null
 export function openRecordDetailPanel(ops: {
   view: SingleView
   rowId: string
-  teableTableId: string
+  sourceType: 'teable' | 'userDatabase' | 'payload'
+  sourceId: string
+  workspaceId?: number | null
   workspaceSlug: string | null
 }) {
   closeRecordDetailPanel()
@@ -55,8 +57,13 @@ export function openRecordDetailPanel(ops: {
 
   const close = () => closeRecordDetailPanel()
 
-  const header = reactSlot(RecordDetailHeader, { teableTableId: ops.teableTableId, workspaceSlug: ops.workspaceSlug })
-  const note = reactSlot(RecordDetailNote, { teableTableId: ops.teableTableId })
+  const header = reactSlot(RecordDetailHeader, {
+    sourceType: ops.sourceType,
+    sourceId: ops.sourceId,
+    workspaceId: ops.workspaceId,
+    workspaceSlug: ops.workspaceSlug,
+  })
+  const note = reactSlot(RecordDetailNote, { sourceType: ops.sourceType, sourceId: ops.sourceId, workspaceId: ops.workspaceId })
 
   const template = html`
     <div

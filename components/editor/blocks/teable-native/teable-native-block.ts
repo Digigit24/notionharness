@@ -643,18 +643,39 @@ export class TeableNativeBlockComponent extends BlockComponent<TeableNativeBlock
           eventTrace: () => {},
           detailPanelConfig: {
             openDetailPanel: (_target, data) => {
-              // ROADMAP P2.3 — the real BlockSuite `RecordDetail` panel is
-              // wired to Teable's row-as-page pairing (`for-teable-record`)
-              // specifically; an equivalent pairing for Payload/user-database
-              // rows doesn't exist yet, so this is a scoped, honest no-op for
-              // those sources rather than a broken/misleading panel — same
-              // "reasonable no-op, not a silent gap" precedent as
-              // `TeableDataSource.rowMove`.
+              // NOTION-PARITY 2 — row-as-page pairing now goes through the
+              // generic `for-database-record` route (see
+              // `record-detail-header.tsx`), so every source type opens the
+              // same real `RecordDetail` panel; `'teable'` maps its own
+              // table id through for backward compatibility while Teable is
+              // still connected, even though the route itself no longer
+              // accepts it as a pairing target (dropped per the roadmap's
+              // Teable-removal pivot) — the panel surfaces that as a normal
+              // fetch error rather than silently doing nothing.
               if (sourceType === 'teable' && teableTableId) {
                 openRecordDetailPanel({
                   view: data.view,
                   rowId: data.rowId,
-                  teableTableId,
+                  sourceType: 'teable',
+                  sourceId: teableTableId,
+                  workspaceSlug: this._workspaceSlug,
+                })
+              } else if (sourceType === 'user-database' && this.model.userDatabaseId !== null) {
+                openRecordDetailPanel({
+                  view: data.view,
+                  rowId: data.rowId,
+                  sourceType: 'userDatabase',
+                  sourceId: String(this.model.userDatabaseId),
+                  workspaceSlug: this._workspaceSlug,
+                })
+              } else if (sourceType === 'payload' && this.model.payloadCollection) {
+                const workspaceId = Number(this._workspaceId)
+                openRecordDetailPanel({
+                  view: data.view,
+                  rowId: data.rowId,
+                  sourceType: 'payload',
+                  sourceId: this.model.payloadCollection,
+                  workspaceId: Number.isFinite(workspaceId) ? workspaceId : null,
                   workspaceSlug: this._workspaceSlug,
                 })
               }
