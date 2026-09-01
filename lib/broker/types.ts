@@ -1,3 +1,5 @@
+import type { RunEvent } from '@/lib/run-events'
+
 export type RunStatus = 'queued' | 'dispatched' | 'running' | 'waiting_directory' | 'completed' | 'failed' | 'cancelled'
 
 export const TERMINAL_STATUSES: readonly RunStatus[] = ['completed', 'failed', 'cancelled']
@@ -26,20 +28,10 @@ export interface Run {
   updatedAt: string
 }
 
-// Mirrors docs/ROADMAP.html §3.1's RunEvent contract verbatim. Every event is
-// ordered by the `seq` `lib/broker/messages.ts` assigns on append, never by
-// `created_at` or insertion order.
-export type RunEvent =
-  | { type: 'message'; role: string; text: string }
-  | { type: 'thought'; text: string }
-  | { type: 'tool_call'; id: string; name: string; input: unknown; status: string }
-  | { type: 'tool_result'; id: string; output: unknown; isError: boolean }
-  | { type: 'permission'; id: string; title: string; detail: string; options: unknown }
-  | { type: 'file_change'; path: string; diff: string }
-  | { type: 'terminal'; id: string; chunk: string }
-  | { type: 'usage'; provider: string; model: string; tokens: number; costTicks: number }
-  | { type: 'session'; externalId: string }
-  | { type: 'done'; status: 'ok' | 'error' | 'cancelled' }
+// RunEvent itself lives in lib/run-events.ts (the one shared contract every
+// producer — broker, daemon, ACP adapter — imports); re-exported here so
+// existing `import type { RunEvent } from './types'` call sites keep working.
+export type { RunEvent }
 
 export interface RunMessageRow {
   seq: number
