@@ -45,6 +45,7 @@ next-env.d.ts
 sync-body.json
 dev.log
 dev-detached.log
+dev-detached*.log
 *.tmp
 
 # agent tooling scratch state (not app source)
