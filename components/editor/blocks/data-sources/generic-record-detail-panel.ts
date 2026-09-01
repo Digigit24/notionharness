@@ -3,7 +3,7 @@ import { createRecordDetail, type SingleView } from '@blocksuite/data-view'
 import type { UserDatabaseDataSource } from './user-database-data-source'
 
 // NOTION-PARITY 1, requirement 5 — a lightweight sibling to
-// `teable-native/record-detail-panel.ts`'s `openRecordDetailPanel`, for rows
+// `native-database/record-detail-panel.ts`'s `openRecordDetailPanel`, for rows
 // that aren't paired to a Payload page at all (every `UserDatabaseDataSource`
 // row today — relations link between these, never to Teable rows). No
 // header/note slots: `createRecordDetail`'s own live property list already

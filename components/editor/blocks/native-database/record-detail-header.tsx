@@ -23,7 +23,7 @@ type PairedPage = {
  * `sourceType`/`sourceId` identify the DataSource backend the row comes from
  * (`'userDatabase'` or `'payload'`, matching `collections/Pages.ts`'s
  * `linkedSourceType`) — a `'teable'` source (still a valid caller value, see
- * `teable-native-block.ts`, even though it's not a valid pairing target)
+ * `native-database-block.ts`, even though it's not a valid pairing target)
  * simply surfaces the route's own "can't be paired" error below, same as any
  * other fetch failure.
  */

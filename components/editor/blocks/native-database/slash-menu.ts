@@ -44,6 +44,7 @@ function pushItem(widget: SlashMenuWidgetLike) {
         const parentModel = rootComponent.doc.getParent(model)
         if (!parentModel) return
         const index = parentModel.children.indexOf(model) + 1
+        // Flavour string stays `affine:embed-teable-native` — see schema.ts's comment.
         rootComponent.doc.addBlock('affine:embed-teable-native', {}, parentModel, index)
       },
     }
@@ -61,7 +62,7 @@ function pushItem(widget: SlashMenuWidgetLike) {
  * `teable-database/slash-menu.ts`'s equivalent comment for why a one-time
  * flag risks silently skipping registration on later pages in the session.
  */
-export function registerTeableNativeSlashMenuItem(root: ParentNode) {
+export function registerNativeDatabaseSlashMenuItem(root: ParentNode) {
   let attempts = 0
   const tryRegister = () => {
     const widget = root.querySelector('affine-slash-menu-widget') as SlashMenuWidgetLike | null
