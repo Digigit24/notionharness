@@ -3,6 +3,7 @@ import { propertyPresets } from '@blocksuite/data-view/property-presets'
 import type { InsertToPosition } from '@blocksuite/affine-shared/utils'
 import { signal, type ReadonlySignal } from '@preact/signals-core'
 import { GenericDataSource, type GenericField, type GenericRecord } from './generic-data-source'
+import { showClientError } from '@/lib/client-notify'
 import { relationPropertyConfig } from './relation-property'
 import { openGenericRecordDetailPanel } from './generic-record-detail-panel'
 
@@ -223,6 +224,11 @@ export class UserDatabaseDataSource extends GenericDataSource {
       void userDbFetch(`/api/user-databases/${this._databaseId}/rows/${this._resolveRowId(rowId)}`, {
         method: 'PATCH',
         body: JSON.stringify({ cells: { [propertyId]: value } }),
+      }).then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      }).catch((err) => {
+        console.error('[data-source] cell edit failed', err)
+        showClientError("Couldn't save this edit. Check your connection and try again.")
       })
     })
   }

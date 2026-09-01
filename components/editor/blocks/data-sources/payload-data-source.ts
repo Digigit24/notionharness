@@ -2,6 +2,7 @@ import type { PropertyMetaConfig, TypeInstance } from '@blocksuite/data-view'
 import { propertyPresets } from '@blocksuite/data-view/property-presets'
 import type { InsertToPosition } from '@blocksuite/affine-shared/utils'
 import { GenericDataSource, type GenericField, type GenericRecord } from './generic-data-source'
+import { showClientError } from '@/lib/client-notify'
 
 // ROADMAP P2.3/D5 — backs an `affine:database` block with a real Payload
 // collection ("system tables" per D5/D4 — `pages` today; `tasks`/`projects`
@@ -79,6 +80,11 @@ export class PayloadDataSource extends GenericDataSource {
       void payloadDsFetch(`/api/payload-datasource/${this._collection}/records/${this._resolveRowId(rowId)}`, {
         method: 'PATCH',
         body: JSON.stringify({ propertyId, value }),
+      }).then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      }).catch((err) => {
+        console.error('[data-source] cell edit failed', err)
+        showClientError("Couldn't save this edit. Check your connection and try again.")
       })
     })
   }

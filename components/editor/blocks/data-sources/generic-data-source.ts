@@ -10,6 +10,7 @@ import {
 import { viewPresets, viewConverts } from '@blocksuite/data-view/view-presets'
 import type { InsertToPosition } from '@blocksuite/affine-shared/utils'
 import { computed, signal, type ReadonlySignal, type Signal } from '@preact/signals-core'
+import { showClientError } from '@/lib/client-notify'
 
 /**
  * ROADMAP P2.3/D3/D4 — the shared shape every `GenericDataSource` backend
@@ -192,6 +193,7 @@ export abstract class GenericDataSource extends DataSourceBase {
       })
       .catch((err) => {
         console.error(`[data-source] ${opts.logLabel} failed`, err)
+        showClientError(`Couldn't complete ${opts.logLabel}. Check your connection and try again.`)
         opts.target.value = opts.target.value.filter((item) => item.id !== tempId)
       })
     return tempId

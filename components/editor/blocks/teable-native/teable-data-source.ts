@@ -1,6 +1,7 @@
 import { propertyPresets, type PropertyMetaConfig, type TypeInstance } from '@/lib/blocksuite-data-view'
 import type { InsertToPosition } from '@/lib/blocksuite-affine-shared'
 import { GenericDataSource, type GenericField, type GenericRecord } from '../data-sources/generic-data-source'
+import { showClientError } from '@/lib/client-notify'
 
 // Real Teable-backed `DataSource` for BlockSuite's native `DataView` renderer
 // (the table/kanban UI itself is untouched — this class is the only thing
@@ -182,6 +183,11 @@ export class TeableDataSource extends GenericDataSource {
       void teableFetch(`/api/teable/tables/${this._teableTableId}/records/${this._resolveRowId(rowId)}`, {
         method: 'PATCH',
         body: JSON.stringify({ record: { fields: { [field.name]: teableValue } } }),
+      }).then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      }).catch((err) => {
+        console.error('[data-source] cell edit failed', err)
+        showClientError("Couldn't save this edit. Check your connection and try again.")
       })
     })
   }
