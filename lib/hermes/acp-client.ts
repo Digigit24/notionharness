@@ -76,6 +76,8 @@ export interface SendTurnOptions {
   args?: string[]
   /** Permission request timeout in ms — defaults to 50ms (smoke-harness tuned). */
   permissionTimeoutMs?: number
+  /** Agent permission policy. `ask` is deferred to the approvals UI (P5.4). */
+  permissionMode?: 'ask' | 'auto' | 'deny'
   /** Optional MCP server list forwarded to `session/new` (roadmap 3.2 §4). */
   mcpServers?: unknown[]
   /** Wall-clock cap for the whole turn in ms — defaults to 60s. */
@@ -146,14 +148,24 @@ function spawnBinary(opts: SendTurnOptions): {
 // needs to talk to us.
 // ---------------------------------------------------------------------------
 
-function buildClientApp(permissionTimeoutMs: number) {
+function buildClientApp(permissionTimeoutMs: number, permissionMode: 'ask' | 'auto' | 'deny') {
   return (
     client({ name: 'notionforge-harness' })
       // Roadmap 3.2: "timeout that denies *once* rather than cancelling the
       // turn." We respond with the `cancelled` *user-pick outcome* (NOT the
       // Cancel turn-stop outcome) so the agent sees a denial it can work
       // around, not a hard turn-kill.
-      .onRequest('session/request_permission', async () => {
+      .onRequest('session/request_permission', async (ctx) => {
+        if (permissionMode === 'auto') {
+          const params = ctx.params as { options?: Array<{ optionId?: string; kind?: string }> }
+          const allow = params.options?.find((option) => option.kind === 'allow_once') ??
+            params.options?.find((option) => option.kind === 'allow_always')
+          if (allow?.optionId) return { outcome: { outcome: 'selected' as const, optionId: allow.optionId } }
+        }
+
+        // `ask` belongs to the P5.4 approvals surface. Until that callback is
+        // wired in, both ask and deny fail closed after the normal timeout;
+        // an agent must never gain permission merely because no UI is present.
         await delay(permissionTimeoutMs)
         return { outcome: { outcome: 'cancelled' as const } }
       })
@@ -362,7 +374,7 @@ export async function sendTurn(opts: SendTurnOptions): Promise<SendTurnResult> {
 
   try {
     const stream = ndJsonStream(writable, readable)
-    const app = buildClientApp(opts.permissionTimeoutMs ?? 50)
+    const app = buildClientApp(opts.permissionTimeoutMs ?? 50, opts.permissionMode ?? 'ask')
 
     const turnPromise = new Promise<void>((resolve, reject) => {
       void app.connectWith(stream, async (ctx) => {

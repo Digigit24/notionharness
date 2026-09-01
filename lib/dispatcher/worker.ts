@@ -128,6 +128,7 @@ async function executeRun(run: Run): Promise<{ status: 'completed' | 'failed'; e
       conversationId: run.taskId ?? run.id,
       enabledSkills: agent.skills,
       args: [...stringArray(runtimeProfile.fixedArgs), ...stringArray(agent.customArgs)],
+      permissionMode: agent.permissionMode,
       // Pillar 4.7 — `run.runToken` is minted fresh by `claimNextRun` and
       // reaches the agent's own process the same way every other
       // identity-scoped value does (HERMES_HOME, per `sendTurnWithIdentity`)
