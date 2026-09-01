@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { getPayloadClient } from '@/lib/payload'
 import { getCurrentPayloadUser } from '@/lib/current-user'
 import type { Task } from '@/payload-types'
-import { enqueueRun, listRunsForTask, listRunEvents } from '@/lib/broker'
+import { enqueueRun, listActiveRunsForWorkspace, listRunsForTask, listRunEvents } from '@/lib/broker'
 
 async function nextColumnPosition(
   payload: Awaited<ReturnType<typeof getPayloadClient>>,
@@ -117,6 +117,10 @@ export async function updateTaskFields({
 
 export async function getTaskRuns(taskId: number) {
   return listRunsForTask(taskId)
+}
+
+export async function getActiveRunsForWorkspace(workspaceId: number) {
+  return listActiveRunsForWorkspace(workspaceId)
 }
 
 export async function getRunMessages(runId: number) {
