@@ -94,7 +94,7 @@ export function TaskDrawer({
             />
           )}
           {tab === 'activity' && <ActivityTab taskId={task.id} />}
-          {tab === 'sessions' && <SessionsTab taskId={task.id} agents={agents} />}
+          {tab === 'sessions' && <SessionsTab taskId={task.id} agents={agents} workspaceSlug={workspace.slug} />}
         </div>
       </div>
     </div>
@@ -184,16 +184,47 @@ function OverviewTab({
   )
 }
 
-function SessionsTab({ taskId, agents }: { taskId: number; agents: Agent[] }) {
+function SessionsTab({ taskId, agents, workspaceSlug }: { taskId: number; agents: Agent[]; workspaceSlug: string }) {
+  const [runs, setRuns] = useState<Awaited<ReturnType<typeof getTaskRuns>>>([])
+  useEffect(() => {
+    let active = true
+    const refresh = async () => {
+      const nextRuns = await getTaskRuns(taskId)
+      if (active) setRuns(nextRuns)
+    }
+    void refresh()
+    const timer = setInterval(() => void refresh(), 4000)
+    return () => { active = false; clearInterval(timer) }
+  }, [taskId])
+
+  const completedRuns = runs.filter((run) => run.status === 'completed')
+
   return (
-    <ThreadDrawerTab
-      taskId={taskId}
-      agents={agents}
-      loader={async (id) => {
-        const runs = await getTaskRuns(id)
-        return Promise.all(runs.map(async (run) => ({ run, events: await getRunMessages(run.id) })))
-      }}
-    />
+    <div className="flex flex-col gap-3">
+      {completedRuns.length > 0 && (
+        // ROADMAP P6.4 — the review surface's entry point: a completed run
+        // is reviewable (diff + approve/request-changes).
+        <div className="flex flex-wrap gap-1.5">
+          {completedRuns.map((run) => (
+            <a
+              key={run.id}
+              href={`/workspace/${workspaceSlug}/runs/${run.id}/review`}
+              className="rounded bg-black px-1.5 py-0.5 text-[11px] font-medium text-white dark:bg-white dark:text-black"
+            >
+              Review run #{run.id}
+            </a>
+          ))}
+        </div>
+      )}
+      <ThreadDrawerTab
+        taskId={taskId}
+        agents={agents}
+        loader={async (id) => {
+          const nextRuns = await getTaskRuns(id)
+          return Promise.all(nextRuns.map(async (run) => ({ run, events: await getRunMessages(run.id) })))
+        }}
+      />
+    </div>
   )
 }
 

@@ -26,6 +26,28 @@ export interface RemoveWorktreeOptions {
   preserveChanges?: boolean
 }
 
+// Pure, side-effect-free naming scheme, extracted so a caller that only
+// needs to *locate* a run's worktree (e.g. the P6.4 review surface — a run
+// might be settled and its worktree already removed by the time it's
+// reviewed) doesn't have to re-derive this in a second place. `create()`
+// below is the only thing that calls `git`; everything about *where* things
+// live is computed here.
+export function barePathFor(rootDir: string, source: string): string {
+  const name = source.replace(/[\\/:]+/g, '_').replace(/[^A-Za-z0-9_.-]/g, '_')
+  return resolve(rootDir, `${name}.git`)
+}
+
+export function describeRunWorktree(rootDir: string, source: string, runId: string, ref = 'HEAD'): RunWorktree {
+  if (!RUN_ID_RE.test(runId)) throw new Error(`Invalid run id: ${runId}`)
+  return {
+    runId,
+    barePath: barePathFor(rootDir, source),
+    worktreePath: resolve(rootDir, 'runs', runId),
+    branch: `agent/run/${runId}`,
+    ref,
+  }
+}
+
 const locks = new Map<string, Promise<void>>()
 
 async function withLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
@@ -48,13 +70,8 @@ async function git(barePath: string, args: string[]) {
 export class RunWorktreeManager {
   constructor(private readonly options: RunWorktreeManagerOptions) {}
 
-  private barePath(source: string): string {
-    const name = source.replace(/[\\/:]+/g, '_').replace(/[^A-Za-z0-9_.-]/g, '_')
-    return resolve(this.options.rootDir, `${name}.git`)
-  }
-
   async ensureBareClone(source: string): Promise<string> {
-    const barePath = this.barePath(source)
+    const barePath = barePathFor(this.options.rootDir, source)
     return withLock(barePath, async () => {
       await mkdir(this.options.rootDir, { recursive: true })
       try {
@@ -68,15 +85,13 @@ export class RunWorktreeManager {
   }
 
   async create(source: string, runId: string, ref = 'HEAD'): Promise<RunWorktree> {
-    if (!RUN_ID_RE.test(runId)) throw new Error(`Invalid run id: ${runId}`)
+    const descriptor = describeRunWorktree(this.options.rootDir, source, runId, ref)
     const barePath = await this.ensureBareClone(source)
     return withLock(barePath, async () => {
-      const worktreePath = resolve(this.options.rootDir, 'runs', runId)
-      const branch = `agent/run/${runId}`
       await mkdir(join(this.options.rootDir, 'runs'), { recursive: true })
-      await rm(worktreePath, { recursive: true, force: true })
-      await git(barePath, ['worktree', 'add', '-b', branch, worktreePath, ref])
-      return { runId, barePath, worktreePath, branch, ref }
+      await rm(descriptor.worktreePath, { recursive: true, force: true })
+      await git(barePath, ['worktree', 'add', '-b', descriptor.branch, descriptor.worktreePath, ref])
+      return descriptor
     })
   }
 
