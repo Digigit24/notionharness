@@ -6,6 +6,7 @@
  * uncaught synchronous exception can leave application state corrupted.
  */
 export function register(): void {
+  console.log('[instrumentation] registered')
   process.on('unhandledRejection', (reason: unknown) => {
     console.error('[unhandled-rejection]', reason)
   })
