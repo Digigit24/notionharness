@@ -12,6 +12,15 @@
 const ITEM_NAME = 'Database'
 const REMOVE_NAMES = new Set(['Table View', 'Kanban View'])
 
+// ROADMAP B3.4/B3.5 — "PayloadDataSource already exists; expose it in the
+// slash menu so 'insert a view of this project's tasks' is two keystrokes."
+// A second, distinct item (not just an alias on `ITEM_NAME`, which creates a
+// blank `user-database`): typing `/table` inserts this same block flavour
+// already pre-configured with `sourceType: 'payload', payloadCollection:
+// 'tasks'` (now allowlisted in `app/api/payload-datasource/_lib.ts`) — no
+// picker, matching the "Database" item's own no-upfront-choice precedent.
+const TABLE_ITEM_NAME = 'Tasks table'
+
 interface SlashMenuActionContext {
   rootComponent: {
     doc: {
@@ -25,6 +34,7 @@ interface SlashMenuActionContext {
 interface SlashMenuActionItem {
   name: string
   description?: string
+  alias?: string[]
   action: (ctx: SlashMenuActionContext) => void
 }
 
@@ -33,10 +43,13 @@ interface SlashMenuWidgetLike extends HTMLElement {
 }
 
 function pushItem(widget: SlashMenuWidgetLike) {
-  const alreadyPresent = widget.config.items.some(
-    (item) => typeof item === 'object' && item !== null && (item as { name?: string }).name === ITEM_NAME,
+  const names = new Set(
+    widget.config.items
+      .map((item) => (typeof item === 'object' && item !== null ? (item as { name?: unknown }).name : undefined))
+      .filter((name): name is string => typeof name === 'string'),
   )
-  if (!alreadyPresent) {
+
+  if (!names.has(ITEM_NAME)) {
     const item: SlashMenuActionItem = {
       name: ITEM_NAME,
       description: 'Add a database with table and board views',
@@ -56,6 +69,26 @@ function pushItem(widget: SlashMenuWidgetLike) {
         rootComponent.doc.addBlock(
           'affine:embed-teable-native',
           { sourceType: 'user-database', userDatabaseId: null },
+          parentModel,
+          index,
+        )
+      },
+    }
+    widget.config.items.push(item)
+  }
+
+  if (!names.has(TABLE_ITEM_NAME)) {
+    const item: SlashMenuActionItem = {
+      name: TABLE_ITEM_NAME,
+      description: "Insert a live view of this workspace's tasks",
+      alias: ['table', 'tasks table'],
+      action: ({ rootComponent, model }) => {
+        const parentModel = rootComponent.doc.getParent(model)
+        if (!parentModel) return
+        const index = parentModel.children.indexOf(model) + 1
+        rootComponent.doc.addBlock(
+          'affine:embed-teable-native',
+          { sourceType: 'payload', payloadCollection: 'tasks' },
           parentModel,
           index,
         )

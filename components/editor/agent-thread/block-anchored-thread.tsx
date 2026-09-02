@@ -7,17 +7,12 @@ import { useRunEventStream, type RunEventSnapshot } from '@/components/runs/use-
 import { adaptRunEventsToThread } from '@/lib/hermes/runEvent-adapter'
 import type { RunEventEnvelope } from '@/lib/run-events'
 import { getRunSnapshot, enqueuePageRun } from '@/app/(app)/actions'
-import { createPopup, popupTargetFromElement, popMenu, menu } from '@/lib/blocksuite-affine-components'
+import { createPopup, popupTargetFromElement } from '@/lib/blocksuite-affine-components'
 import { registerAskAgentHandler } from './registry'
+import { pageIdFromDoc } from './page-context'
+import { resolveAgent } from './resolve-agent'
 import type { AskAgentSelection, AskAgentHandler } from './types'
-import type { BlockModel, Doc } from '@/lib/blocksuite-store'
-import type { EditorHost } from '@/lib/blocksuite-block-std'
-
-interface MentionableAgent {
-  id: number
-  name: string
-  model: string | null
-}
+import type { BlockModel } from '@/lib/blocksuite-store'
 
 /**
  * ROADMAP 6.2 — block-anchored thread: "Ask agent" on a selection creates a
@@ -40,62 +35,6 @@ function serializeSelectedBlocks(blocks: BlockModel[]): string {
     })
     .filter(Boolean)
     .join('\n\n')
-}
-
-/** Client-side docs are created as `page-${pageId}` (see BlockSuiteEditor.tsx
- * and lib/blocksuite-doc.ts's `loadDoc`) — parsing this back out avoids
- * needing a second way to thread the page id through the selection context. */
-function pageIdFromDoc(doc: Doc): number | null {
-  const match = /^page-(\d+)$/.exec(doc.id)
-  return match ? Number(match[1]) : null
-}
-
-/** Same `data-workspace-id` lookup `native-database-block.ts` and the
- * @mention menu already use — set on the editor's container in
- * BlockSuiteEditor.tsx. */
-function workspaceIdFromHost(host: EditorHost): string | null {
-  return host.closest('[data-workspace-id]')?.getAttribute('data-workspace-id') ?? null
-}
-
-/**
- * Resolves which agent a run should target: the workspace's only enabled
- * agent is used silently (no reason to make the common case click twice),
- * more than one prompts a picker anchored to `anchorElement`, zero surfaces
- * a clear error instead of enqueueing a run nothing can ever execute.
- */
-async function resolveAgent(host: EditorHost, anchorElement: HTMLElement): Promise<MentionableAgent | null> {
-  const workspaceId = workspaceIdFromHost(host)
-  if (!workspaceId) {
-    console.error('[ask-agent] Could not resolve a workspace id — aborting.')
-    return null
-  }
-
-  const res = await fetch(`/api/agents?workspaceId=${workspaceId}`)
-  if (!res.ok) {
-    console.error('[ask-agent] Failed to load agents for this workspace.')
-    return null
-  }
-  const { agents } = (await res.json()) as { agents: MentionableAgent[] }
-  if (agents.length === 0) {
-    console.error('[ask-agent] No agents configured for this workspace — create one before asking an agent.')
-    return null
-  }
-  if (agents.length === 1) return agents[0]
-
-  return new Promise((resolve) => {
-    popMenu(popupTargetFromElement(anchorElement), {
-      options: {
-        title: { text: 'Ask which agent?' },
-        items: agents.map((agent) =>
-          menu.action({
-            name: agent.model ? `${agent.name} (${agent.model})` : agent.name,
-            select: () => resolve(agent),
-          }),
-        ),
-        onClose: () => resolve(null),
-      },
-    })
-  })
 }
 
 const handleAskAgent: AskAgentHandler = async (selection: AskAgentSelection) => {

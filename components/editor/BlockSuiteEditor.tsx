@@ -7,6 +7,10 @@ import { NativeDatabaseBlockSpec } from '@/components/editor/blocks/native-datab
 import { registerNativeDatabaseSlashMenuItem } from '@/components/editor/blocks/native-database/slash-menu'
 import { RunCardBlockSchema } from '@/components/editor/blocks/run-card/schema'
 import { RunCardBlockSpec } from '@/components/editor/blocks/run-card/spec'
+import { TaskBlockSchema } from '@/components/editor/blocks/task/schema'
+import { TaskBlockSpec } from '@/components/editor/blocks/task/spec'
+import { registerTaskSlashMenuItem } from '@/components/editor/blocks/task/slash-menu'
+import { registerPageCommandsSlashMenuItems } from '@/components/editor/slash-commands/page-commands'
 import { MentionSpec, mentionPageConfig } from '@/components/editor/mentions/spec'
 import { askAgentPageConfig } from '@/components/editor/agent-thread/toolbar-trigger'
 import { ConfigExtension } from '@/lib/blocksuite-block-std'
@@ -42,10 +46,12 @@ function ensureBlockSuiteEffects() {
       loadBlockSuiteEffects(),
       import('@/components/editor/blocks/native-database/effects'),
       import('@/components/editor/blocks/run-card/effects'),
+      import('@/components/editor/blocks/task/effects'),
       import('@/components/editor/mentions/effects'),
-    ]).then(([, nativeDatabaseModule, runCardModule, mentionsModule]) => {
+    ]).then(([, nativeDatabaseModule, runCardModule, taskModule, mentionsModule]) => {
       nativeDatabaseModule.effects()
       runCardModule.effects()
+      taskModule.effects()
       mentionsModule.effects()
     })
   }
@@ -136,7 +142,7 @@ export function BlockSuiteEditor({
         const { PageEditorBlockSpecs } = blocks
         if (cancelled) return
 
-        const schema = new Schema().register(AffineSchemas).register([NativeDatabaseBlockSchema, RunCardBlockSchema])
+        const schema = new Schema().register(AffineSchemas).register([NativeDatabaseBlockSchema, RunCardBlockSchema, TaskBlockSchema])
         const collection = new DocCollection({ schema })
         collection.meta.initialize()
 
@@ -172,6 +178,7 @@ export function BlockSuiteEditor({
           ...PageEditorBlockSpecs,
           ...NativeDatabaseBlockSpec,
           ...RunCardBlockSpec,
+          ...TaskBlockSpec,
           ...MentionSpec,
           // Merged into a single `ConfigExtension('affine:page', ...)` call —
           // mentions/spec.ts and agent-thread/toolbar-trigger.ts each need an
@@ -193,6 +200,8 @@ export function BlockSuiteEditor({
           if (workspaceSlug) containerRef.current.dataset.workspaceSlug = workspaceSlug
           containerRef.current.replaceChildren(editor)
           registerNativeDatabaseSlashMenuItem(containerRef.current)
+          registerTaskSlashMenuItem(containerRef.current)
+          registerPageCommandsSlashMenuItems(containerRef.current)
         }
 
         onUpdate = () => {

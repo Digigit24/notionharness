@@ -1,4 +1,4 @@
-import type { AskAgentHandler } from './types'
+import type { AskAgentHandler, AskAgentPageHandler } from './types'
 
 /**
  * Decouples the toolbar trigger (this side, ROADMAP 6.2) from the popover +
@@ -16,4 +16,27 @@ export function registerAskAgentHandler(fn: AskAgentHandler): void {
 
 export function getAskAgentHandler(): AskAgentHandler | null {
   return handler
+}
+
+/**
+ * ROADMAP B3.5 — a second, distinct seam, same pattern as the pair above,
+ * for a genuinely different context: `AskAgentHandler` always carries a
+ * real selection (a floating popover anchored to it); this one is "open the
+ * docked whole-page agent panel," fired by the new `/ask` slash item
+ * (`components/editor/slash-commands/page-commands.ts`) with no selection
+ * at all. That panel is being built on the parallel, not-yet-merged
+ * `b3-docked-agent` branch — this repo can't import its not-yet-existing
+ * module, so it registers itself here once it mounts, exactly like the
+ * popover side does for `registerAskAgentHandler` above. Until that branch
+ * merges, `getAskAgentPageHandler()` returns `null` and the slash item logs
+ * a clear "not wired up yet" warning instead of silently no-op'ing.
+ */
+let pageHandler: AskAgentPageHandler | null = null
+
+export function registerAskAgentPageHandler(fn: AskAgentPageHandler): void {
+  pageHandler = fn
+}
+
+export function getAskAgentPageHandler(): AskAgentPageHandler | null {
+  return pageHandler
 }
