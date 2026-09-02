@@ -39,6 +39,7 @@ interface DispatchOutcome {
   runId?: number
   status?: 'completed' | 'failed'
   error?: string
+  recovered?: number
 }
 
 async function tick(): Promise<void> {
@@ -48,6 +49,7 @@ async function tick(): Promise<void> {
   if (outcome.claimed) {
     console.log(`[dispatcher] run ${outcome.runId} -> ${outcome.status}${outcome.error ? `: ${outcome.error}` : ''}`)
   }
+  if (outcome.recovered) console.log(`[dispatcher] requeued ${outcome.recovered} expired run lease(s)`)
 }
 
 async function loop(): Promise<void> {
