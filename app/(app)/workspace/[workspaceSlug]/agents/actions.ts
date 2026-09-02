@@ -9,5 +9,6 @@ export async function saveAgent({ workspaceId, workspaceSlug, id, data }: { work
     ? await payload.update({ collection: 'agents', id, data: { ...data, workspace: workspaceId } as never, overrideAccess: true })
     : await payload.create({ collection: 'agents', data: { ...data, workspace: workspaceId } as never, overrideAccess: true })
   revalidatePath(`/workspace/${workspaceSlug}/agents`)
+  revalidatePath(`/workspace/${workspaceSlug}/agents/${agent.id}`)
   return agent
 }
