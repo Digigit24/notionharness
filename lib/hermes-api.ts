@@ -1,8 +1,12 @@
 import { NextResponse } from 'next/server'
 import { getSession } from '@/lib/session'
 
-const HERMES_BASE_URL = process.env.HERMES_API_BASE_URL || 'https://digitech.tail7572d2.ts.net/v1'
-const HERMES_API_KEY = process.env.HERMES_API_KEY || ''
+// Exported (not just module-private) so lib/search.ts can call Hermes's
+// skills API directly for the command bar's explicit "Skills" filter —
+// see that file's own comment for why skills search is a filter-triggered,
+// out-of-band query rather than part of the hot-path full-text search.
+export const HERMES_BASE_URL = process.env.HERMES_API_BASE_URL || 'https://digitech.tail7572d2.ts.net/v1'
+export const HERMES_API_KEY = process.env.HERMES_API_KEY || ''
 
 export interface HermesProxyOptions extends RequestInit {
   hermesPath: string
