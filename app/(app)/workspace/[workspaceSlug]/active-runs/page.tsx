@@ -72,6 +72,7 @@ export default async function ActiveRunsPage({ params }: PageProps) {
             taskId={run.taskId!}
             agents={agents}
             loader={async (id) => {
+              'use server'
               const taskRuns = await getTaskRuns(id)
               return Promise.all(taskRuns.map(async (r) => ({ run: r, events: await getRunMessages(r.id) })))
             }}

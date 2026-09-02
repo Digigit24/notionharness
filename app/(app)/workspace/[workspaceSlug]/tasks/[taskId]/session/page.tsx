@@ -49,6 +49,7 @@ export default async function SessionPage({ params }: PageProps) {
       taskTitle={task.title}
       agents={agents}
       loader={async (id) => {
+        'use server'
         const runs = await getTaskRuns(id)
         return Promise.all(runs.map(async (run) => ({ run, events: await getRunMessages(run.id) })))
       }}
