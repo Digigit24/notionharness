@@ -4,6 +4,7 @@ import { getWorkspaceBySlug, getWorkspacePages } from '@/lib/pages-cache'
 import { buildBreadcrumbChain } from '@/lib/tree'
 import { getPageProvenance } from '@/lib/provenance'
 import { PageCanvas } from '@/components/canvas/page-canvas'
+import { RecentPageTracker } from '@/components/home/recent-page-tracker'
 
 export default async function PageView({
   params,
@@ -38,5 +39,10 @@ export default async function PageView({
 
   const chain = buildBreadcrumbChain(allPages, page.id)
 
-  return <PageCanvas workspace={workspace} page={page} breadcrumbChain={chain} provenance={provenance} />
+  return (
+    <>
+      <RecentPageTracker workspaceSlug={workspace.slug} pageId={page.id} title={page.title} icon={page.icon ?? null} />
+      <PageCanvas workspace={workspace} page={page} breadcrumbChain={chain} provenance={provenance} />
+    </>
+  )
 }

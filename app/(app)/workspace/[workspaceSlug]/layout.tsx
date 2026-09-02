@@ -5,6 +5,7 @@ import { getSession } from '@/lib/session'
 import { getCurrentPayloadUser } from '@/lib/current-user'
 import { getWorkspaceBySlug, getWorkspacePages } from '@/lib/pages-cache'
 import { getUnreadNotificationCount } from '@/app/(app)/notifications/actions'
+import { getAmbientStatus } from '@/app/(app)/workspace/[workspaceSlug]/actions'
 import { Sidebar } from '@/components/sidebar/sidebar'
 import { KeyboardProvider } from '@/components/keyboard/keyboard-provider'
 
@@ -31,7 +32,10 @@ export default async function WorkspaceLayout({
   ])
   if (!workspace) notFound()
 
-  const pages = await getWorkspacePages(workspace.id)
+  const [pages, ambientStatus] = await Promise.all([
+    getWorkspacePages(workspace.id),
+    getAmbientStatus(workspace.id),
+  ])
 
   return (
     <KeyboardProvider workspaceId={workspace.id} workspaceSlug={workspace.slug}>
@@ -43,6 +47,7 @@ export default async function WorkspaceLayout({
           userEmail={session?.user.email ?? ''}
           currentUserId={currentUser?.id ?? null}
           unreadNotificationCount={unreadNotificationCount}
+          ambientStatus={ambientStatus}
         />
         <div className="flex min-w-0 flex-1 flex-col">{children}</div>
       </div>
