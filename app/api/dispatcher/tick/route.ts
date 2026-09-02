@@ -1,5 +1,9 @@
 import { NextResponse } from 'next/server'
 import { dispatchNextRun } from '@/lib/dispatcher/worker'
+import { sweepExpiredLeases } from '@/lib/broker/runs'
+
+const SWEEP_EVERY_TICKS = 10
+let ticksSinceSweep = 0
 
 /**
  * Internal-only trigger for `dispatchNextRun`, meant to be polled by
@@ -12,6 +16,12 @@ import { dispatchNextRun } from '@/lib/dispatcher/worker'
  * Supabase instance.
  */
 export async function POST() {
+  ticksSinceSweep += 1
+  let recovered = 0
+  if (ticksSinceSweep >= SWEEP_EVERY_TICKS) {
+    ticksSinceSweep = 0
+    recovered = await sweepExpiredLeases()
+  }
   const outcome = await dispatchNextRun(`server-${process.pid}`)
-  return NextResponse.json(outcome)
+  return NextResponse.json({ ...outcome, recovered })
 }

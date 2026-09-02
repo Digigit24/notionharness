@@ -13,7 +13,7 @@
 // claim → worktree → identity-scoped turn → live event streaming → settle
 // work end to end," which is what this module is responsible for).
 import { getPayloadClient } from '@/lib/payload'
-import { claimNextRun, markRunStarted, settleRun, appendRunEvent, type Run } from '@/lib/broker'
+import { claimNextRun, markRunStarted, settleRun, appendRunEvent, recordUsage, type Run } from '@/lib/broker'
 import { RunWorktreeManager } from '@/lib/run-worktrees/manager'
 import { resolveRunWorktreeConfig } from '@/lib/run-worktrees/config'
 import { sendTurnWithIdentity } from '@/lib/hermes/run-with-identity'
@@ -57,14 +57,14 @@ function stringEnv(raw: unknown): Record<string, string> | undefined {
   return env
 }
 
-function buildPromptText(task: Task | null, agent: Agent): string {
+function buildPromptText(task: Task | null, agent: Agent, run: Run): string {
   const parts: string[] = []
   if (agent.instructions) parts.push(agent.instructions)
   // Tasks have no description/body field yet (P2.1) — title is the only
   // task-authored content available to hand the agent today. Richer prompt
   // construction (task description, linked page content, thread context)
   // is real future work, not something to fake here.
-  parts.push(task ? `Task: ${task.title}` : 'No task is attached to this run.')
+  parts.push(task ? `Task: ${task.title}` : run.prompt || 'No task is attached to this run.')
   return parts.join('\n\n')
 }
 
@@ -115,7 +115,7 @@ async function executeRun(run: Run): Promise<{ status: 'completed' | 'failed'; e
     result = await sendTurnWithIdentity({
       binaryPath: runtimeProfile.commandName,
       cwd: worktree.worktreePath,
-      text: buildPromptText(task, agent),
+      text: buildPromptText(task, agent, run),
       runId: String(run.id),
       agentId: run.agentId,
       // Roadmap 3.4: state.db is sharded per CONVERSATION, not per run — a
@@ -128,6 +128,7 @@ async function executeRun(run: Run): Promise<{ status: 'completed' | 'failed'; e
       conversationId: run.taskId ?? run.id,
       enabledSkills: agent.skills,
       args: [...stringArray(runtimeProfile.fixedArgs), ...stringArray(agent.customArgs)],
+      permissionMode: agent.permissionMode,
       // Pillar 4.7 — `run.runToken` is minted fresh by `claimNextRun` and
       // reaches the agent's own process the same way every other
       // identity-scoped value does (HERMES_HOME, per `sendTurnWithIdentity`)
@@ -146,6 +147,22 @@ async function executeRun(run: Run): Promise<{ status: 'completed' | 'failed'; e
         void appendRunEvent(run.id, envelope.event).catch((err) => {
           console.error(`[dispatcher] Failed to append live run event for run ${run.id}.`, err)
         })
+        // The run-card block (6.3) and P5.8's cost-on-task-card both read
+        // cost via getRunUsageTotals, which SUMs run_usage — without this,
+        // every real dispatched run shows $0.00 forever even though the
+        // RunEvent stream genuinely carries real `usage` events. Same
+        // best-effort handling as the appendRunEvent call above.
+        if (envelope.event.type === 'usage') {
+          const usage = envelope.event
+          void recordUsage(run.id, {
+            provider: usage.provider,
+            model: usage.model,
+            tokens: usage.tokens,
+            costTicks: usage.costTicks,
+          }).catch((err) => {
+            console.error(`[dispatcher] Failed to record usage for run ${run.id}.`, err)
+          })
+        }
       },
     })
   } catch (err) {

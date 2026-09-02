@@ -60,6 +60,8 @@ CREATE TABLE IF NOT EXISTS runs (
   -- Short-lived credential reference (roadmap 4.7) — revoked (set NULL) on
   -- settle, same reasoning as mcp_overlay.
   run_token TEXT,
+  -- Serialized prompt for page-scoped runs (task_id is NULL).
+  prompt TEXT,
 
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()

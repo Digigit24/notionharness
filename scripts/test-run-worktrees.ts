@@ -17,6 +17,8 @@ await run(['add', '.']); await run(['commit', '-m', 'seed'])
 
 const manager = new RunWorktreeManager({ rootDir: state })
 const [one, two] = await Promise.all([manager.create(repo, 'run-one'), manager.create(repo, 'run-two')])
+const retried = await manager.create(repo, 'run-one')
+if (retried.branch !== 'agent/run/run-one') throw new Error('recovered worktree was not recreated')
 await writeFile(join(one.worktreePath, 'one.txt'), 'one\n')
 await writeFile(join(two.worktreePath, 'two.txt'), 'two\n')
 await exec('git', ['add', '.'], { cwd: one.worktreePath }); await exec('git', ['commit', '-m', 'one'], { cwd: one.worktreePath })
