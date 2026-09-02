@@ -1,5 +1,5 @@
 export { getBrokerPool, closeBrokerPool } from './db'
-export type { Run, RunStatus, RunEvent, RunMessageRow } from './types'
+export type { Run, RunStatus, RunEvent, RunMessageRow, SuggestionStatus } from './types'
 export { TERMINAL_STATUSES } from './types'
 export {
   enqueueRun,
@@ -19,6 +19,8 @@ export {
   listFailedRuns,
   listReviewReadyRuns,
   getActiveRunForAgent,
+  listPendingSuggestionRunsForPage,
+  setSuggestionStatus,
 } from './runs'
 export type { SettleOutcome } from './runs'
 export { appendRunEvent, listRunEvents, listRunEventsSince } from './messages'

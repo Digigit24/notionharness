@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { getBrokerPool } from './db'
-import type { Run, RunStatus } from './types'
+import type { Run, RunStatus, SuggestionStatus } from './types'
 
 const DEFAULT_LEASE_MS = 60_000
 
@@ -19,6 +19,7 @@ interface RunRow {
   external_session_id: string | null
   page_id: string | number | null
   page_subtree_block_id: string | null
+  suggestion_status: SuggestionStatus
   prompt: string | null
   next_seq: string | number
   // node-postgres's default type parser returns `timestamp`/`timestamptz`
@@ -58,6 +59,7 @@ function rowToRun(row: RunRow): Run {
     externalSessionId: row.external_session_id,
     pageId: row.page_id === null ? null : Number(row.page_id),
     pageSubtreeBlockId: row.page_subtree_block_id,
+    suggestionStatus: row.suggestion_status,
     prompt: row.prompt,
     nextSeq: Number(row.next_seq),
     leaseExpiresAt: toISOStringOrNull(row.lease_expires_at),
@@ -356,6 +358,33 @@ export async function listRunsForPage(pageId: number): Promise<Run[]> {
   const pool = getBrokerPool()
   const res = await pool.query<RunRow>(`SELECT * FROM runs WHERE page_id = $1 ORDER BY created_at DESC`, [pageId])
   return res.rows.map(rowToRun)
+}
+
+/** ROADMAP B3.1 (Batch B-2, suggestions mode) — every run with a still-
+ * pending page subtree on a page, oldest first (review order). Deliberately
+ * not filtered by the run's own dispatcher `status`: a human can accept or
+ * reject a still-running run's suggestions at any time — `appendBlockToSubtree`
+ * (lib/agent-page-writes.ts) already treats a deleted subtree as "the human
+ * doesn't want this run's output anymore, stop appending," so rejecting
+ * mid-run is a safe, already-anticipated case, not a new one this introduces. */
+export async function listPendingSuggestionRunsForPage(pageId: number): Promise<Run[]> {
+  const pool = getBrokerPool()
+  const res = await pool.query<RunRow>(
+    `SELECT * FROM runs
+     WHERE page_id = $1
+       AND page_subtree_block_id IS NOT NULL
+       AND suggestion_status = 'pending'
+     ORDER BY created_at ASC`,
+    [pageId],
+  )
+  return res.rows.map(rowToRun)
+}
+
+/** Transitions a run's page-subtree suggestion state. `lib/agent-suggestions.ts`
+ * is the only caller — this is a plain state write, not a Yjs mutation. */
+export async function setSuggestionStatus(runId: number, status: SuggestionStatus): Promise<void> {
+  const pool = getBrokerPool()
+  await pool.query(`UPDATE runs SET suggestion_status = $2, updated_at = now() WHERE id = $1`, [runId, status])
 }
 
 // ---------------------------------------------------------------------------
