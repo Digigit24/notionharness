@@ -1,34 +1,32 @@
 'use client'
 
-import { createElement, useMemo } from 'react'
-import { createRoot } from 'react-dom/client'
-import { Thread } from '@/components/hermes'
-import { useRunEventStream, type RunEventSnapshot } from '@/components/runs/use-run-event-stream'
-import { adaptRunEventsToThread } from '@/lib/hermes/runEvent-adapter'
-import type { RunEventEnvelope } from '@/lib/run-events'
-import { getRunSnapshot, enqueuePageRun } from '@/app/(app)/actions'
-import { createPopup, popupTargetFromElement, popMenu, menu } from '@/lib/blocksuite-affine-components'
-import { registerAskAgentHandler } from './registry'
+import { registerAskAgentHandler, getPagePanelOpener } from './registry'
 import type { AskAgentSelection, AskAgentHandler } from './types'
 import type { BlockModel, Doc } from '@/lib/blocksuite-store'
-import type { EditorHost } from '@/lib/blocksuite-block-std'
-
-interface MentionableAgent {
-  id: number
-  name: string
-  model: string | null
-}
 
 /**
- * ROADMAP 6.2 — block-anchored thread: "Ask agent" on a selection creates a
- * run scoped to the page, drops a run-card block right after the selection
- * referencing it, and opens a popover (anchored to that run-card) showing
- * its live output via the same `<Thread>` component P5.1/5.2 already built
- * for the Sessions drawer — a new chrome around existing UI, not a rebuild.
+ * ROADMAP B-3 "Surface" — this used to be the whole "Ask agent" flow: create
+ * a page-scoped run straight from the selection, drop a run-card block after
+ * it, and pop open a floating thread anchored to that card. The plan calls
+ * that "the right idea buried at the wrong depth" and replaces it with a
+ * single docked panel per page (`page-docked-panel.tsx`) that a conversation
+ * about the page lives in permanently. Per the plan's own wording:
+ * "Selection-scoped asks still work — they just become a shortcut into the
+ * same panel with the selection pre-attached as context."
+ *
+ * So this file's job shrank to exactly that: turn a selection into a plain-
+ * text excerpt and hand it to whichever `PageDockedPanel` is currently
+ * mounted (via `registerPagePanelOpener`/`getPagePanelOpener` in
+ * `registry.ts` — the same "cross the BlockSuite/Lit boundary" shape this
+ * file already used for `registerAskAgentHandler` itself). No run is
+ * enqueued here anymore, no run-card block is inserted, and there is no
+ * separate popover implementation left to maintain — sending the message is
+ * now entirely the docked panel's composer's job, same as it is for a
+ * whole-page ask with no selection at all.
  */
 
 /**
- * Flattens selected blocks into a plain-text prompt. Handles both a
+ * Flattens selected blocks into a plain-text excerpt. Handles both a
  * text-range selection inside one block and a genuine multi-block
  * selection identically, since `BlockModel.text` is present on both.
  */
@@ -44,157 +42,34 @@ function serializeSelectedBlocks(blocks: BlockModel[]): string {
 
 /** Client-side docs are created as `page-${pageId}` (see BlockSuiteEditor.tsx
  * and lib/blocksuite-doc.ts's `loadDoc`) — parsing this back out avoids
- * needing a second way to thread the page id through the selection context. */
+ * needing a second way to thread the page id through the selection context.
+ * Kept even though the handler below no longer needs a page id itself
+ * (`getPagePanelOpener` routes to whichever page is mounted) — still used to
+ * fail fast with a clear error if a selection somehow comes from a doc that
+ * isn't a real page doc. */
 function pageIdFromDoc(doc: Doc): number | null {
   const match = /^page-(\d+)$/.exec(doc.id)
   return match ? Number(match[1]) : null
 }
 
-/** Same `data-workspace-id` lookup `native-database-block.ts` and the
- * @mention menu already use — set on the editor's container in
- * BlockSuiteEditor.tsx. */
-function workspaceIdFromHost(host: EditorHost): string | null {
-  return host.closest('[data-workspace-id]')?.getAttribute('data-workspace-id') ?? null
-}
-
-/**
- * Resolves which agent a run should target: the workspace's only enabled
- * agent is used silently (no reason to make the common case click twice),
- * more than one prompts a picker anchored to `anchorElement`, zero surfaces
- * a clear error instead of enqueueing a run nothing can ever execute.
- */
-async function resolveAgent(host: EditorHost, anchorElement: HTMLElement): Promise<MentionableAgent | null> {
-  const workspaceId = workspaceIdFromHost(host)
-  if (!workspaceId) {
-    console.error('[ask-agent] Could not resolve a workspace id — aborting.')
-    return null
-  }
-
-  const res = await fetch(`/api/agents?workspaceId=${workspaceId}`)
-  if (!res.ok) {
-    console.error('[ask-agent] Failed to load agents for this workspace.')
-    return null
-  }
-  const { agents } = (await res.json()) as { agents: MentionableAgent[] }
-  if (agents.length === 0) {
-    console.error('[ask-agent] No agents configured for this workspace — create one before asking an agent.')
-    return null
-  }
-  if (agents.length === 1) return agents[0]
-
-  return new Promise((resolve) => {
-    popMenu(popupTargetFromElement(anchorElement), {
-      options: {
-        title: { text: 'Ask which agent?' },
-        items: agents.map((agent) =>
-          menu.action({
-            name: agent.model ? `${agent.name} (${agent.model})` : agent.name,
-            select: () => resolve(agent),
-          }),
-        ),
-        onClose: () => resolve(null),
-      },
-    })
-  })
-}
-
-const handleAskAgent: AskAgentHandler = async (selection: AskAgentSelection) => {
-  const { selectedBlockModels, doc, host } = selection
+const handleAskAgent: AskAgentHandler = (selection: AskAgentSelection) => {
+  const { selectedBlockModels, doc } = selection
   if (selectedBlockModels.length === 0) return
 
-  const pageId = pageIdFromDoc(doc)
-  if (pageId === null) {
+  if (pageIdFromDoc(doc) === null) {
     console.error('[ask-agent] Could not resolve a page id from the doc — aborting.')
     return
   }
 
-  const prompt = serializeSelectedBlocks(selectedBlockModels)
-  if (!prompt) return
+  const excerpt = serializeSelectedBlocks(selectedBlockModels)
+  if (!excerpt) return
 
-  const lastBlock = selectedBlockModels[selectedBlockModels.length - 1]
-  const parent = lastBlock.parent
-  if (!parent) {
-    console.error('[ask-agent] Selected block has no parent — cannot place a run-card next to it.')
+  const opener = getPagePanelOpener()
+  if (!opener) {
+    console.warn('[ask-agent] No docked panel is mounted for this page — cannot open it with the selection.')
     return
   }
-
-  const pickerAnchor = host.view.getBlock(lastBlock.id) ?? host
-  const agent = await resolveAgent(host, pickerAnchor)
-  if (!agent) return
-
-  let runId: number
-  try {
-    ;({ runId } = await enqueuePageRun(prompt, pageId, agent.id))
-  } catch (err) {
-    console.error('[ask-agent] Failed to enqueue a run for this selection.', err)
-    return
-  }
-
-  const insertAt = parent.children.indexOf(lastBlock) + 1
-  const runCardBlockId = doc.addBlock('affine:embed-run-card', { runId }, parent.id, insertAt)
-
-  // Lit's block-view registration reacts to the Yjs change asynchronously —
-  // `getBlock` can miss the block that was just added in the same tick.
-  const resolveCardElement = async (): Promise<HTMLElement | null> => {
-    const immediate = host.view.getBlock(runCardBlockId)
-    if (immediate) return immediate
-    await host.updateComplete
-    return host.view.getBlock(runCardBlockId)
-  }
-
-  const cardElement = await resolveCardElement()
-  if (!cardElement) {
-    console.error('[ask-agent] Run-card block never mounted — cannot anchor the thread popover.')
-    return
-  }
-
-  openThreadPopover(cardElement, runId)
+  opener(excerpt)
 }
 
 registerAskAgentHandler(handleAskAgent)
-
-function BlockAnchoredThreadPanel({ runId, onClose }: { runId: number; onClose: () => void }) {
-  const snapshots = useRunEventStream(runId, true, async (id): Promise<RunEventSnapshot[]> => {
-    const snapshot = await getRunSnapshot(id)
-    return snapshot ? [snapshot] : []
-  })
-
-  const thread = useMemo(() => {
-    const snapshot = snapshots[0]
-    const envelopes: RunEventEnvelope[] = (snapshot?.events ?? []).map((row) => ({
-      runId: String(runId),
-      seq: row.seq,
-      event: row.event,
-    }))
-    return adaptRunEventsToThread(envelopes)
-  }, [snapshots, runId])
-
-  return (
-    <div className="flex h-[480px] w-[380px] flex-col overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-gray-900">
-      <div className="flex items-center justify-between border-b border-gray-200 px-3 py-2 dark:border-gray-700">
-        <span className="text-xs font-medium text-gray-700 dark:text-gray-300">Run #{runId}</span>
-        <button
-          onClick={onClose}
-          className="text-gray-500 hover:text-gray-900 dark:hover:text-gray-100"
-          aria-label="Close"
-        >
-          ✕
-        </button>
-      </div>
-      <div className="flex-1 overflow-hidden">
-        <Thread thread={thread} showUsage={false} showRunId={false} />
-      </div>
-    </div>
-  )
-}
-
-function openThreadPopover(anchor: HTMLElement, runId: number) {
-  const container = document.createElement('div')
-  const root = createRoot(container)
-  const target = popupTargetFromElement(anchor)
-  let close: () => void = () => {}
-  root.render(createElement(BlockAnchoredThreadPanel, { runId, onClose: () => close() }))
-  close = createPopup(target, container, {
-    onClose: () => root.unmount(),
-  })
-}

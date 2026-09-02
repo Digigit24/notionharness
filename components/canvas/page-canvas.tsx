@@ -10,6 +10,7 @@ import { EmojiPicker } from './emoji-picker'
 import { CoverPicker } from './cover-picker'
 import { BlockSuiteEditor } from '@/components/editor/BlockSuiteEditor'
 import { SuggestionBar } from '@/components/editor/suggestions/suggestion-bar'
+import { PageDockedPanel } from '@/components/editor/agent-thread/page-docked-panel'
 import { ThemeToggle } from '@/components/theme/theme-toggle'
 import {
   archivePage,
@@ -91,164 +92,178 @@ export function PageCanvas({
   )
 
   return (
-    <div className="flex h-full flex-1 flex-col overflow-y-auto">
-      <header className="sticky top-0 z-10 flex h-11 shrink-0 items-center justify-between gap-2 border-b border-black/5 bg-white/90 px-4 backdrop-blur dark:border-white/10 dark:bg-[#191919]/90">
-        <Breadcrumbs segments={breadcrumbSegments} className="min-w-0" />
+    // ROADMAP B-3 "Surface" — the docked agent panel (`PageDockedPanel`) is a
+    // sibling of the scrollable content column, not nested inside it: it
+    // must stay pinned to the viewport height while the document column
+    // scrolls independently, same reason the outer element used to be
+    // `overflow-y-auto` by itself before this row wrapper existed.
+    <div className="flex h-full flex-1 overflow-hidden">
+      <div className="flex h-full flex-1 flex-col overflow-y-auto">
+        <header className="sticky top-0 z-10 flex h-11 shrink-0 items-center justify-between gap-2 border-b border-black/5 bg-white/90 px-4 backdrop-blur dark:border-white/10 dark:bg-[#191919]/90">
+          <Breadcrumbs segments={breadcrumbSegments} className="min-w-0" />
 
-        <div className="flex shrink-0 items-center gap-1">
-          <ThemeToggle />
+          <div className="flex shrink-0 items-center gap-1">
+            <ThemeToggle />
 
-          <PopoverMenu
-            align="end"
-            trigger={({ toggle }) => (
-              <button
-                type="button"
-                onClick={toggle}
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md hover:bg-black/[.06] dark:hover:bg-white/[.08]"
-              >
-                <MoreHorizontal size={16} />
-              </button>
-            )}
+            <PopoverMenu
+              align="end"
+              trigger={({ toggle }) => (
+                <button
+                  type="button"
+                  onClick={toggle}
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md hover:bg-black/[.06] dark:hover:bg-white/[.08]"
+                >
+                  <MoreHorizontal size={16} />
+                </button>
+              )}
+            >
+                {(close) => (
+                <div className="flex flex-col text-sm">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      close()
+                      setFullWidth(!fullWidth)
+                      void toggleFullWidth(page.id, workspace.slug, !fullWidth)
+                    }}
+                    className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-black/[.06] dark:hover:bg-white/[.08]"
+                  >
+                    {fullWidth ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                    {fullWidth ? 'Small width' : 'Full width'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      close()
+                      setLocked(!locked)
+                      void toggleLocked(page.id, workspace.slug, !locked)
+                    }}
+                    className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-black/[.06] dark:hover:bg-white/[.08]"
+                  >
+                    {locked ? <LockOpen size={14} /> : <Lock size={14} />}
+                    {locked ? 'Unlock page' : 'Lock page'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      close()
+                      void archivePage(page.id, workspace.id, workspace.slug)
+                      router.push(`/workspace/${workspace.slug}`)
+                    }}
+                    className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-red-600 hover:bg-black/[.06] dark:text-red-400 dark:hover:bg-white/[.08]"
+                  >
+                    <Trash2 size={14} />
+                    Move to Trash
+                  </button>
+                </div>
+              )}
+            </PopoverMenu>
+          </div>
+        </header>
+
+        {page.coverImage && (
+          <div
+            className={cn('group relative h-40 w-full', isGradientCover && `bg-gradient-to-br ${page.coverImage.replace('gradient:', '')}`)}
+            style={!isGradientCover ? { backgroundImage: `url(${page.coverImage})`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined}
           >
-              {(close) => (
-              <div className="flex flex-col text-sm">
+            {!locked && (
+              <div className="absolute bottom-3 right-3 flex gap-2 opacity-0 transition-opacity group-hover:opacity-100">
+                <CoverPicker trigger="Change cover" onSelect={(v) => void setPageCover(page.id, workspace.slug, v)} />
                 <button
                   type="button"
-                  onClick={() => {
-                    close()
-                    setFullWidth(!fullWidth)
-                    void toggleFullWidth(page.id, workspace.slug, !fullWidth)
-                  }}
-                  className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-black/[.06] dark:hover:bg-white/[.08]"
+                  onClick={() => void setPageCover(page.id, workspace.slug, null)}
+                  className="rounded-md bg-black/40 px-2 py-1 text-xs text-white hover:bg-black/60"
                 >
-                  {fullWidth ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-                  {fullWidth ? 'Small width' : 'Full width'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    close()
-                    setLocked(!locked)
-                    void toggleLocked(page.id, workspace.slug, !locked)
-                  }}
-                  className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-black/[.06] dark:hover:bg-white/[.08]"
-                >
-                  {locked ? <LockOpen size={14} /> : <Lock size={14} />}
-                  {locked ? 'Unlock page' : 'Lock page'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    close()
-                    void archivePage(page.id, workspace.id, workspace.slug)
-                    router.push(`/workspace/${workspace.slug}`)
-                  }}
-                  className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-red-600 hover:bg-black/[.06] dark:text-red-400 dark:hover:bg-white/[.08]"
-                >
-                  <Trash2 size={14} />
-                  Move to Trash
+                  Remove
                 </button>
               </div>
             )}
-          </PopoverMenu>
-        </div>
-      </header>
-
-      {page.coverImage && (
-        <div
-          className={cn('group relative h-40 w-full', isGradientCover && `bg-gradient-to-br ${page.coverImage.replace('gradient:', '')}`)}
-          style={!isGradientCover ? { backgroundImage: `url(${page.coverImage})`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined}
-        >
-          {!locked && (
-            <div className="absolute bottom-3 right-3 flex gap-2 opacity-0 transition-opacity group-hover:opacity-100">
-              <CoverPicker trigger="Change cover" onSelect={(v) => void setPageCover(page.id, workspace.slug, v)} />
-              <button
-                type="button"
-                onClick={() => void setPageCover(page.id, workspace.slug, null)}
-                className="rounded-md bg-black/40 px-2 py-1 text-xs text-white hover:bg-black/60"
-              >
-                Remove
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
-      <div
-        className={cn(
-          'mx-auto w-full flex-1 pb-24 pt-8',
-          fullWidth ? 'max-w-none px-4 md:px-6' : 'max-w-4xl px-6 md:px-12',
+          </div>
         )}
-      >
-        <div className="mb-1 flex flex-col gap-2">
-          {page.icon &&
-            (locked ? (
-              <span className="w-fit text-6xl leading-none">{page.icon}</span>
-            ) : (
-              <EmojiPicker
-                value={page.icon}
-                onSelect={(emoji) => void setPageIcon(page.id, workspace.slug, emoji)}
-                onClear={() => void setPageIcon(page.id, workspace.slug, null)}
-              />
-            ))}
 
-          {!locked && (!page.icon || !page.coverImage) && (
-            <div className="flex gap-2">
-              {!page.icon && (
+        <div
+          className={cn(
+            'mx-auto w-full flex-1 pb-24 pt-8',
+            fullWidth ? 'max-w-none px-4 md:px-6' : 'max-w-4xl px-6 md:px-12',
+          )}
+        >
+          <div className="mb-1 flex flex-col gap-2">
+            {page.icon &&
+              (locked ? (
+                <span className="w-fit text-6xl leading-none">{page.icon}</span>
+              ) : (
                 <EmojiPicker
-                  value={null}
+                  value={page.icon}
                   onSelect={(emoji) => void setPageIcon(page.id, workspace.slug, emoji)}
                   onClear={() => void setPageIcon(page.id, workspace.slug, null)}
                 />
-              )}
-              {!page.coverImage && (
-                <CoverPicker trigger="Add cover" onSelect={(v) => void setPageCover(page.id, workspace.slug, v)} />
-              )}
-            </div>
-          )}
-        </div>
+              ))}
 
-        <input
-          value={title}
-          disabled={locked}
-          onChange={(e) => setTitle(e.target.value)}
-          onBlur={() => {
-            if (title !== page.title) void renamePage(page.id, workspace.slug, title)
-          }}
-          placeholder="Untitled"
-          className="page-canvas-title w-full bg-transparent text-5xl font-bold leading-tight outline-none placeholder:text-black/20 disabled:cursor-not-allowed dark:placeholder:text-white/20"
-        />
+            {!locked && (!page.icon || !page.coverImage) && (
+              <div className="flex gap-2">
+                {!page.icon && (
+                  <EmojiPicker
+                    value={null}
+                    onSelect={(emoji) => void setPageIcon(page.id, workspace.slug, emoji)}
+                    onClear={() => void setPageIcon(page.id, workspace.slug, null)}
+                  />
+                )}
+                {!page.coverImage && (
+                  <CoverPicker trigger="Add cover" onSelect={(v) => void setPageCover(page.id, workspace.slug, v)} />
+                )}
+              </div>
+            )}
+          </div>
 
-        {rowFields && <RowProperties fields={rowFields} />}
-
-        <PageProvenanceStrip
-          provenance={provenance}
-          workspaceSlug={workspace.slug}
-          timeFilter={timeFilter}
-          onTimeFilterChange={setTimeFilter}
-        />
-
-        <div className="mt-8">
-          <BlockSuiteEditor
-            key={page.id}
-            pageId={page.id}
-            workspaceId={workspace.id}
-            workspaceSlug={workspace.slug}
-            initialTitle={page.title || 'Untitled'}
-            provenance={provenance}
-            staleBeforeMs={staleBeforeMs}
-            initialDocState={page.docState}
-            locked={locked}
+          <input
+            value={title}
+            disabled={locked}
+            onChange={(e) => setTitle(e.target.value)}
+            onBlur={() => {
+              if (title !== page.title) void renamePage(page.id, workspace.slug, title)
+            }}
+            placeholder="Untitled"
+            className="page-canvas-title w-full bg-transparent text-5xl font-bold leading-tight outline-none placeholder:text-black/20 disabled:cursor-not-allowed dark:placeholder:text-white/20"
           />
+
+          {rowFields && <RowProperties fields={rowFields} />}
+
+          <PageProvenanceStrip
+            provenance={provenance}
+            workspaceSlug={workspace.slug}
+            timeFilter={timeFilter}
+            onTimeFilterChange={setTimeFilter}
+          />
+
+          <div className="mt-8">
+            <BlockSuiteEditor
+              key={page.id}
+              pageId={page.id}
+              workspaceId={workspace.id}
+              workspaceSlug={workspace.slug}
+              initialTitle={page.title || 'Untitled'}
+              provenance={provenance}
+              staleBeforeMs={staleBeforeMs}
+              initialDocState={page.docState}
+              locked={locked}
+            />
+          </div>
         </div>
+
+        {/* ROADMAP B3.1 (Batch B-2, suggestions mode) — deliberately outside the
+            `max-w-4xl`/`max-w-none` content column above: a floating review bar
+            reads better anchored to the viewport than the (possibly narrow)
+            prose column. Renders nothing when the page has no pending agent
+            suggestions (own internal poll, see suggestion-bar.tsx). */}
+        <SuggestionBar pageId={page.id} />
       </div>
 
-      {/* ROADMAP B3.1 (Batch B-2, suggestions mode) — deliberately outside the
-          `max-w-4xl`/`max-w-none` content column above: a floating review bar
-          reads better anchored to the viewport than the (possibly narrow)
-          prose column. Renders nothing when the page has no pending agent
-          suggestions (own internal poll, see suggestion-bar.tsx). */}
-      <SuggestionBar pageId={page.id} />
+      <PageDockedPanel
+        pageId={page.id}
+        workspaceId={workspace.id}
+        pageTitle={page.title || 'Untitled'}
+        pageContent={page.plainTextContent ?? null}
+      />
     </div>
   )
 }
