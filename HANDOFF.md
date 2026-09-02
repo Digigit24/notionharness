@@ -35,6 +35,15 @@ Git is initialized, first commits pushed to `github.com/Digigit24/notionharness`
 - Hermes Gateway / AG-UI / CopilotKit chat integration — this was paused pending a feasibility spike on the wire protocol; `docs/ROADMAP.html` Pillar 3 has since decided that question rather than left it open: `hermes acp` over stdio, normalized to a `RunEvent` contract, feeding assistant-ui's runtime directly (D6–D8, explicitly dropping AI SDK from the streaming path). Don't resume this as a "spike the protocol" task — it's Pillar 3/5.1 now, with a defined contract to build against.
 - Full Notion parity gaps not yet built: formula/rollup properties, Gallery/List/Timeline views, toggle/callout blocks, templates, comments, page history, granular permissions. Full breakdown with priorities: `docs/notion-parity-audit.html`. The roadmap's own guardrails section explicitly scopes this down further — full Notion parity is called out as *not* a goal (cap the editor at what a task/spec needs).
 
+## Current implementation additions (2026-09-02)
+
+- **Approvals (P5.4):** `collections/Approvals.ts`, `lib/hermes/approval-helpers.ts`, ACP `permissionCallback`, and authenticated `GET`/`POST /api/approvals`; session identity is authoritative, never client headers.
+- **Inbox (P5.5):** `app/(app)/workspace/[workspaceSlug]/inbox/page.tsx` combines pending approvals, failed runs, review-ready runs, and mentions.
+- **Transcript (P5.6):** pure `lib/transcript/` passes normalize ordered RunEvents into redacted timelines, paired/grouped steps, lanes, and outcomes; `scripts/test-transcript-pipeline.ts` is the fixture test.
+- **Hermes/dispatcher:** broker runs/events/usage, HTTP polling, worktrees/identity overlays, ACP permission policy, scoped page writes, and review surface are implemented. Session/usage/message/done was live-proven; auto-write-to-diff remains unconfirmed under flaky upstream services.
+- **Migrations:** on the known interactive drift prompt, use a reviewed hand-written migration plus short-lived `pg.Pool` apply script and `payload_migrations` row; see `scripts/apply-approvals-migration.ts`.
+- `master` mirrors `main` as the user-facing local-run branch (port 3000/3001). Aion CLI teammates/worktrees now replace the earlier OpenCode team; keep roadmap worktree and centralized verification discipline.
+
 ## House rules that mattered all session
 
 - Verify against Teable's **live OpenAPI spec** (`/docs-json` on the running instance), never guess endpoint shapes — several bugs (record PATCH shape, filter/sort using PUT not PATCH, field type-change needing a separate `/convert` endpoint) only surfaced by checking the real spec.
