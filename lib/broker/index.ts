@@ -15,6 +15,7 @@ export {
   setRunPageContext,
   listFailedRuns,
   listReviewReadyRuns,
+  getActiveRunForAgent,
 } from './runs'
 export type { SettleOutcome } from './runs'
 export { appendRunEvent, listRunEvents } from './messages'

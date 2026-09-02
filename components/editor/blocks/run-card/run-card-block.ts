@@ -9,8 +9,11 @@ interface RunCardData {
   completedAt: string | null
   error: string | null
   stepCount: number
-  totalTokens: number
-  totalCostTicks: number
+  chips: {
+    files: string
+    commands: string
+    cost: string
+  }
 }
 
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled'])
@@ -34,15 +37,6 @@ const STATUS_COLOR: Record<string, string> = {
   completed: '#2f6b41',
   failed: '#de5246',
   cancelled: '#999',
-}
-
-/** `costTicks` is an opaque integer unit from `lib/broker/usage.ts`'s own
- * contract, not a currency — this app has no defined tick→currency rate
- * (that's a later-pillar billing decision), so this shows a fixed-point
- * "cost unit" value rather than inventing a $ conversion this block has no
- * authority to define. */
-function formatCostTicks(ticks: number): string {
-  return (ticks / 100).toFixed(2)
 }
 
 function formatElapsed(startedAt: string | null, completedAt: string | null): string {
@@ -150,7 +144,12 @@ export class RunCardBlockComponent extends BlockComponent<RunCardBlockModel> {
         ${elapsed ? html`<span class="sep">·</span><span>${elapsed}</span>` : null}
         <span class="sep">·</span>
         <span>${d.stepCount} step${d.stepCount === 1 ? '' : 's'}</span>
-        ${d.totalCostTicks > 0 ? html`<span class="sep">·</span><span>$${formatCostTicks(d.totalCostTicks)}</span>` : null}
+        <span class="sep">·</span>
+        <span>${d.chips.files}</span>
+        <span class="sep">·</span>
+        <span>${d.chips.commands}</span>
+        <span class="sep">·</span>
+        <span>${d.chips.cost}</span>
       </div>
     `
   }

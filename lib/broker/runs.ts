@@ -247,6 +247,23 @@ export async function listActiveRunsForWorkspace(workspaceId: number): Promise<R
   return res.rows.map(rowToRun)
 }
 
+/** ROADMAP 6.3 audit — the @mention live-status dot's data source: is this
+ * agent doing something right now, regardless of which task/page it's on.
+ * Same non-terminal status set `listActiveRunsForWorkspace` and the run-card
+ * block use. */
+export async function getActiveRunForAgent(agentId: number): Promise<Run | null> {
+  const pool = getBrokerPool()
+  const res = await pool.query<RunRow>(
+    `SELECT * FROM runs
+     WHERE agent_id = $1
+       AND status IN ('queued', 'dispatched', 'running', 'waiting_directory')
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [agentId],
+  )
+  return res.rows[0] ? rowToRun(res.rows[0]) : null
+}
+
 export async function getRunPageContext(runId: number): Promise<{ pageId: number; subtreeBlockId: string } | null> {
   const pool = getBrokerPool()
   const res = await pool.query<{ page_id: string | number | null; page_subtree_block_id: string | null }>(
