@@ -19,7 +19,8 @@
     "test:render-performance": "tsx scripts/test-render-performance.ts",
     "test:runEvent-adapter": "tsx scripts/test-runEvent-adapter.ts",
     "dispatcher:loop": "tsx scripts/run-dispatcher-loop.ts",
-    "test:transcript": "tsx scripts/test-transcript-pipeline.ts"
+    "test:transcript": "tsx scripts/test-transcript-pipeline.ts",
+    "test": "vitest run"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.4.0",
@@ -69,7 +70,8 @@
     "eslint": "^9",
     "eslint-config-next": "^15.4.11",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^3.2.4"
   },
   "overrides": {
     "@blocksuite/icons": "2.1.75"
