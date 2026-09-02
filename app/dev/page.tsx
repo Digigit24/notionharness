@@ -12,21 +12,6 @@ interface DemoRoute {
 
 const demoRoutes: DemoRoute[] = [
   {
-    path: '/chat-ui-demo',
-    title: 'Chat UI Demo',
-    description: 'Thread component with mock RunEvent data. Demonstrates basic chat UI rendering.',
-  },
-  {
-    path: '/thread-full-page',
-    title: 'Thread Full Page',
-    description: 'Dedicated full-page view with session list rail. For detailed run examination.',
-  },
-  {
-    path: '/thread-lane-demo',
-    title: 'Thread Lane Demo',
-    description: 'Grid layout showing multiple threads as lanes. Demonstrates side-by-side monitoring.',
-  },
-  {
     path: '/tool-catalogue-demo',
     title: 'Tool Catalogue Demo',
     description: 'Tool UI components and renderers catalogue. Internal component gallery.',
