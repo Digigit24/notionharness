@@ -5,6 +5,7 @@ import { getPayloadClient } from '@/lib/payload'
 import { getCurrentPayloadUser } from '@/lib/current-user'
 import type { Task } from '@/payload-types'
 import { enqueueRun, listActiveRunsForWorkspace, listRunsForTask, listRunEvents } from '@/lib/broker'
+import { buildTasksWhere, payloadSortString, type TaskFilters, type TaskSort } from '@/lib/task-views/data-layer'
 
 async function nextColumnPosition(
   payload: Awaited<ReturnType<typeof getPayloadClient>>,
@@ -202,6 +203,43 @@ export async function loadMoreTasks({
     overrideAccess: true,
   })
   return result.docs
+}
+
+/**
+ * ROADMAP B-4.1 — the shared data layer's real cross-column query. Board
+ * keeps its own per-status/per-page fetch (`loadMoreTasks`, unchanged) since
+ * its columns ARE the status grouping; List and Table need a flat,
+ * filtered, sorted view across every status at once, which no existing
+ * action produced. `depth: 1` so assignee/project/status/agent come back
+ * populated — List/Table render/inline-edit those directly, and `data-layer`
+ * .ts's field helpers accept either populated objects or bare ids.
+ *
+ * Capped at `limit` (default below) rather than true infinite pagination —
+ * a deliberate scope line for this pass, called out in the batch summary.
+ */
+const VIEW_QUERY_LIMIT = 500
+
+export async function getTasksForView({
+  workspaceId,
+  filters,
+  sort,
+  limit = VIEW_QUERY_LIMIT,
+}: {
+  workspaceId: number
+  filters: TaskFilters
+  sort: TaskSort
+  limit?: number
+}): Promise<{ docs: Task[]; totalDocs: number }> {
+  const payload = await getPayloadClient()
+  const result = await payload.find({
+    collection: 'tasks',
+    where: buildTasksWhere(workspaceId, filters),
+    sort: payloadSortString(sort),
+    limit,
+    depth: 1,
+    overrideAccess: true,
+  })
+  return { docs: result.docs, totalDocs: result.totalDocs }
 }
 
 // Read-only — the task detail drawer's Activity tab. Not exported from the
