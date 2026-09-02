@@ -9,7 +9,8 @@ import { ThemeToggle } from '@/components/theme/theme-toggle'
 import { authClient } from '@/lib/auth-client'
 import { PageTree } from './page-tree'
 import { WorkspaceSwitcher } from './workspace-switcher'
-import { SearchModal } from './search-modal'
+import { CommandBar } from '@/components/command-bar/command-bar'
+import { openCommandBar } from '@/lib/command-bar-bus'
 import { NotificationsBell } from '@/components/notifications/notifications-bell'
 import { ModeSwitcher } from './mode-switcher'
 import { createPage, deletePageForever, restorePage } from '@/app/(app)/actions'
@@ -21,12 +22,14 @@ export function Sidebar({
   workspaces,
   pages,
   userEmail,
+  currentUserId,
   unreadNotificationCount,
 }: {
   workspace: Workspace
   workspaces: Workspace[]
   pages: Page[]
   userEmail: string
+  currentUserId: number | null
   unreadNotificationCount: number
 }) {
   const router = useRouter()
@@ -69,7 +72,6 @@ export function Sidebar({
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set())
   const [favoritesOpen, setFavoritesOpen] = useState(true)
   const [trashOpen, setTrashOpen] = useState(false)
-  const [searchOpen, setSearchOpen] = useState(false)
   // ROADMAP P6.5 Q3 — remember which Work sub-route the user last visited
   // so the ModeSwitcher's Work pill lands them where they were, not at the
   // inbox default. Null on first paint (SSR + before localStorage sync).
@@ -121,17 +123,6 @@ export function Sidebar({
     }
   }, [pathname, workspace.slug, lastWorkSubRoute])
 
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault()
-        setSearchOpen(true)
-      }
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [])
-
   function toggleExpand(id: number, forceOpen?: boolean) {
     setExpandedIds((prev) => {
       const next = new Set(prev)
@@ -162,7 +153,20 @@ export function Sidebar({
         >
           <ChevronsRight size={16} />
         </button>
+        <button
+          type="button"
+          onClick={() => openCommandBar()}
+          title="Open the command bar (Ctrl K)"
+          className="mt-1 flex h-7 w-7 items-center justify-center rounded-md hover:bg-black/[.06] dark:hover:bg-white/[.08]"
+        >
+          <Search size={14} />
+        </button>
         <ThemeToggle className="mt-auto" />
+        {/* Mounted even while collapsed — CommandBar owns its own ⌘K
+            listener (see components/command-bar/command-bar.tsx), so it
+            must stay mounted regardless of the sidebar's collapsed state
+            for the hotkey to keep working. */}
+        <CommandBar workspace={workspace} currentUserId={currentUserId} />
       </div>
     )
   }
@@ -198,7 +202,8 @@ export function Sidebar({
 
       <button
         type="button"
-        onClick={() => setSearchOpen(true)}
+        onClick={() => openCommandBar()}
+        title="Open the command bar (search, jump to anything, create a task, assign, start a run, change status)"
         className="mx-2 mt-2 flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-black/60 hover:bg-black/[.06] dark:text-white/60 dark:hover:bg-white/[.08]"
       >
         <Search size={14} />
@@ -357,7 +362,7 @@ export function Sidebar({
         </div>
       </div>
 
-      <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} workspace={workspace} />
+      <CommandBar workspace={workspace} currentUserId={currentUserId} />
     </div>
   )
 }
