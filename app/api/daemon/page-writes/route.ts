@@ -5,11 +5,19 @@ import { getPayloadClient } from '@/lib/payload'
 import { appendRunEvent } from '@/lib/broker/messages'
 import { getRun, getRunPageContext, setRunPageContext } from '@/lib/broker/runs'
 
+const BLOCK_KINDS = new Set(['heading', 'paragraph', 'list', 'code'])
+
 function isBlockSpec(value: unknown): value is AgentBlockSpec {
   if (!value || typeof value !== 'object') return false
   const spec = value as Record<string, unknown>
-  if ((spec.kind !== 'heading' && spec.kind !== 'paragraph') || typeof spec.text !== 'string' || spec.text.length > 100_000) return false
-  return spec.kind !== 'heading' || spec.level === 1 || spec.level === 2 || spec.level === 3
+  if (!BLOCK_KINDS.has(spec.kind as string) || typeof spec.text !== 'string' || spec.text.length > 100_000) return false
+  if (spec.kind === 'heading') return spec.level === 1 || spec.level === 2 || spec.level === 3
+  if (spec.kind === 'list') {
+    if (spec.type !== 'bulleted' && spec.type !== 'numbered' && spec.type !== 'todo') return false
+    return spec.checked === undefined || typeof spec.checked === 'boolean'
+  }
+  if (spec.kind === 'code') return spec.language === undefined || spec.language === null || typeof spec.language === 'string'
+  return true
 }
 
 /** Daemon command bridge: Payload/Yjs writes stay inside the Next process. */

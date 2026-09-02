@@ -15,13 +15,20 @@ import { getNote, loadDocForWrite, seedEmptyDoc } from '@/lib/blocksuite-doc'
 /** A block a caller can append further children under. Opaque outside this module. */
 export type RunSubtreeHandle = string
 
-/** The kinds of content a run can append — deliberately small for this first
- * slice (ROADMAP calls out "a plan block, then findings, then a summary,
- * then a diff card"; diff-card rendering is its own follow-up block type,
- * same shape as the run-card's `affine:embed-run-card`, not built yet). */
+/** The kinds of content a run can append. ROADMAP calls out "a plan block,
+ * then findings, then a summary, then a diff card" — heading/paragraph/list/
+ * code cover the first three. A diff card is deliberately not here: there is
+ * no diff-rendering block flavour anywhere in the codebase to reuse (unlike
+ * the run-card's `affine:embed-run-card`, see components/editor/blocks/run-card/schema.ts),
+ * and registering a brand-new BlockSuite block schema (schema + custom
+ * element + spec + collection registration in lib/blocksuite-doc.ts and the
+ * client editor) is a much bigger editor-extension task than this write
+ * primitive should take on — left as a follow-up. */
 export type AgentBlockSpec =
   | { kind: 'heading'; level: 1 | 2 | 3; text: string }
   | { kind: 'paragraph'; text: string }
+  | { kind: 'list'; type: 'bulleted' | 'numbered' | 'todo'; text: string; checked?: boolean }
+  | { kind: 'code'; text: string; language?: string | null }
 
 function toParagraphType(level: 1 | 2 | 3): 'h1' | 'h2' | 'h3' {
   return level === 1 ? 'h1' : level === 2 ? 'h2' : 'h3'
@@ -72,9 +79,31 @@ export async function appendBlockToSubtree(
   if (!handleBlock) {
     throw new Error(`Run subtree ${subtree} no longer exists on page ${pageId}.`)
   }
-  const blockId = spec.kind === 'heading'
-    ? doc.addBlock('affine:paragraph', { type: toParagraphType(spec.level), text: new Text(spec.text) }, subtree)
-    : doc.addBlock('affine:paragraph', { type: 'text', text: new Text(spec.text) }, subtree)
+  // Shapes below are cross-checked against `docToMarkdown`'s `serializeChildren`
+  // switch and `markdownToDoc`'s line parser in lib/blocksuite-doc.ts, so a
+  // block appended here round-trips through both: `affine:list` reads `type`
+  // ('bulleted' | 'numbered' | 'todo') + `text` + `checked` (todo only, export
+  // ignores `order` and recomputes numbering from sibling position); `affine:code`
+  // reads `text` + `language` (nullable).
+  let blockId: string
+  switch (spec.kind) {
+    case 'heading':
+      blockId = doc.addBlock('affine:paragraph', { type: toParagraphType(spec.level), text: new Text(spec.text) }, subtree)
+      break
+    case 'paragraph':
+      blockId = doc.addBlock('affine:paragraph', { type: 'text', text: new Text(spec.text) }, subtree)
+      break
+    case 'list':
+      blockId = doc.addBlock(
+        'affine:list',
+        { type: spec.type, text: new Text(spec.text), checked: spec.type === 'todo' ? !!spec.checked : false },
+        subtree,
+      )
+      break
+    case 'code':
+      blockId = doc.addBlock('affine:code', { text: new Text(spec.text), language: spec.language ?? null }, subtree)
+      break
+  }
   await persist()
   return blockId
 }
