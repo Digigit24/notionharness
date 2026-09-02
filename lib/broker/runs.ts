@@ -347,6 +347,35 @@ export async function hasActiveRunForTask(taskId: number): Promise<boolean> {
   return res.rows[0]?.exists ?? false
 }
 
+/** ROADMAP B5.1 (home surface, "what I was doing") — one row per distinct
+ * page with a page-scoped run (`task_id IS NULL`, i.e. an Ask thread rather
+ * than a task run), most-recently-active page first. Same "join through the
+ * Payload-owned table for workspace scoping" pattern `listActiveRunsForWorkspace`
+ * established for `tasks`; `pages` lives in the same physical Postgres
+ * instance (D5 — Payload owns the table, not this pool), so the join is
+ * exactly as safe here. `DISTINCT ON` collapses a page's run history down to
+ * its single latest run (a "thread" for home-surface purposes is a page,
+ * not each individual turn), then the outer query re-sorts those one-per-page
+ * rows by recency since `DISTINCT ON` requires ordering by its own key first. */
+export async function listRecentPageRunsForWorkspace(workspaceId: number, limit = 5): Promise<Run[]> {
+  const pool = getBrokerPool()
+  const res = await pool.query<RunRow>(
+    `SELECT * FROM (
+       SELECT DISTINCT ON (r.page_id) r.*
+       FROM runs r
+       INNER JOIN pages p ON p.id = r.page_id
+       WHERE p.workspace_id = $1
+         AND r.page_id IS NOT NULL
+         AND r.task_id IS NULL
+       ORDER BY r.page_id, r.updated_at DESC
+     ) recent
+     ORDER BY recent.updated_at DESC
+     LIMIT $2`,
+    [workspaceId, limit],
+  )
+  return res.rows.map(rowToRun)
+}
+
 export async function getRunPageContext(runId: number): Promise<{ pageId: number; subtreeBlockId: string } | null> {
   const pool = getBrokerPool()
   const res = await pool.query<{ page_id: string | number | null; page_subtree_block_id: string | null }>(
