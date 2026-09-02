@@ -14,15 +14,20 @@
 // scrambles transcripts").
 //
 // What this module is NOT: it is not a human-in-the-loop UI for permission
-// requests (Pillar 5.4), and it is not a real Hermes-side terminal manager
-// (the roadmap defers the bounded tail-buffer / process-group-kill work). For
-// both, this seam installs the minimum default policies the agent can talk to
-// so a real round-trip works end-to-end:
+// requests (Pillar 5.4), and it is not the human-facing xterm/node-pty
+// terminal workstream (D10 — that's a dedicated raw-byte socket, a wholly
+// separate concern owned elsewhere; see `lib/terminal/pty-server.ts`). This
+// seam installs the minimum default policies the agent can talk to so a real
+// round-trip works end-to-end:
 //   * permission requests → deny-once after a short timeout
 //     (per roadmap 3.2: "timeout that denies *once* rather than cancelling
 //     the turn")
 //   * fs/read_text_file, fs/write_text_file → real local file I/O
-//   * terminal/* → stub that lets the request resolve (real impl is later)
+//   * terminal/* → real `node-pty` sessions, bounded tail buffers, and
+//     process-group kill (see `createTerminalRegistry` below) — this is the
+//     ACP protocol's own "agent runs a shell command" capability, not D10's
+//     human-facing terminal UI, but reuses the same already-vetted `node-pty`
+//     dependency for proper PTY semantics.
 //
 // Wired into the harness via `scripts/hermes-acp-smoke.ts` — that script
 // round-trips one real prompt against the live binary and prints the events,
@@ -34,16 +39,32 @@
 // the file isn't checked out yet.
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { constants as osConstants } from 'node:os'
 import { Readable, Writable } from 'node:stream'
 import { setTimeout as delay } from 'node:timers/promises'
 
 import { client, ndJsonStream, PROTOCOL_VERSION } from '@agentclientprotocol/sdk'
+import type {
+  CreateTerminalRequest,
+  CreateTerminalResponse,
+  KillTerminalRequest,
+  KillTerminalResponse,
+  ReleaseTerminalRequest,
+  ReleaseTerminalResponse,
+  TerminalExitStatus,
+  TerminalOutputRequest,
+  TerminalOutputResponse,
+  WaitForTerminalExitRequest,
+  WaitForTerminalExitResponse,
+} from '@agentclientprotocol/sdk'
+import * as pty from 'node-pty'
 
 // `RunEvent` and `RunEventEnvelope` come from main's canonical contract at
 // `lib/run-events.ts` (merged from a reconciliation task). The local
 // worktree is behind main so the file isn't visible here — the lead wires
 // it up at merge time, same as for the daemon-ws and broker consumers.
 import type { RunEvent, RunEventEnvelope } from '@/lib/run-events'
+import { TerminalBuffer } from './terminal-buffer'
 
 // ---------------------------------------------------------------------------
 // Public options.
@@ -174,6 +195,231 @@ function spawnBinary(opts: SendTurnOptions): {
 }
 
 // ---------------------------------------------------------------------------
+// Terminal registry: real ACP `terminal/*` session handling.
+//
+// This is the ACP protocol's own "agent runs a shell command" capability
+// (`terminal/create`, `terminal/output`, `terminal/wait_for_exit`,
+// `terminal/kill`, `terminal/release` — see `schema.CLIENT_METHODS.terminal`
+// in the installed `@agentclientprotocol/sdk`), talked over the JSON-RPC
+// event stream. It is NOT D10's human-facing xterm.js terminal (a dedicated
+// raw-byte socket, never inside the JSON event protocol) — that's
+// `lib/terminal/pty-server.ts`, a separate workstream. The two happen to
+// share `node-pty` because it's the project's already-vetted, already-built
+// (see its `prebuilds/`) way to get real PTY semantics instead of a bare
+// pipe.
+// ---------------------------------------------------------------------------
+
+interface TerminalSessionState {
+  id: string
+  term: pty.IPty | null
+  buffer: TerminalBuffer
+  exitStatus: TerminalExitStatus | null
+  exitWaiters: Array<(status: TerminalExitStatus) => void>
+  disposeOnData: { dispose(): void } | null
+  disposeOnExit: { dispose(): void } | null
+}
+
+/** Inverse of `os.constants.signals` (`{SIGTERM: 15, ...}` -> `{15: 'SIGTERM', ...}`).
+ * node-pty's `onExit` reports the terminating signal as a POSIX signal
+ * *number* (`{ exitCode: number, signal?: number }`), but ACP's
+ * `TerminalExitStatus.signal` is a *name* string (e.g. `"SIGTERM"|null`) —
+ * this bridges the two. */
+const SIGNAL_NAME_BY_NUMBER: Record<number, string> = Object.fromEntries(
+  Object.entries(osConstants.signals).map(([name, num]) => [num, name])
+)
+
+function signalNumberToName(signal: number | undefined): string | null {
+  if (signal === undefined || signal === 0) return null
+  return SIGNAL_NAME_BY_NUMBER[signal] ?? String(signal)
+}
+
+/**
+ * Kills the whole process tree a terminal command spawned, not just the
+ * immediate child.
+ *
+ * node-pty's own `UnixTerminal.kill()` only signals `pid` directly (see
+ * `node_modules/node-pty/lib/unixTerminal.js`) — the process the pty forked.
+ * A real shell command routinely spawns further children (`npm run build` ->
+ * `node`, a `tsc --watch` daemon, ...) that outlive a naive single-pid kill
+ * and keep running as orphans. The pty always makes its child the leader of
+ * a brand-new session (`setsid`), and POSIX session leaders are also the
+ * process-group leader of the group they create — so the child's `pid` IS
+ * also that group's id, and signalling the *negative* pid reaches every
+ * process in the group, not just the leader.
+ *
+ * Windows has no process-group/signal model to reach here: node-pty's
+ * `WindowsTerminal.kill()` throws if given a signal at all, and its no-arg
+ * kill already tears down the whole ConPTY agent process tree itself (see
+ * `node_modules/node-pty/lib/windowsTerminal.js`, `_agent.kill()`). So on
+ * win32 this just degrades to that no-arg kill rather than throwing.
+ */
+function killTerminalProcess(term: pty.IPty, signal: NodeJS.Signals = 'SIGKILL'): void {
+  if (process.platform === 'win32') {
+    try {
+      term.kill()
+    } catch {
+      // already gone
+    }
+    return
+  }
+  try {
+    process.kill(-term.pid, signal)
+  } catch {
+    // Group already reaped, or we raced the child's own exit — fall back to
+    // a direct signal so we at least ask the immediate process to stop.
+    try {
+      term.kill(signal)
+    } catch {
+      // already gone
+    }
+  }
+}
+
+function settleTerminalExit(session: TerminalSessionState, status: TerminalExitStatus): void {
+  if (session.exitStatus) return // already settled (e.g. create-time failure)
+  session.exitStatus = status
+  const waiters = session.exitWaiters.splice(0)
+  for (const resolve of waiters) resolve(status)
+}
+
+/**
+ * Builds the live state (session map, id allocator) backing the ACP
+ * `terminal/*` handlers registered in `buildClientApp`, plus a `disposeAll`
+ * to reap any terminals the agent forgot to `terminal/release` when the turn
+ * ends — otherwise a misbehaving/killed agent would leak child processes and
+ * `onData`/`onExit` listeners across the life of the harness.
+ */
+function createTerminalRegistry(options: {
+  defaultCwd: string
+  defaultEnv?: Record<string, string | undefined>
+  pushEvent: (event: RunEvent) => void
+}) {
+  const sessions = new Map<string, TerminalSessionState>()
+  let nextSeq = 0
+  const allocTerminalId = (): string => {
+    nextSeq += 1
+    return `term_${nextSeq}_${Math.random().toString(36).slice(2, 8)}`
+  }
+
+  function disposeSession(session: TerminalSessionState): void {
+    session.disposeOnData?.dispose()
+    session.disposeOnExit?.dispose()
+  }
+
+  return {
+    async onCreate(params: CreateTerminalRequest): Promise<CreateTerminalResponse> {
+      const id = allocTerminalId()
+      const buffer = new TerminalBuffer(params.outputByteLimit ?? undefined)
+      const session: TerminalSessionState = {
+        id,
+        term: null,
+        buffer,
+        exitStatus: null,
+        exitWaiters: [],
+        disposeOnData: null,
+        disposeOnExit: null,
+      }
+      sessions.set(id, session)
+
+      try {
+        const env: Record<string, string> = {}
+        for (const [key, value] of Object.entries({ ...process.env, ...options.defaultEnv })) {
+          if (value !== undefined) env[key] = value
+        }
+        for (const entry of params.env ?? []) env[entry.name] = entry.value
+
+        const term = pty.spawn(params.command, params.args ?? [], {
+          name: 'xterm-256color',
+          cwd: params.cwd ?? options.defaultCwd,
+          env,
+          cols: 80,
+          rows: 24,
+        })
+        session.term = term
+        session.disposeOnData = term.onData((chunk) => {
+          buffer.append(chunk)
+          // Roadmap: stream terminal output into the run's Activity tab as
+          // it happens, same pattern as every other handler in this file
+          // that turns an ACP happening into a `RunEvent` via `pushEvent`
+          // (see `session/request_permission` above and `pushEvent` in
+          // `sendTurn` below) — not just on-demand via `terminal/output`.
+          options.pushEvent({ type: 'terminal', id, chunk })
+        })
+        session.disposeOnExit = term.onExit(({ exitCode, signal }) => {
+          settleTerminalExit(session, {
+            exitCode: exitCode ?? null,
+            signal: signalNumberToName(signal),
+          })
+        })
+      } catch (err) {
+        // `pty.spawn` can throw synchronously (bad cwd, spawn failure).
+        // `terminal/create`'s response shape has no room for an error — only
+        // `terminalId` — so surface the failure the way a real shell would
+        // (a message plus a non-zero exit) rather than rejecting the
+        // JSON-RPC call. The agent discovers it via `terminal/output`'s
+        // `exitStatus`/`output`, same as after any other command.
+        const message = err instanceof Error ? err.message : String(err)
+        buffer.append(`${message}\n`)
+        options.pushEvent({ type: 'terminal', id, chunk: `${message}\n` })
+        settleTerminalExit(session, { exitCode: 127, signal: null })
+      }
+
+      return { terminalId: id }
+    },
+
+    async onOutput(params: TerminalOutputRequest): Promise<TerminalOutputResponse> {
+      const session = sessions.get(params.terminalId)
+      if (!session) return { output: '', truncated: false, exitStatus: null }
+      return {
+        output: session.buffer.output(),
+        truncated: session.buffer.isTruncated(),
+        exitStatus: session.exitStatus,
+      }
+    },
+
+    async onWaitForExit(params: WaitForTerminalExitRequest): Promise<WaitForTerminalExitResponse> {
+      const session = sessions.get(params.terminalId)
+      if (!session) return { exitCode: null, signal: null }
+      if (session.exitStatus) {
+        return { exitCode: session.exitStatus.exitCode ?? null, signal: session.exitStatus.signal ?? null }
+      }
+      return new Promise((resolve) => {
+        session.exitWaiters.push((status) => resolve({ exitCode: status.exitCode ?? null, signal: status.signal ?? null }))
+      })
+    },
+
+    async onKill(params: KillTerminalRequest): Promise<KillTerminalResponse> {
+      const session = sessions.get(params.terminalId)
+      if (session?.term && !session.exitStatus) killTerminalProcess(session.term)
+      return {}
+    },
+
+    async onRelease(params: ReleaseTerminalRequest): Promise<ReleaseTerminalResponse> {
+      const session = sessions.get(params.terminalId)
+      if (!session) return {}
+      if (session.term && !session.exitStatus) killTerminalProcess(session.term)
+      disposeSession(session)
+      sessions.delete(params.terminalId)
+      return {}
+    },
+
+    /** Reap every still-open terminal — called from `sendTurn`'s `finally`
+     * alongside `child.kill()` so a turn that ends (normally, on timeout, or
+     * on error) without the agent releasing its terminals doesn't leak
+     * child processes or listeners past the life of the turn. */
+    disposeAll(): void {
+      for (const session of sessions.values()) {
+        if (session.term && !session.exitStatus) killTerminalProcess(session.term)
+        disposeSession(session)
+      }
+      sessions.clear()
+    },
+  }
+}
+
+type TerminalRegistry = ReturnType<typeof createTerminalRegistry>
+
+// ---------------------------------------------------------------------------
 // Build the default client app with stubs for the request shapes the agent
 // needs to talk to us.
 // ---------------------------------------------------------------------------
@@ -181,7 +427,8 @@ function spawnBinary(opts: SendTurnOptions): {
 function buildClientApp(
   permissionTimeoutMs: number,
   permissionMode: 'ask' | 'auto' | 'deny',
-  permissionCallback?: SendTurnOptions['permissionCallback']
+  permissionCallback: SendTurnOptions['permissionCallback'],
+  terminals: TerminalRegistry
 ) {
   return (
     client({ name: 'notionforge-harness' })
@@ -243,13 +490,11 @@ function buildClientApp(
         if (params.path) await writeFile(params.path, params.content ?? '', 'utf8')
         return {}
       })
-      .onRequest('terminal/create', async () => ({
-        terminalId: `term_${Math.random().toString(36).slice(2, 10)}`,
-      }))
-      .onRequest('terminal/output', async () => ({ output: '', truncated: false, exitStatus: null }))
-      .onRequest('terminal/release', async () => ({}))
-      .onRequest('terminal/kill', async () => ({}))
-      .onRequest('terminal/wait_for_exit', async () => ({ exitCode: null, signal: null }))
+      .onRequest('terminal/create', async (ctx) => terminals.onCreate(ctx.params))
+      .onRequest('terminal/output', async (ctx) => terminals.onOutput(ctx.params))
+      .onRequest('terminal/release', async (ctx) => terminals.onRelease(ctx.params))
+      .onRequest('terminal/kill', async (ctx) => terminals.onKill(ctx.params))
+      .onRequest('terminal/wait_for_exit', async (ctx) => terminals.onWaitForExit(ctx.params))
   )
 }
 
@@ -430,9 +675,11 @@ export async function sendTurn(opts: SendTurnOptions): Promise<SendTurnResult> {
   let pinnedSessionId: string | null = null
   let agentName = 'unknown'
 
+  const terminals = createTerminalRegistry({ defaultCwd: opts.cwd, defaultEnv: opts.env, pushEvent })
+
   try {
     const stream = ndJsonStream(writable, readable)
-    const app = buildClientApp(opts.permissionTimeoutMs ?? 50, opts.permissionMode ?? 'ask', opts.permissionCallback)
+    const app = buildClientApp(opts.permissionTimeoutMs ?? 50, opts.permissionMode ?? 'ask', opts.permissionCallback, terminals)
 
     const turnPromise = new Promise<void>((resolve, reject) => {
       // `connectWith` returns its own promise, independent of our
@@ -531,6 +778,10 @@ export async function sendTurn(opts: SendTurnOptions): Promise<SendTurnResult> {
 
     return { envelopes, sessionId: pinnedSessionId, agentName }
   } finally {
+    // Reap any terminals the agent never got around to `terminal/release`ing
+    // (a hung/killed turn, an agent bug) so their child processes and
+    // onData/onExit listeners don't outlive this turn.
+    terminals.disposeAll()
     try {
       child.kill()
     } catch {
