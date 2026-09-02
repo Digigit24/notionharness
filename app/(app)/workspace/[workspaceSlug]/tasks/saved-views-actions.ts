@@ -5,7 +5,7 @@ import { getPayloadClient } from '@/lib/payload'
 import { getCurrentPayloadUser } from '@/lib/current-user'
 import type { SavedView } from '@/payload-types'
 import type { SavedViewScope } from '@/collections/SavedViews'
-import { DEFAULT_TASK_VIEW_CONFIG, type TaskViewConfig } from '@/lib/task-views/types'
+import type { TaskViewConfig } from '@/lib/task-views/types'
 
 // ROADMAP B-4 "Work" — CRUD for saved task views (collections/SavedViews.ts).
 // Scoping is enforced server-side, never trusted from the client, same rule
@@ -79,7 +79,12 @@ export async function createSavedView({
       project: scope === 'project' ? projectId : null,
       owner: scope === 'mine' ? user.id : null,
       createdBy: user.id,
-      config,
+      // TaskViewConfig is a plain JSON-serializable object at runtime, but
+      // as a concrete interface (no index signature) it isn't structurally
+      // assignable to Payload's json-field value type (Record<string,
+      // unknown>-shaped) — cast at the call site rather than loosen the
+      // interface itself just to satisfy this one write.
+      config: config as unknown as Record<string, unknown>,
     },
     overrideAccess: true,
   })
@@ -112,7 +117,7 @@ export async function updateSavedView({
     id,
     data: {
       ...(name !== undefined ? { name: name.trim() || existing.name } : {}),
-      ...(config !== undefined ? { config } : {}),
+      ...(config !== undefined ? { config: config as unknown as Record<string, unknown> } : {}),
     },
     overrideAccess: true,
   })
@@ -126,21 +131,4 @@ export async function deleteSavedView(id: number): Promise<void> {
   await assertCanWrite(existing, user.id)
 
   await payload.delete({ collection: 'saved-views', id, overrideAccess: true })
-}
-
-/** Reads a saved view's `config` back as a `TaskViewConfig`, defaulting
- * anything the stored blob is missing (e.g. an older saved view predating a
- * newly added config field) to `DEFAULT_TASK_VIEW_CONFIG`'s value — the
- * `config` json field is opaque to Payload, so this is the one place that
- * gives it real shape. */
-export function savedViewConfig(view: SavedView): TaskViewConfig {
-  const raw = (view.config ?? {}) as Partial<TaskViewConfig>
-  return {
-    view: raw.view ?? DEFAULT_TASK_VIEW_CONFIG.view,
-    filters: { ...DEFAULT_TASK_VIEW_CONFIG.filters, ...raw.filters },
-    sort: raw.sort ?? DEFAULT_TASK_VIEW_CONFIG.sort,
-    groupBy: raw.groupBy ?? DEFAULT_TASK_VIEW_CONFIG.groupBy,
-    columns: { ...DEFAULT_TASK_VIEW_CONFIG.columns, ...raw.columns },
-    density: raw.density ?? DEFAULT_TASK_VIEW_CONFIG.density,
-  }
 }

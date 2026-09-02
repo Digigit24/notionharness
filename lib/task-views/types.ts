@@ -2,9 +2,11 @@ import { TASK_STATUS_CATEGORIES } from '@/collections/TaskStatuses'
 import {
   taskMatchesFilters as taskMatchesTaskFilters,
   type TaskFilters,
+  type TaskGroupBy,
+  type TaskSort,
   type TaskSortField,
 } from '@/lib/task-views/data-layer'
-import type { Task, TaskStatus } from '@/payload-types'
+import type { SavedView, Task, TaskStatus } from '@/payload-types'
 
 // ROADMAP B-4 "Work" — the tasks board/list/table's own filter/sort/group/
 // column/density shape, used both for the ad-hoc (unsaved) view state a user
@@ -76,8 +78,8 @@ export type TaskViewMode = 'board' | 'list' | 'table'
 export interface TaskViewConfig {
   view: TaskViewMode
   filters: TaskViewFilters
-  sort: TaskViewSort | null
-  groupBy: TaskViewGroupBy
+  sort: TaskSort | null
+  groupBy: TaskGroupBy
   columns: TaskViewColumns
   density: TaskViewDensity
 }
@@ -264,4 +266,25 @@ export function applyTaskViewConfigToSearchParams(params: URLSearchParams, confi
   setOrDelete('density', config.density === 'comfortable' ? null : config.density)
   const hiddenCols = COLUMN_KEYS.filter((key) => !config.columns[key])
   setOrDelete('cols', hiddenCols.length === 0 ? null : COLUMN_KEYS.filter((key) => config.columns[key]).join(','))
+}
+
+/** Reads a saved view's `config` back as a `TaskViewConfig`, defaulting
+ * anything the stored blob is missing (e.g. an older saved view predating a
+ * newly added config field) to `DEFAULT_TASK_VIEW_CONFIG`'s value — the
+ * `config` json field is opaque to Payload, so this is the one place that
+ * gives it real shape. Lives here rather than in `saved-views-actions.ts`
+ * because that file is `'use server'` — every export from a server-actions
+ * file must be an async Server Action, and this is a plain pure function
+ * both a server action and a client component (`task-board.tsx`) need to
+ * call directly. */
+export function savedViewConfig(view: SavedView): TaskViewConfig {
+  const raw = (view.config ?? {}) as Partial<TaskViewConfig>
+  return {
+    view: raw.view ?? DEFAULT_TASK_VIEW_CONFIG.view,
+    filters: { ...DEFAULT_TASK_VIEW_CONFIG.filters, ...raw.filters },
+    sort: raw.sort ?? DEFAULT_TASK_VIEW_CONFIG.sort,
+    groupBy: raw.groupBy ?? DEFAULT_TASK_VIEW_CONFIG.groupBy,
+    columns: { ...DEFAULT_TASK_VIEW_CONFIG.columns, ...raw.columns },
+    density: raw.density ?? DEFAULT_TASK_VIEW_CONFIG.density,
+  }
 }

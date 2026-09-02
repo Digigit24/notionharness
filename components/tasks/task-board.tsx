@@ -42,11 +42,11 @@ import {
   createSavedView,
   deleteSavedView,
   listSavedViews,
-  savedViewConfig,
   updateSavedView,
 } from '@/app/(app)/workspace/[workspaceSlug]/tasks/saved-views-actions'
 import {
   applyTaskViewConfigToSearchParams,
+  savedViewConfig,
   taskViewConfigFromSearchParams,
   taskViewFiltersToTaskFilters,
   type TaskViewConfig,
