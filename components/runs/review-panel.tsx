@@ -1,17 +1,32 @@
 'use client'
 
 import { useMemo, useState } from 'react'
+import Link from 'next/link'
 import { ChevronDown, ChevronRight, File, FileWarning, GitBranch } from 'lucide-react'
 import { approveAndMergeRun, getFileDiffAction, requestChangesOnRun } from '@/app/(app)/workspace/[workspaceSlug]/runs/[runId]/review/actions'
 import { parseUnifiedDiff, type DiffLine } from '@/lib/run-worktrees/parse-unified-diff'
 import type { ChangedFile, FileChangeStatus, WorktreeState } from '@/lib/run-worktrees/diff'
-import type { Run } from '@/lib/broker'
+import type { Run, RunStatus } from '@/lib/broker'
+import { DetailLayout, type DetailLayoutTab } from '@/components/layout/detail-layout'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 
 // ROADMAP P6.4 review surface, first pass. Inline diff mode only (not
 // side-by-side) — the task brief explicitly said "don't half-build both,"
 // and inline is the faster of the two to render correctly: side-by-side
 // needs column-alignment logic for hunks that add/remove different line
 // counts, inline just needs the unified patch as-is.
+//
+// ROADMAP B-0 — restructured onto `<DetailLayout>` (components/layout/
+// detail-layout.tsx): header (breadcrumb/title/status badge/approve &
+// merge + request-changes actions) is rendered once outside the tab area,
+// a persistent right rail carries run/task/agent/worktree metadata, and
+// the file-tree + diff viewer becomes the single "Diff" tab. Only one real
+// tab exists today because that's genuinely all this page renders — no
+// fake empty tabs were added; a "Trace"/"Activity" tab is a natural
+// addition once this page's scope grows in a later batch (see the P6.4
+// comment above: comment-threading was already out of scope for this
+// pass, and would be a second real tab when it lands).
 interface TreeNode {
   name: string
   path: string
@@ -63,6 +78,16 @@ const STATUS_LABELS: Record<FileChangeStatus, string> = {
   renamed: 'R',
   copied: 'C',
   unknown: '?',
+}
+
+const STATUS_BADGE_VARIANT: Record<RunStatus, 'default' | 'secondary' | 'destructive' | 'outline'> = {
+  completed: 'default',
+  failed: 'destructive',
+  cancelled: 'outline',
+  queued: 'secondary',
+  dispatched: 'secondary',
+  running: 'secondary',
+  waiting_directory: 'secondary',
 }
 
 export function ReviewPanel({
@@ -151,95 +176,69 @@ export function ReviewPanel({
 
   const selectedDiff = selected ? diffCache[selected.path] : null
 
-  return (
+  const primaryAction = (
+    <>
+      <Button
+        type="button"
+        size="sm"
+        disabled={busy || run.status !== 'completed'}
+        onClick={() => void handleApprove()}
+        title={run.status !== 'completed' ? 'Only a completed run can be approved and merged.' : undefined}
+      >
+        Approve &amp; merge
+      </Button>
+      <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => setShowRequestForm((v) => !v)}>
+        Request changes
+      </Button>
+    </>
+  )
+
+  const diffTabContent = (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="border-b border-black/10 px-6 py-4 dark:border-white/10">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h1 className="text-lg font-semibold">Run #{run.id} review</h1>
-            <p className="mt-0.5 text-sm text-black/50 dark:text-white/50">
-              {taskTitle ?? 'No task'} {agentName && <>· {agentName}</>} · status: {run.status}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              disabled={busy || run.status !== 'completed'}
-              onClick={() => void handleApprove()}
-              title={run.status !== 'completed' ? 'Only a completed run can be approved and merged.' : undefined}
-              className="rounded bg-black px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40 dark:bg-white dark:text-black"
-            >
-              Approve &amp; merge
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => setShowRequestForm((v) => !v)}
-              className="rounded border border-black/10 px-3 py-1.5 text-xs font-medium hover:bg-black/[.04] disabled:opacity-40 dark:border-white/10 dark:hover:bg-white/[.06]"
-            >
-              Request changes
-            </button>
-          </div>
-        </div>
-
-        {showRequestForm && (
-          <div className="mt-3 flex flex-col gap-2 rounded border border-black/10 p-3 dark:border-white/10">
-            <textarea
-              autoFocus
-              value={requestNote}
-              onChange={(e) => setRequestNote(e.target.value)}
-              placeholder="What needs to change? (recorded on the task's Activity tab and queued as a follow-up run)"
-              rows={3}
-              className="w-full rounded border border-black/10 bg-transparent px-2 py-1.5 text-sm outline-none dark:border-white/10"
-            />
-            <div className="flex justify-end gap-2">
-              <button type="button" onClick={() => setShowRequestForm(false)} className="rounded px-3 py-1.5 text-xs hover:bg-black/[.06] dark:hover:bg-white/[.08]">
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={busy || !requestNote.trim()}
-                onClick={() => void handleRequestChanges()}
-                className="rounded bg-black px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40 dark:bg-white dark:text-black"
-              >
-                Queue follow-up run
-              </button>
+      {(showRequestForm || notice || error) && (
+        <div className="border-b border-black/10 px-6 py-3 dark:border-white/10">
+          {showRequestForm && (
+            <div className="flex flex-col gap-2 rounded border border-black/10 p-3 dark:border-white/10">
+              <textarea
+                autoFocus
+                value={requestNote}
+                onChange={(e) => setRequestNote(e.target.value)}
+                placeholder="What needs to change? (recorded on the task's Activity tab and queued as a follow-up run)"
+                rows={3}
+                className="w-full rounded border border-black/10 bg-transparent px-2 py-1.5 text-sm outline-none dark:border-white/10"
+              />
+              <div className="flex justify-end gap-2">
+                <button type="button" onClick={() => setShowRequestForm(false)} className="rounded px-3 py-1.5 text-xs hover:bg-black/[.06] dark:hover:bg-white/[.08]">
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={busy || !requestNote.trim()}
+                  onClick={() => void handleRequestChanges()}
+                  className="rounded bg-black px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40 dark:bg-white dark:text-black"
+                >
+                  Queue follow-up run
+                </button>
+              </div>
             </div>
-          </div>
-        )}
-
-        {notice && <p className="mt-2 text-xs text-green-600 dark:text-green-400">{notice}</p>}
-        {error && <p className="mt-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
-
-        <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-black/50 dark:text-white/50">
-          <span className="flex items-center gap-1">
-            <GitBranch size={12} />
-            {worktreeState.branchExists ? run.status : 'no branch'}
-          </span>
-          {worktreeState.branchExists && (
-            <>
-              <span>{worktreeState.aheadCount} ahead / {worktreeState.behindCount} behind base</span>
-              <span className="font-mono">{worktreeState.headCommit?.slice(0, 10)}</span>
-              {worktreeState.headSubject && <span className="italic">&ldquo;{worktreeState.headSubject}&rdquo;</span>}
-            </>
           )}
-          <span className={worktreeState.worktreeExists ? '' : 'italic'}>
-            {worktreeState.worktreeExists ? 'worktree on disk' : 'worktree already cleaned up'}
-          </span>
-          {worktreeState.hasUncommittedChanges && (
-            <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
-              <FileWarning size={12} /> uncommitted changes in worktree
-            </span>
-          )}
+          {notice && <p className="mt-2 text-xs text-green-600 dark:text-green-400">{notice}</p>}
+          {error && <p className="mt-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
         </div>
-      </div>
+      )}
 
       {!worktreeState.branchExists ? (
-        <div className="flex flex-1 items-center justify-center p-8 text-center">
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
           <p className="max-w-sm text-sm text-black/50 dark:text-white/50">
             Nothing to review yet — no worktree/branch has been created for this run. That happens once a dispatcher actually
             executes the run (Pillar 4); until then there&apos;s no diff to show.
           </p>
+          <Link
+            href={`/workspace/${workspaceSlug}/review`}
+            className="text-xs font-medium text-foreground underline-offset-4 hover:underline"
+          >
+            Back to Review list
+          </Link>
         </div>
       ) : (
         <div className="flex min-h-0 flex-1">
@@ -263,6 +262,84 @@ export function ReviewPanel({
         </div>
       )}
     </div>
+  )
+
+  const tabs: DetailLayoutTab[] = [
+    { key: 'diff', label: 'Diff', count: files.length, content: diffTabContent },
+  ]
+
+  const rightRail = (
+    <div className="flex flex-col gap-4 text-sm">
+      <div>
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-black/40 dark:text-white/40">Task</h2>
+        {run.taskId ? (
+          <Link
+            href={`/workspace/${workspaceSlug}/tasks?task=${run.taskId}`}
+            className="mt-1 block truncate font-medium hover:underline"
+          >
+            {taskTitle ?? `Task #${run.taskId}`}
+          </Link>
+        ) : (
+          <p className="mt-1 text-black/50 dark:text-white/50">No linked task</p>
+        )}
+      </div>
+
+      <div>
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-black/40 dark:text-white/40">Agent</h2>
+        <p className="mt-1">{agentName ?? 'Unassigned'}</p>
+      </div>
+
+      <div>
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-black/40 dark:text-white/40">Run</h2>
+        <p className="mt-1">
+          #{run.id} · attempt {run.attempt}/{run.maxAttempts}
+        </p>
+        {run.startedAt && <p className="mt-0.5 text-xs text-black/50 dark:text-white/50">started {new Date(run.startedAt).toLocaleString()}</p>}
+        {run.completedAt && <p className="mt-0.5 text-xs text-black/50 dark:text-white/50">completed {new Date(run.completedAt).toLocaleString()}</p>}
+      </div>
+
+      <div>
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-black/40 dark:text-white/40">Branch</h2>
+        <div className="mt-1 flex flex-col gap-1 text-xs text-black/60 dark:text-white/60">
+          <span className="flex items-center gap-1">
+            <GitBranch size={12} />
+            {worktreeState.branchExists ? 'branch created' : 'no branch'}
+          </span>
+          {worktreeState.branchExists && (
+            <>
+              <span>
+                {worktreeState.aheadCount} ahead / {worktreeState.behindCount} behind base
+              </span>
+              {worktreeState.headCommit && <span className="font-mono">{worktreeState.headCommit.slice(0, 10)}</span>}
+              {worktreeState.headSubject && <span className="italic">&ldquo;{worktreeState.headSubject}&rdquo;</span>}
+            </>
+          )}
+          <span className={worktreeState.worktreeExists ? '' : 'italic'}>
+            {worktreeState.worktreeExists ? 'worktree on disk' : 'worktree already cleaned up'}
+          </span>
+          {worktreeState.hasUncommittedChanges && (
+            <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
+              <FileWarning size={12} /> uncommitted changes in worktree
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+
+  return (
+    <DetailLayout
+      breadcrumb={[
+        { label: 'Review', href: `/workspace/${workspaceSlug}/review` },
+        { label: `Run #${run.id}` },
+      ]}
+      title={`Run #${run.id}`}
+      statusBadge={<Badge variant={STATUS_BADGE_VARIANT[run.status]}>{run.status}</Badge>}
+      primaryAction={primaryAction}
+      tabs={tabs}
+      defaultTab="diff"
+      rightRail={rightRail}
+    />
   )
 }
 
