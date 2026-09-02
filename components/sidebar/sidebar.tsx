@@ -11,8 +11,10 @@ import { PageTree } from './page-tree'
 import { WorkspaceSwitcher } from './workspace-switcher'
 import { SearchModal } from './search-modal'
 import { NotificationsBell } from '@/components/notifications/notifications-bell'
+import { ModeSwitcher } from './mode-switcher'
 import { createPage, deletePageForever, restorePage } from '@/app/(app)/actions'
 import type { Page, Workspace } from '@/payload-types'
+import { WORK_MODE_SUBROUTES, type WorkSubRoute } from '@/lib/entity-links'
 
 export function Sidebar({
   workspace,
@@ -68,14 +70,28 @@ export function Sidebar({
   const [favoritesOpen, setFavoritesOpen] = useState(true)
   const [trashOpen, setTrashOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
+  // ROADMAP P6.5 Q3 — remember which Work sub-route the user last visited
+  // so the ModeSwitcher's Work pill lands them where they were, not at the
+  // inbox default. Null on first paint (SSR + before localStorage sync).
+  const [lastWorkSubRoute, setLastWorkSubRoute] = useState<WorkSubRoute | null>(null)
 
   useEffect(() => {
     try {
       const raw = localStorage.getItem(storageKey)
       if (raw) {
-        const parsed = JSON.parse(raw) as { expanded?: number[]; collapsed?: boolean }
+        const parsed = JSON.parse(raw) as {
+          expanded?: number[]
+          collapsed?: boolean
+          lastWorkSubRoute?: string
+        }
         if (Array.isArray(parsed.expanded)) setExpandedIds(new Set(parsed.expanded))
         if (typeof parsed.collapsed === 'boolean') setCollapsed(parsed.collapsed)
+        if (
+          typeof parsed.lastWorkSubRoute === 'string' &&
+          (WORK_MODE_SUBROUTES as readonly string[]).includes(parsed.lastWorkSubRoute)
+        ) {
+          setLastWorkSubRoute(parsed.lastWorkSubRoute as WorkSubRoute)
+        }
       }
     } catch {
       // ignore malformed local storage
@@ -85,8 +101,25 @@ export function Sidebar({
 
   useEffect(() => {
     if (!ready) return
-    localStorage.setItem(storageKey, JSON.stringify({ expanded: [...expandedIds], collapsed }))
-  }, [ready, expandedIds, collapsed, storageKey])
+    localStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        expanded: [...expandedIds],
+        collapsed,
+        lastWorkSubRoute: lastWorkSubRoute ?? undefined,
+      }),
+    )
+  }, [ready, expandedIds, collapsed, lastWorkSubRoute, storageKey])
+
+  // Detect the current Work sub-route from the URL and persist it.
+  // Mirrors the ModeSwitcher's own parser so the two stay in sync;
+  // keep them structurally separate to avoid a circular import.
+  useEffect(() => {
+    const sub = matchWorkSubRoute(pathname, workspace.slug)
+    if (sub && sub !== lastWorkSubRoute) {
+      setLastWorkSubRoute(sub)
+    }
+  }, [pathname, workspace.slug, lastWorkSubRoute])
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -149,6 +182,18 @@ export function Sidebar({
             <ChevronsLeft size={16} />
           </button>
         </div>
+      </div>
+
+      {/* ROADMAP P6.5 — three-way Plan/Work/Review mode switcher. Lives on
+          its own row under the workspace header because the sidebar is only
+          256px wide and WorkspaceSwitcher + notifications + collapse button
+          already fill the header row. Mounted in this position so it's the
+          second thing the user sees, above the per-mode navigation links. */}
+      <div className="px-2 pt-2">
+        <ModeSwitcher
+          workspaceSlug={workspace.slug}
+          lastWorkSubRoute={lastWorkSubRoute}
+        />
       </div>
 
       <button
@@ -339,4 +384,23 @@ function SectionHeader({
       {label}
     </button>
   )
+}
+
+/**
+ * Detect the Work sub-route for the current pathname. Returns `null`
+ * for paths that aren't a Work surface (the ModeSwitcher uses the same
+ * set of routes to highlight Work as active, so the two stay in sync).
+ *
+ * Kept structurally separate from `ModeSwitcher.parseLocation` to avoid
+ * a circular import — the sidebar lives in this file and the switcher
+ * lives in `mode-switcher.tsx`.
+ */
+function matchWorkSubRoute(pathname: string, workspaceSlug: string): WorkSubRoute | null {
+  const root = `/workspace/${workspaceSlug}/`
+  if (!pathname.startsWith(root)) return null
+  const tail = pathname.slice(root.length).split('?')[0]
+  if ((WORK_MODE_SUBROUTES as readonly string[]).includes(tail)) {
+    return tail as WorkSubRoute
+  }
+  return null
 }
