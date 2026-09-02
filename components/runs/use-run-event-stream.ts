@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import type { Run, RunMessageRow } from '@/lib/broker/types'
+import type { RunEvent } from '@/lib/run-events'
 
 export interface RunEventSnapshot {
   run: Run
@@ -17,49 +18,148 @@ export function mergeRunEvents(current: RunMessageRow[], incoming: RunMessageRow
   return [...bySeq.values()].sort((a, b) => a.seq - b.seq)
 }
 
+/** Wire shape of one SSE `data:` frame from `/api/runs/[runId]/events/stream`. */
+interface RunEventFrame {
+  runId: number
+  seq: number
+  event: RunEvent
+  createdAt: string
+}
+
+/**
+ * `id` is whatever the caller's `load` resolves against — a single run id
+ * (block-anchored-thread.tsx) or a task id that can fan out to several runs
+ * (use-thread-data.ts, backing ThreadLaneView/ThreadFullPage/ThreadDrawerTab).
+ * Live event content for every run `load` returns streams over one SSE
+ * connection per run (ROADMAP P5.7) instead of the old 2s client poll; `load`
+ * itself is still called on a much longer interval purely to notice a run
+ * that didn't exist yet at mount (a task can gain a second run while its
+ * drawer is open) — there is no per-task push channel, only the per-run one
+ * this route provides, so discovering *new* runs still means asking.
+ */
+const RUN_DISCOVERY_INTERVAL_MS = 8000
+
 /** Polls only while mounted/observed, and coalesces updates into ~50ms flushes. */
 export function useRunEventStream(taskId: number, observed: boolean, load: RunEventLoader) {
   const [snapshots, setSnapshots] = useState<RunEventSnapshot[]>([])
-  const pending = useRef<RunEventSnapshot[] | null>(null)
-  const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const loadRef = useRef(load)
   loadRef.current = load
 
   useEffect(() => {
     if (!observed) return
     let active = true
+
+    // Per-run bookkeeping, local to this mount/id — reset whenever `taskId`
+    // or `observed` changes since the effect below tears everything down.
+    const runMeta = new Map<number, Run>()
+    const sources = new Map<number, EventSource>()
+    const pending = new Map<number, RunMessageRow[]>()
+    let flushTimer: ReturnType<typeof setTimeout> | null = null
+
     const flush = () => {
-      flushTimer.current = null
-      const next = pending.current
-      pending.current = null
-      if (!next || !active) return
+      flushTimer = null
+      if (!active || pending.size === 0) return
+      const toApply = new Map(pending)
+      pending.clear()
       setSnapshots((current) => {
-        const prior = new Map(current.map((item) => [item.run.id, item]))
-        for (const item of next) {
-          const old = prior.get(item.run.id)
-          prior.set(item.run.id, { run: item.run, events: mergeRunEvents(old?.events ?? [], item.events) })
+        const bySnapshotId = new Map(current.map((item) => [item.run.id, item]))
+        for (const [runId, rows] of toApply) {
+          const run = runMeta.get(runId) ?? bySnapshotId.get(runId)?.run
+          if (!run) continue
+          const existing = bySnapshotId.get(runId)
+          bySnapshotId.set(runId, { run, events: mergeRunEvents(existing?.events ?? [], rows) })
         }
-        return [...prior.values()].sort((a, b) => b.run.createdAt.localeCompare(a.run.createdAt))
+        return [...bySnapshotId.values()].sort((a, b) => b.run.createdAt.localeCompare(a.run.createdAt))
       })
     }
-    const refresh = async () => {
-      try {
-        const next = await loadRef.current(taskId)
+
+    const scheduleFlush = () => {
+      if (!flushTimer) flushTimer = setTimeout(flush, 50)
+    }
+
+    const closeSource = (runId: number) => {
+      sources.get(runId)?.close()
+      sources.delete(runId)
+    }
+
+    /** Opens one SSE connection for a run this hook hasn't seen before.
+     * `?since=` seeds the very first connect; every reconnect after that is
+     * the browser's own native EventSource retry, which resends
+     * `Last-Event-ID` (set from each frame's `id:` on the server) so the
+     * route resumes from the last seq this client actually received — no
+     * manual reconnect/backoff logic needed here. */
+    const openSource = (runId: number, initialEvents: RunMessageRow[]) => {
+      if (sources.has(runId)) return
+      const lastSeq = initialEvents.reduce((max, row) => Math.max(max, row.seq), 0)
+      const source = new EventSource(`/api/runs/${runId}/events/stream?since=${lastSeq}`)
+      sources.set(runId, source)
+
+      source.onmessage = (ev) => {
         if (!active) return
-        pending.current = next
-        if (!flushTimer.current) flushTimer.current = setTimeout(flush, 50)
-      } catch {
-        // A later poll retries; the drawer remains usable while a daemon is offline.
+        let frame: RunEventFrame
+        try {
+          frame = JSON.parse(ev.data) as RunEventFrame
+        } catch {
+          return // Malformed frame — the next one recovers.
+        }
+        const row: RunMessageRow = { seq: frame.seq, event: frame.event, createdAt: frame.createdAt }
+        const bucket = pending.get(runId)
+        if (bucket) bucket.push(row)
+        else pending.set(runId, [row])
+        scheduleFlush()
+        // The route closes right after sending `done`; close from this end
+        // too so the browser doesn't treat that as a network drop and try
+        // to auto-reconnect into a run that will never emit anything else.
+        if (frame.event.type === 'done') closeSource(runId)
+      }
+      source.onerror = () => {
+        // Network drop or a transient server error: EventSource's built-in
+        // reconnect (with Last-Event-ID) handles resuming. A run that's
+        // already terminal gets closed by the `done` handler above instead
+        // of ever reaching here.
       }
     }
-    void refresh()
-    const timer = setInterval(() => void refresh(), 2000)
+
+    const applyList = (list: RunEventSnapshot[]) => {
+      if (!active || list.length === 0) return
+      // Side effects (tracking run metadata, opening SSE connections) happen
+      // once here, not inside the `setSnapshots` updater below — React can
+      // invoke a functional updater more than once for the same commit.
+      for (const { run, events } of list) {
+        runMeta.set(run.id, run)
+        openSource(run.id, events)
+      }
+      setSnapshots((current) => {
+        const bySnapshotId = new Map(current.map((item) => [item.run.id, item]))
+        for (const { run, events } of list) {
+          const existing = bySnapshotId.get(run.id)
+          bySnapshotId.set(run.id, { run, events: mergeRunEvents(existing?.events ?? [], events) })
+        }
+        return [...bySnapshotId.values()].sort((a, b) => b.run.createdAt.localeCompare(a.run.createdAt))
+      })
+    }
+
+    const discoverRuns = async () => {
+      try {
+        const list = await loadRef.current(taskId)
+        if (!active) return
+        applyList(list)
+      } catch {
+        // The next discovery tick retries; already-open SSE connections for
+        // known runs keep flowing regardless.
+      }
+    }
+
+    void discoverRuns()
+    const discoveryTimer = setInterval(() => void discoverRuns(), RUN_DISCOVERY_INTERVAL_MS)
+
     return () => {
       active = false
-      clearInterval(timer)
-      if (flushTimer.current) clearTimeout(flushTimer.current)
-      flushTimer.current = null
-      pending.current = null
+      clearInterval(discoveryTimer)
+      if (flushTimer) clearTimeout(flushTimer)
+      for (const source of sources.values()) source.close()
+      sources.clear()
+      pending.clear()
     }
   }, [taskId, observed])
 

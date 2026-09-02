@@ -18,6 +18,6 @@ export {
   getActiveRunForAgent,
 } from './runs'
 export type { SettleOutcome } from './runs'
-export { appendRunEvent, listRunEvents } from './messages'
+export { appendRunEvent, listRunEvents, listRunEventsSince } from './messages'
 export { recordUsage } from './usage'
 export type { UsageInput } from './usage'
