@@ -18,7 +18,8 @@
     "test:agent-page-writes": "tsx scripts/test-agent-page-writes.ts",
     "test:render-performance": "tsx scripts/test-render-performance.ts",
     "test:runEvent-adapter": "tsx scripts/test-runEvent-adapter.ts",
-    "dispatcher:loop": "tsx scripts/run-dispatcher-loop.ts"
+    "dispatcher:loop": "tsx scripts/run-dispatcher-loop.ts",
+    "test:transcript": "tsx scripts/test-transcript-pipeline.ts"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.4.0",
