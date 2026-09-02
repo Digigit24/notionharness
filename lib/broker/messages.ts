@@ -39,11 +39,15 @@ export async function appendRunEvent(runId: number, event: RunEvent): Promise<{ 
 /** Reads a run's transcript in `seq` order — the only ordering that's ever correct. */
 export async function listRunEvents(runId: number): Promise<RunMessageRow[]> {
   const pool = getBrokerPool()
-  const res = await pool.query<{ seq: string | number; event: RunEvent; created_at: string }>(
+  // node-postgres's default type parser returns `timestamptz` as a `Date`
+  // object (no custom OID parser configured on this pool — see db.ts) —
+  // `RunMessageRow.createdAt` promises `string` (ISO), so convert here
+  // rather than leaking a Date to every consumer of this row shape.
+  const res = await pool.query<{ seq: string | number; event: RunEvent; created_at: Date }>(
     `SELECT seq, event, created_at FROM run_messages WHERE run_id = $1 ORDER BY seq ASC`,
     [runId],
   )
-  return res.rows.map((r) => ({ seq: Number(r.seq), event: r.event, createdAt: r.created_at }))
+  return res.rows.map((r) => ({ seq: Number(r.seq), event: r.event, createdAt: r.created_at.toISOString() }))
 }
 
 /** ROADMAP 6.3 — the run-card block's "N steps" chip needs a count, not the

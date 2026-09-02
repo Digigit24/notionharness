@@ -21,14 +21,25 @@ interface RunRow {
   page_subtree_block_id: string | null
   prompt: string | null
   next_seq: string | number
-  lease_expires_at: string | null
-  started_at: string | null
-  completed_at: string | null
+  // node-postgres's default type parser returns `timestamp`/`timestamptz`
+  // columns as `Date` objects, not strings — this pool has no custom OID
+  // parser configured (lib/broker/db.ts), so these five fields are `Date`
+  // at runtime despite Postgres storing them as timestamps. `Run`'s own
+  // type contract promises `string` (ISO), so `rowToRun` below must
+  // convert explicitly — every consumer (e.g. Array.sort's .localeCompare)
+  // trusted that contract and broke at runtime when it silently wasn't met.
+  lease_expires_at: Date | null
+  started_at: Date | null
+  completed_at: Date | null
   error: string | null
   mcp_overlay: unknown
   run_token: string | null
-  created_at: string
-  updated_at: string
+  created_at: Date
+  updated_at: Date
+}
+
+function toISOStringOrNull(value: Date | null): string | null {
+  return value === null ? null : value.toISOString()
 }
 
 function rowToRun(row: RunRow): Run {
@@ -49,14 +60,14 @@ function rowToRun(row: RunRow): Run {
     pageSubtreeBlockId: row.page_subtree_block_id,
     prompt: row.prompt,
     nextSeq: Number(row.next_seq),
-    leaseExpiresAt: row.lease_expires_at,
-    startedAt: row.started_at,
-    completedAt: row.completed_at,
+    leaseExpiresAt: toISOStringOrNull(row.lease_expires_at),
+    startedAt: toISOStringOrNull(row.started_at),
+    completedAt: toISOStringOrNull(row.completed_at),
     error: row.error,
     mcpOverlay: row.mcp_overlay,
     runToken: row.run_token,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
   }
 }
 
