@@ -85,15 +85,18 @@ interface ParsedLocation {
 /**
  * Parse the current pathname into a `(mode, surface, entityId)` triple.
  *
- * Routing rules (per the design doc Q3):
- *   /p/:id                  -> Plan mode, page surface, id=:id
- *   /tasks (no ?task=)      -> Work mode, no surface entity
- *   /tasks?task=:id         -> Work mode, task surface, id=:id
- *   /inbox                  -> Work mode, no surface entity
- *   /active-runs            -> Work mode, no surface entity
- *   /runs/:runId/review     -> Review mode, review surface, id=:runId
- *   /review                 -> Review mode, no surface entity
- *   anything else           -> no mode, no surface
+ * Routing rules (per the design doc Q3, with the workspace landing
+ * added as Plan mode with no surface entity):
+ *   /workspace/:slug/        -> Plan mode, no surface (workspace landing)
+ *   /workspace/:slug         -> Plan mode, no surface (workspace landing)
+ *   /p/:id (after /workspace/:slug/)  -> Plan mode, page surface, id=:id
+ *   /tasks (no ?task=)       -> Work mode, no surface entity
+ *   /tasks?task=:id          -> Work mode, task surface, id=:id
+ *   /inbox                   -> Work mode, no surface entity
+ *   /active-runs             -> Work mode, no surface entity
+ *   /runs/:runId/review      -> Review mode, review surface, id=:runId
+ *   /review                  -> Review mode, no surface entity
+ *   anything else            -> no mode, no surface
  *
  * `useSearchParams()` is intentionally avoided here because the switcher
  * needs the *raw* query string for the task highlight; pulling in the
@@ -102,7 +105,14 @@ interface ParsedLocation {
  * client (where `usePathname` is already a client-only call).
  */
 function parseLocation(pathname: string, search: string): ParsedLocation {
-  // Plan-mode pages surface.
+  // Workspace landing - Plan mode with no surface entity. Listed first
+  // so the more specific patterns below can match without this one
+  // swallowing the empty-tail case.
+  if (/^\/workspace\/[^/]+\/?$/.test(pathname)) {
+    return { mode: 'plan', surface: 'none', entityId: null }
+  }
+
+  // Plan-mode page surface.
   const pageMatch = pathname.match(/^\/workspace\/[^/]+\/p\/([^/]+)\/?$/)
   if (pageMatch) {
     return { mode: 'plan', surface: 'page', entityId: pageMatch[1] }
@@ -121,8 +131,6 @@ function parseLocation(pathname: string, search: string): ParsedLocation {
   const taskParams = new URLSearchParams(search)
   const taskId = taskParams.get('task')
   if (/^\/workspace\/[^/]+\/tasks\/?$/.test(pathname)) {
-    // The tasks list - Work mode. If `?task=:id` is present, that's a
-    // specific task surface.
     if (taskId) {
       return { mode: 'work', surface: 'task', entityId: taskId }
     }
@@ -150,37 +158,88 @@ function parseLocation(pathname: string, search: string): ParsedLocation {
  * fall back to the mode default rather than throwing — the helper's
  * contract is "fall back when the link doesn't exist yet", which keeps
  * this component synchronous and database-free.
+ *
+ * Returns `null` for `work` when on a run review (no taskId in scope
+ * from the URL alone) per the design's "falls through to Plan" rule:
+ * Work has nothing to show for a page-scoped run, and the helper
+ * surfaces that signal rather than silently absorbing a Plan URL into
+ * a Work-mode href. The caller renders the Work segment as `/inbox`
+ * so the user can still navigate to Work mode but never lands on a
+ * page editor from a click that was labeled "Work".
+ *
+ * Sanity-check matrix (each href must come from the TARGET mode's own
+ * route list - not the surface you're already on):
+ *
+ *   Surface        Plan                  Work              Review
+ *   ----------     ------------------    ---------------   -------------------
+ *   page (/p/:id)  /p/:id                /inbox            /review
+ *   task /tasks?   /workspace/:slug      /tasks?task=:id   /review
+ *                  task=:id (no Tasks.page from URL)
+ *   review         /workspace/:slug      /inbox            /runs/:runId/review
+ *   /runs/:id/rev  (no taskPageId/pageId  (no taskId from
+ *                   from URL)             URL)            self
+ *   none           /workspace/:slug      /inbox            /review
+ *                  (PLAN_MODE_DEFAULT)   (Work default)    (REVIEW_MODE_DEFAULT)
+ *
+ * Any case that doesn't match the above is a bug - either the helper
+ * is computing the wrong URL shape or the active-mode detection is
+ * drifting away from the design's mode definitions. Re-check both.
  */
 function computeLinks(loc: ParsedLocation): {
   plan: string
-  work: string
+  work: string | null
   review: string
 } {
   const { surface, entityId } = loc
 
-  // Surface-specific resolution.
+  // Plan-mode surface (a page or the workspace landing). Plan = self
+  // (the page is the Plan editor). Work = reverse lookup (page's
+  // linked task, or /inbox default). Review = run for the page's task.
   if (surface === 'page' && entityId) {
     return {
-      plan: planHrefForPage({ firstLinkedTaskId: null }),
-      work: workHrefForPage({ id: entityId }),
+      // Self in Plan mode.
+      plan: planHrefForPage({ id: entityId }),
+      // firstLinkedTaskId isn't in the URL alone, so fall back to the
+      // Work default (/inbox). The mode-switcher could lazily prefetch
+      // via an API route for the smart case; deferred to a follow-up.
+      work: workHrefForPage({ firstLinkedTaskId: null }),
+      // latestReviewReadyRunId isn't in the URL alone, so fall back to
+      // the Review default (/review).
       review: reviewHrefForPage({ latestReviewReadyRunId: null }),
     }
   }
+
+  // Work-mode surface (a task on the tasks board). Work = self (the
+  // tasks board IS the Work surface). Plan = the task's linked page
+  // editor, or Plan's default (workspace landing) when no page yet.
   if (surface === 'task' && entityId) {
     return {
-      plan: planHrefForTask({ id: entityId }),
-      // task.page isn't in the URL, so this falls back to the inbox default.
-      work: workHrefForTask({ page: null }),
-      // latest review-ready run id isn't in the URL, so this falls back to /review.
+      // task.page isn't in the URL, so fall back to PLAN_MODE_DEFAULT.
+      // Most tasks today have no linked page yet - the workspace landing
+      // is the right Plan-mode placeholder in that case.
+      plan: planHrefForTask({ page: null }),
+      // Self in Work mode.
+      work: workHrefForTask({ id: entityId }),
+      // latestReviewReadyRunId isn't in the URL alone.
       review: reviewHrefForTask({ latestReviewReadyRunId: null }),
     }
   }
+
+  // Review-mode surface (a specific run's review panel). Review = self.
+  // Plan = the run's task's linked page, or run.pageId directly, or
+  // Plan default. Work = the run's task's drawer, or null for page-
+  // scoped runs (no taskId) - see the fall-through note above.
   if (surface === 'review' && entityId) {
+    const work = workHrefForRun({ taskId: null })
     return {
-      // run.taskId isn't in the URL, so this falls back to /tasks.
-      plan: planHrefForRun({ taskId: null }),
-      // run.pageId and run.taskPageId aren't in the URL, so this falls back to /inbox.
-      work: workHrefForRun({ pageId: null, taskPageId: null }),
+      // Neither taskPageId nor pageId is in the URL alone. Fall back to
+      // PLAN_MODE_DEFAULT (workspace landing).
+      plan: planHrefForRun({ taskPageId: null, pageId: null }),
+      // For page-scoped runs this returns null - the caller renders the
+      // Work segment with the /inbox default in that case, since Work
+      // has nothing more specific to show.
+      work,
+      // Self in Review mode.
       review: reviewHrefForRun({ id: entityId }),
     }
   }
@@ -247,13 +306,29 @@ export function ModeSwitcher({ workspaceSlug, lastWorkSubRoute }: ModeSwitcherPr
   // Honor the "last Work sub-route" memory when the user is currently on
   // a non-Work surface and clicks Work. On a Work surface, the Work
   // segment is already the "current" segment and we don't navigate.
-  const workHref = loc.mode === 'work' ? links.work : resolveWorkHref(lastWorkSubRoute)
+  //
+  // For a page-scoped-run review (where `computeLinks` returned null for
+  // work per the design's "Work has nothing to show it" rule), the
+  // Work segment renders as a plain /inbox link rather than a fake
+  // page-editor URL - Work mode has nothing more specific to show.
+  const workTail =
+    links.work !== null
+      ? loc.mode === 'work'
+        ? links.work
+        : resolveWorkHref(lastWorkSubRoute)
+      : 'inbox'
 
-  const fullHref = (tail: string) => `/workspace/${workspaceSlug}/${tail.replace(/^\/+/, '')}`
+  // Build the full href from a workspace-relative tail. Empty tail
+  // (PLAN_MODE_DEFAULT for the workspace landing) means the bare
+  // `/workspace/{slug}` URL, not `/workspace/{slug}/`.
+  const fullHref = (tail: string) => {
+    const clean = tail.replace(/^\/+/, '')
+    return clean ? `/workspace/${workspaceSlug}/${clean}` : `/workspace/${workspaceSlug}`
+  }
 
   const segments: Array<{ key: Mode; label: string; href: string; isActive: boolean }> = [
     { key: 'plan', label: 'Plan', href: fullHref(links.plan), isActive: loc.mode === 'plan' },
-    { key: 'work', label: 'Work', href: fullHref(workHref), isActive: loc.mode === 'work' },
+    { key: 'work', label: 'Work', href: fullHref(workTail), isActive: loc.mode === 'work' },
     { key: 'review', label: 'Review', href: fullHref(links.review), isActive: loc.mode === 'review' },
   ]
 
