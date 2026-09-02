@@ -12,6 +12,7 @@ import { WorkspaceSwitcher } from './workspace-switcher'
 import { SearchModal } from './search-modal'
 import { NotificationsBell } from '@/components/notifications/notifications-bell'
 import { ModeSwitcher } from './mode-switcher'
+import { useSidebarCollapsed } from '@/lib/keyboard/sidebar-collapse-store'
 import { createPage, deletePageForever, restorePage } from '@/app/(app)/actions'
 import type { Page, Workspace } from '@/payload-types'
 import { WORK_MODE_SUBROUTES, type WorkSubRoute } from '@/lib/entity-links'
@@ -65,7 +66,12 @@ export function Sidebar({
 
   const storageKey = `notionforge:sidebar:${workspace.slug}`
   const [ready, setReady] = useState(false)
-  const [collapsed, setCollapsed] = useState(false)
+  // ROADMAP B-0 — `collapsed` now lives in a small external store (see
+  // lib/keyboard/sidebar-collapse-store.ts) instead of local state, so
+  // <KeyboardProvider>'s `mod+\` shortcut can toggle it from outside this
+  // component without a shared context provider. Persistence (reading/
+  // writing the localStorage key below) still belongs to Sidebar.
+  const { collapsed, setCollapsed } = useSidebarCollapsed()
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set())
   const [favoritesOpen, setFavoritesOpen] = useState(true)
   const [trashOpen, setTrashOpen] = useState(false)
@@ -97,7 +103,10 @@ export function Sidebar({
       // ignore malformed local storage
     }
     setReady(true)
-  }, [storageKey])
+    // `setCollapsed` is a stable useCallback from useSidebarCollapsed(),
+    // included here to satisfy exhaustive-deps; it never changes identity
+    // so this doesn't change when the effect actually re-runs.
+  }, [storageKey, setCollapsed])
 
   useEffect(() => {
     if (!ready) return
