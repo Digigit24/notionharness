@@ -1,91 +1,28 @@
-import { getPayloadClient } from '@/lib/payload'
-import { getRun } from '@/lib/broker/runs'
-import type { Activity } from '@/payload-types'
-
-type PayloadClient = Awaited<ReturnType<typeof getPayloadClient>>
-
-// ROADMAP P2.6/P5.5/P6.5 - single shared "activity entity -> deep link" resolver
-// plus the Q2 cross-mode href builders for the sidebar's ModeSwitcher.
+// ROADMAP P6.5 - client-safe cross-mode link helpers for the sidebar's
+// ModeSwitcher. NO server-only imports allowed in this file - it must
+// stay bundled for the browser.
 //
-// The notifications bell (app/(app)/notifications/actions.ts) and the Inbox
-// home screen (workspace/[workspaceSlug]/inbox) both build hrefs from the
-// polymorphic `activity.entityType`/`activity.entityId` pair, so the async
-// lookup logic lives here once instead of being duplicated per call site.
-// Defaults per docs/p6-5-plan-work-review-design.md Q1:
-//   - task -> Plan: the task itself (highlighted in the tasks list)
-//   - page -> Work: the page itself
-//   - run  -> Review: the run's review panel
-//   - project (and other future entityTypes) -> null until a detail route exists
+// The async activity-entity -> deep-link resolver (`hrefForEntity`,
+// uses `getPayloadClient` + the raw `pg` broker) lives in the sibling
+// server-only file `lib/entity-links.server.ts`, which carries the
+// `.server.ts` suffix so Next.js's bundler excludes it from client
+// graphs even if someone tries to import it from a client component.
 //
-// A few extra lookups per notification (task/page/run -> its workspace, for the
-// slug in the URL) is an accepted cost for a "fetch when the panel opens, no
-// real-time push" pass with a 30-item cap.
-export async function hrefForEntity(
-  payload: PayloadClient,
-  entityType: Activity['entityType'],
-  entityId: string,
-): Promise<string | null> {
-  const id = Number(entityId)
-  if (!Number.isFinite(id)) return null
-
-  if (entityType === 'task') {
-    const task = await payload.findByID({ collection: 'tasks', id, overrideAccess: true, disableErrors: true }).catch(() => null)
-    if (!task) return null
-    const workspaceId = typeof task.workspace === 'number' ? task.workspace : task.workspace.id
-    const workspace = await payload
-      .findByID({ collection: 'workspaces', id: workspaceId, overrideAccess: true, disableErrors: true })
-      .catch(() => null)
-    return workspace ? `/workspace/${workspace.slug}/tasks?task=${task.id}` : null
-  }
-
-  if (entityType === 'page') {
-    const page = await payload.findByID({ collection: 'pages', id, overrideAccess: true, disableErrors: true }).catch(() => null)
-    if (!page) return null
-    const workspaceId = typeof page.workspace === 'number' ? page.workspace : page.workspace.id
-    const workspace = await payload
-      .findByID({ collection: 'workspaces', id: workspaceId, overrideAccess: true, disableErrors: true })
-      .catch(() => null)
-    return workspace ? `/workspace/${workspace.slug}/p/${page.id}` : null
-  }
-
-  if (entityType === 'run') {
-    // Runs live in the broker (raw `pg`), not in Payload. Walk via the owning
-    // task to recover the workspace - broker `runs` rows carry `task_id` and
-    // `page_id` but not a workspace FK of their own.
-    const run = await getRun(id).catch(() => null)
-    if (!run?.taskId) return null
-    const task = await payload
-      .findByID({ collection: 'tasks', id: run.taskId, overrideAccess: true, disableErrors: true })
-      .catch(() => null)
-    if (!task) return null
-    const workspaceId = typeof task.workspace === 'number' ? task.workspace : task.workspace.id
-    const workspace = await payload
-      .findByID({ collection: 'workspaces', id: workspaceId, overrideAccess: true, disableErrors: true })
-      .catch(() => null)
-    return workspace ? `/workspace/${workspace.slug}/runs/${run.id}/review` : null
-  }
-
-  return null
-}
-
-// ---------------------------------------------------------------------------
-// Q2 - cross-mode href builders from a known source entity
-// ---------------------------------------------------------------------------
+// Imported by:
+//   - components/sidebar/sidebar.tsx      (client component)
+//   - components/sidebar/mode-switcher.tsx (client component)
 //
-// Pure sync helpers for the sidebar's ModeSwitcher. Each helper takes the
-// source entity (with whatever join fields the caller has already fetched)
-// and returns the path tail for the target mode, falling back to the mode
-// default when the join field is null rather than erroring (per the design
-// doc's "fall back to that mode's default rather than erroring when the
-// link doesn't exist").
+// Helpers in this file all return paths RELATIVE to
+// `/workspace/{workspaceSlug}/`, WITHOUT a leading slash. Callers
+// prepend `/workspace/{slug}/` (or build a full URL via Next's
+// `Link` from a component that already has the slug).
 //
-// All return paths RELATIVE to `/workspace/{workspaceSlug}/`, WITHOUT a
-// leading slash. Callers prepend `/workspace/{slug}/` (or build a full
-// URL via Next's `Link` from a component that already has the slug).
-//
-// "Self" directions (Task->Plan, Page->Work, Run->Review) always succeed.
-// Other directions depend on join fields; the caller is responsible for
-// pre-fetching them when the result matters more than the default.
+// Per the design doc's "fall back to that mode's default rather than
+// erroring when the link doesn't exist" contract, every helper that
+// depends on a join field (e.g. `task.page`, `run.taskId`) falls back
+// to the mode default when that field is null. Self directions
+// (`planHrefForTask` is the only "self" one for tasks, etc.) always
+// succeed.
 
 /**
  * Plan-mode default for the workspace root - the workspace landing page

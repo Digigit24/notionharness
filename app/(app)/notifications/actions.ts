@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { getPayloadClient } from '@/lib/payload'
 import { getCurrentPayloadUser } from '@/lib/current-user'
-import { hrefForEntity } from '@/lib/entity-links'
+import { hrefForEntity } from '@/lib/entity-links.server'
 import type { Activity, Notification } from '@/payload-types'
 
 // ROADMAP P2.6 — global, cross-workspace notifications: `Notifications` has
