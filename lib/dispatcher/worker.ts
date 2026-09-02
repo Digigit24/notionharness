@@ -6,14 +6,17 @@
 // the broker's claim/settle machinery (Pillar 4) — but nothing actually
 // called them in sequence for a claimed run. This is that missing wire.
 //
-// `dispatchNextRun` claims at most one run and runs it to completion
-// (or failure) before returning — the caller decides how to loop (a
-// long-running worker process, a cron tick, whatever Pillar 4/5's actual
-// deployment model turns out to be; that's a separate concern from "does
-// claim → worktree → identity-scoped turn → live event streaming → settle
-// work end to end," which is what this module is responsible for).
+// `dispatchNextRun` claims at most one run per call and returns as soon as
+// the claim is known — it hands the actual claim → worktree → identity-
+// scoped turn → live event streaming → settle sequence to a detached,
+// in-process task (see the execution-registry comment below) rather than
+// awaiting it inline, so a slow/long turn can never hold the tick request
+// open. The caller still decides how to loop (a long-running worker
+// process, a cron tick, whatever Pillar 4/5's actual deployment model turns
+// out to be); that's a separate concern from making one claimed run
+// actually execute correctly, which is what this module is responsible for.
 import { getPayloadClient } from '@/lib/payload'
-import { claimNextRun, markRunStarted, settleRun, appendRunEvent, recordUsage, type Run } from '@/lib/broker'
+import { claimNextRun, markRunStarted, renewLease, settleRun, appendRunEvent, recordUsage, type Run } from '@/lib/broker'
 import { RunWorktreeManager } from '@/lib/run-worktrees/manager'
 import { resolveRunWorktreeConfig } from '@/lib/run-worktrees/config'
 import { sendTurnWithIdentity } from '@/lib/hermes/run-with-identity'
@@ -25,26 +28,91 @@ import type { ApprovalOutcome } from '@/lib/hermes/acp-client'
 export interface DispatchOutcome {
   claimed: boolean
   runId?: number
-  status?: 'completed' | 'failed'
+  // 'started' means the tick handed the run off to a detached execution
+  // task and returned without waiting for it — see the concurrency-registry
+  // comment below for why. 'completed'/'failed' only ever describe a run
+  // that this same process later finishes; the HTTP caller (the tick route,
+  // and beyond it `scripts/run-dispatcher-loop.ts`) never observes those
+  // synchronously any more.
+  status?: 'started' | 'completed' | 'failed'
   error?: string
 }
 
+// --- In-process execution registry -----------------------------------------
+//
+// `executeRun` is wall-clock-capped at up to `turnTimeoutMs` (10 minutes,
+// see the 'ask' permissionMode branch below) but used to be `await`ed
+// directly inside the tick request handler (`app/api/dispatcher/tick/
+// route.ts`) — so a single tick could hold its HTTP response open for up to
+// 10 minutes. `scripts/run-dispatcher-loop.ts` polls that route every 3s
+// with no mutex, so 10min / 3s could pile up ~200 concurrent in-flight tick
+// requests, each racing `claimNextRun`. Fix: claim, then hand the actual
+// turn to a detached (non-awaited) task tracked in this module-level map,
+// and return from `dispatchNextRun` as soon as the claim (or "nothing
+// queued") is known. This is deliberately just an in-process registry, not
+// a durable queue — restart the Next.js server and any in-flight runs rely
+// on their lease lapsing and `sweepExpiredLeases` reclaiming them, same as
+// any other worker crash.
+const MAX_CONCURRENT_RUNS = Number(process.env.DISPATCHER_MAX_CONCURRENT_RUNS) || 4
+
+const inFlightRuns = new Map<number, Promise<void>>()
+// Runs actually mid-turn per agent (i.e. past the per-agent slot wait below)
+// — not the same set as `inFlightRuns`, which also counts runs still
+// claimed but waiting on this counter to drop before their turn starts.
+const agentInFlightCounts = new Map<number, number>()
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function incrAgentInFlight(agentId: number): void {
+  agentInFlightCounts.set(agentId, (agentInFlightCounts.get(agentId) ?? 0) + 1)
+}
+
+function decrAgentInFlight(agentId: number): void {
+  const next = (agentInFlightCounts.get(agentId) ?? 1) - 1
+  if (next <= 0) agentInFlightCounts.delete(agentId)
+  else agentInFlightCounts.set(agentId, next)
+}
+
 export async function dispatchNextRun(workerId: string): Promise<DispatchOutcome> {
+  // Global ceiling enforced *before* claiming: don't pull work off the
+  // queue past capacity just to let it sit claimed-but-waiting — leave it
+  // 'queued' for whichever tick has room, so priority ordering (`claimNextRun`'s
+  // `ORDER BY priority DESC, created_at ASC`) still applies at claim time.
+  if (inFlightRuns.size >= MAX_CONCURRENT_RUNS) {
+    return { claimed: false }
+  }
+
   const run = await claimNextRun(workerId)
   if (!run) return { claimed: false }
 
-  try {
-    const outcome = await executeRun(run)
-    return { claimed: true, runId: run.id, ...outcome }
-  } catch (err) {
-    // Anything unexpected (agent lookup blew up, worktree creation failed,
-    // the binary isn't on this machine) is still a run that needs settling
-    // — never leave it stuck in 'dispatched'/'running' for the lease
-    // sweeper to have to clean up later when it could fail cleanly now.
-    const message = err instanceof Error ? err.message : String(err)
-    await settleRun(run.id, 'failed', { error: message, retryable: true }).catch(() => undefined)
-    return { claimed: true, runId: run.id, status: 'failed', error: message }
-  }
+  const execution = executeRun(run)
+    .catch(async (err) => {
+      // Anything unexpected (agent lookup blew up, worktree creation
+      // failed, the binary isn't on this machine) is still a run that
+      // needs settling — never leave it stuck in 'dispatched'/'running'
+      // for the lease sweeper to have to clean up later when it could
+      // fail cleanly now.
+      const message = err instanceof Error ? err.message : String(err)
+      await settleRun(run.id, 'failed', { error: message, retryable: true }).catch(() => undefined)
+      console.error(`[dispatcher] Run ${run.id} failed outside executeRun's own error handling.`, err)
+    })
+    .finally(() => {
+      inFlightRuns.delete(run.id)
+    })
+  inFlightRuns.set(run.id, execution)
+  // The `.catch` above already turns every rejection into a resolved
+  // (logged) value, so `execution` itself should never reject — but per
+  // `instrumentation.ts`'s own stance (a process-wide `unhandledRejection`
+  // logger is a last-resort net, not a fix), attach a belt-and-suspenders
+  // handler anyway rather than leaving a detached promise with nothing
+  // observing it.
+  execution.catch((err) => {
+    console.error(`[dispatcher] Unhandled rejection executing run ${run.id}.`, err)
+  })
+
+  return { claimed: true, runId: run.id, status: 'started' }
 }
 
 function stringArray(raw: unknown): string[] {
@@ -103,16 +171,53 @@ function buildPermissionCallback(
   }
 }
 
+// Lease heartbeat cadence (item B) — comfortably inside `DEFAULT_LEASE_MS`
+// (60s, `lib/broker/runs.ts`) so a GC pause or one slow query doesn't let
+// the lease lapse between renewals.
+const LEASE_RENEW_INTERVAL_MS = 15_000
+// How often a run waits, once claimed, for its agent's concurrency slot to
+// free up before actually starting its turn (see `agentInFlightCounts`
+// above). The lease heartbeat keeps running during this wait, so it's safe
+// for this to be a fairly relaxed poll.
+const AGENT_SLOT_POLL_MS = 5_000
+
 async function executeRun(run: Run): Promise<{ status: 'completed' | 'failed'; error?: string }> {
   const payload = await getPayloadClient()
 
+  // Started immediately: the run is already claimed (a lease exists) the
+  // moment `dispatchNextRun` handed it to this detached task, so heartbeat
+  // coverage must span everything below, not just the eventual
+  // `sendTurnWithIdentity` call — including the agent/runtime-profile
+  // lookups and any time spent waiting on a per-agent concurrency slot.
+  // `.unref()` so a pending timer can never keep the Node process alive by
+  // itself; `finally` below clears it on every exit path (settle-and-return
+  // early, thrown error, or normal completion).
+  const leaseInterval = setInterval(() => {
+    void renewLease(run.id).catch((err) => {
+      console.error(`[dispatcher] Failed to renew lease for run ${run.id}.`, err)
+    })
+  }, LEASE_RENEW_INTERVAL_MS)
+  leaseInterval.unref()
+
+  try {
+    return await executeClaimedRun(payload, run)
+  } finally {
+    clearInterval(leaseInterval)
+  }
+}
+
+async function executeClaimedRun(
+  payload: Awaited<ReturnType<typeof getPayloadClient>>,
+  run: Run,
+): Promise<{ status: 'completed' | 'failed'; error?: string }> {
   if (run.agentId == null) {
     await settleRun(run.id, 'failed', { error: 'Run has no agent assigned.', retryable: false })
     return { status: 'failed', error: 'no agent assigned' }
   }
+  const agentId = run.agentId
 
   const agent = await payload
-    .findByID({ collection: 'agents', id: run.agentId, overrideAccess: true, disableErrors: true })
+    .findByID({ collection: 'agents', id: agentId, overrideAccess: true, disableErrors: true })
     .catch(() => null)
   if (!agent || agent.enabled === false) {
     await settleRun(run.id, 'failed', { error: 'Agent missing or disabled.', retryable: false })
@@ -145,6 +250,17 @@ async function executeRun(run: Run): Promise<{ status: 'completed' | 'failed'; e
   const manager = new RunWorktreeManager({ rootDir })
   const worktree = await manager.create(source, String(run.id), baseBranch)
 
+  // Per-agent concurrency ceiling (`agent.maxConcurrentRuns`, `collections/
+  // Agents.ts` — defaults to 1). The run stays claimed (lease kept alive by
+  // the heartbeat in `executeRun` above) while waiting for a slot, rather
+  // than being handed back to the queue, since there's nothing wrong with
+  // it — its own agent is just already at capacity.
+  const maxConcurrentForAgent = agent.maxConcurrentRuns ?? 1
+  while ((agentInFlightCounts.get(agentId) ?? 0) >= maxConcurrentForAgent) {
+    await sleep(AGENT_SLOT_POLL_MS)
+  }
+
+  incrAgentInFlight(agentId)
   let result
   try {
     result = await sendTurnWithIdentity({
@@ -220,6 +336,8 @@ async function executeRun(run: Run): Promise<{ status: 'completed' | 'failed'; e
     const message = err instanceof Error ? err.message : String(err)
     await settleRun(run.id, 'failed', { error: message, retryable: true })
     return { status: 'failed', error: message }
+  } finally {
+    decrAgentInFlight(agentId)
   }
 
   const doneEvent = result.envelopes.find((e) => e.event.type === 'done')?.event

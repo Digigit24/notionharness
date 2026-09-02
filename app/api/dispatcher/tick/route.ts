@@ -14,6 +14,14 @@ let ticksSinceSweep = 0
  * `global._notionforgePayloadClient`), rather than a standalone script
  * opening a second connection pool against the shared, connection-capped
  * Supabase instance.
+ *
+ * `dispatchNextRun` claims at most one run and hands its actual execution
+ * off to a detached in-process task (`lib/dispatcher/worker.ts`'s execution
+ * registry) rather than awaiting it here — so this response returns as soon
+ * as the claim (or "nothing queued") is known, never after a turn finishes.
+ * A single run can otherwise legitimately run for up to `turnTimeoutMs`
+ * (10 minutes for `permissionMode: 'ask'`), and the poller below hits this
+ * route every 3s with no mutex of its own.
  */
 export async function POST() {
   ticksSinceSweep += 1

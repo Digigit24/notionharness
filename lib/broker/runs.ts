@@ -72,8 +72,10 @@ function rowToRun(row: RunRow): Run {
 }
 
 /** ENQUEUE (docs/ROADMAP.html §4.3) — inserts a queued run. The partial unique
- * index on (task_id, agent_id) for non-terminal runs (see the migration SQL)
- * refuses a second concurrent run for the same pair. */
+ * index on (task_id, agent_id, page_id) for non-terminal runs (see
+ * `lib/broker/migrations/0004_runs_task_agent_active_uidx_null_safe.sql`)
+ * refuses a second concurrent run for the same (task, agent) pair, or the
+ * same (agent, page) pair for page-scoped runs where task_id is NULL. */
 export async function enqueueRun(input: {
   taskId?: number | null
   agentId?: number | null
