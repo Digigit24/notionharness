@@ -1,6 +1,7 @@
 'use client'
 
 import { Thread } from '@/components/hermes'
+import { ConnectionStatusBanner } from './connection-status-banner'
 import { useThreadData } from './use-thread-data'
 import type { Agent } from '@/payload-types'
 import type { Run, RunMessageRow } from '@/lib/broker/types'
@@ -27,7 +28,7 @@ export function ThreadLaneView({
   height = 'h-[500px]',
 }: ThreadLaneViewProps) {
   const observed = true
-  const threads = useThreadData(taskId, observed, loader)
+  const { threads, connectionStatus, retry } = useThreadData(taskId, observed, loader)
   const mostRecent = threads[threads.length - 1]
 
   return (
@@ -40,6 +41,8 @@ export function ThreadLaneView({
           {mostRecent?.done ? ` · ${mostRecent.done.status}` : ' · Running'}
         </p>
       </div>
+
+      <ConnectionStatusBanner status={connectionStatus} onRetry={retry} />
 
       {/* Content */}
       <div className="flex-1 overflow-hidden">

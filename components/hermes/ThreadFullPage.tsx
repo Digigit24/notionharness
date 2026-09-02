@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { Thread } from '@/components/hermes'
+import { ConnectionStatusBanner } from './connection-status-banner'
 import { useThreadData } from './use-thread-data'
 import type { Agent } from '@/payload-types'
 import type { Run, RunMessageRow } from '@/lib/broker/types'
@@ -21,7 +22,7 @@ export interface ThreadFullPageProps {
 
 export function ThreadFullPage({ taskId, taskTitle, agents: _agents, loader }: ThreadFullPageProps) {
   const observed = true
-  const threads = useThreadData(taskId, observed, loader)
+  const { threads, connectionStatus, retry } = useThreadData(taskId, observed, loader)
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
 
   const selected = threads.find((t) => t.runId === selectedRunId) ?? threads[threads.length - 1]
@@ -77,6 +78,7 @@ export function ThreadFullPage({ taskId, taskTitle, agents: _agents, loader }: T
         <div className="border-b border-gray-200 dark:border-gray-700 px-6 py-4">
           <h1 className="text-lg font-semibold">Run {selected?.runId}</h1>
         </div>
+        <ConnectionStatusBanner status={connectionStatus} onRetry={retry} />
         <div className="flex-1 overflow-hidden">
           {selected && <Thread thread={selected} showUsage={true} showRunId={false} />}
         </div>

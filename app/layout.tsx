@@ -4,6 +4,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "@toeverything/theme/style.css";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme/theme-provider";
+import { Toaster } from "@/components/ui/toaster";
 
 const themeInitScript = `
 (function () {
@@ -44,6 +45,14 @@ export default function RootLayout({
       </head>
       <body className="min-h-full flex flex-col">
         <ThemeProvider>{children}</ThemeProvider>
+        {/* ROADMAP B-6 "Finish" (state-craft sweep) — components/ui/toast.tsx
+            + hooks/use-toast.ts have existed since B-0, but no route ever
+            mounted <Toaster/>, so every `toast()` call anywhere in this app
+            was a silent no-op (the memory-store dispatch had no subscriber
+            to render it). Mounted once, globally, so the plan's "toast that
+            says what failed" standard for optimistic updates has an actual
+            place to land. */}
+        <Toaster />
       </body>
     </html>
   );

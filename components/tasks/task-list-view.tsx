@@ -14,6 +14,8 @@ import { Archive, Check } from 'lucide-react'
 import { useKeyboardShortcut } from '@/lib/keyboard/use-keyboard-shortcut'
 import { statusColorClasses } from '@/lib/status-colors'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Skeleton } from '@/components/ui/skeleton'
+import { EmptyState } from '@/components/ui/empty-state'
 import { AgentPresence, RunMetrics, type TaskRunMetrics } from './run-metrics'
 import type { TaskGroup } from '@/lib/task-views/data-layer'
 import type { Task, TaskStatus, User } from '@/payload-types'
@@ -129,10 +131,31 @@ export function TaskListView({
   )
 
   if (loading && rows.length === 0) {
-    return <div className="flex flex-1 items-center justify-center p-8 text-sm text-black/40 dark:text-white/40">Loading tasks…</div>
+    // ROADMAP B-6 "Finish" (state-craft sweep) — a skeleton matching the
+    // real row shape (checkbox + title + status/assignee pills), not a bare
+    // "Loading…" string, per the plan's loading-state standard.
+    return (
+      <div className="flex min-h-0 flex-1 flex-col gap-1 p-4">
+        <Skeleton className="h-4 w-24" />
+        {[0, 1, 2, 3, 4, 5].map((i) => (
+          <div key={i} className="flex items-center gap-3 px-4 py-2">
+            <Skeleton className="size-4 shrink-0 rounded" />
+            <Skeleton className="h-4 flex-1" />
+            <Skeleton className="h-6 w-28 shrink-0" />
+            <Skeleton className="h-6 w-28 shrink-0" />
+          </div>
+        ))}
+      </div>
+    )
   }
   if (!loading && rows.length === 0) {
-    return <div className="flex flex-1 items-center justify-center p-8 text-sm text-black/40 dark:text-white/40">No tasks match the current filters.</div>
+    return (
+      <EmptyState
+        className="flex-1 border-none"
+        title="No tasks match the current filters."
+        description="Try widening your filters, or create a task to get started."
+      />
+    )
   }
 
   return (

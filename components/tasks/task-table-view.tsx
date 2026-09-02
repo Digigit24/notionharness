@@ -20,6 +20,8 @@ import {
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { Pin, PinOff } from 'lucide-react'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Skeleton } from '@/components/ui/skeleton'
+import { EmptyState } from '@/components/ui/empty-state'
 import { statusColorClasses } from '@/lib/status-colors'
 import type { TaskSort, TaskSortField } from '@/lib/task-views/data-layer'
 import { AgentPresence, RunMetrics, type TaskRunMetrics } from './run-metrics'
@@ -149,10 +151,25 @@ export function TaskTableView({
   const paddingBottom = virtualItems.length > 0 ? virtualizer.getTotalSize() - virtualItems[virtualItems.length - 1].end : 0
 
   if (loading && rows.length === 0) {
-    return <div className="flex flex-1 items-center justify-center p-8 text-sm text-black/40 dark:text-white/40">Loading tasks…</div>
+    // ROADMAP B-6 "Finish" (state-craft sweep) — a skeleton matching the
+    // real table row shape, not a bare "Loading…" string.
+    return (
+      <div className="flex min-h-0 flex-1 flex-col gap-2 p-4">
+        <Skeleton className="h-8 w-full" />
+        {[0, 1, 2, 3, 4, 5].map((i) => (
+          <Skeleton key={i} className="h-10 w-full" />
+        ))}
+      </div>
+    )
   }
   if (!loading && rows.length === 0) {
-    return <div className="flex flex-1 items-center justify-center p-8 text-sm text-black/40 dark:text-white/40">No tasks match the current filters.</div>
+    return (
+      <EmptyState
+        className="flex-1 border-none"
+        title="No tasks match the current filters."
+        description="Try widening your filters, or create a task to get started."
+      />
+    )
   }
 
   return (

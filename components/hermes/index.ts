@@ -38,5 +38,8 @@ export type { ThreadLaneViewProps } from './ThreadLaneView'
 
 // Hook for converting run events to thread data
 export { useThreadData } from './use-thread-data'
+export type { ThreadDataResult } from './use-thread-data'
+
+export { ConnectionStatusBanner } from './connection-status-banner'
 
 export { ThreadDemo } from './demo'

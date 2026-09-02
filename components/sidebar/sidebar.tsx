@@ -134,6 +134,7 @@ export function Sidebar({
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set())
   const [favoritesOpen, setFavoritesOpen] = useState(true)
   const [trashOpen, setTrashOpen] = useState(false)
+  const [pendingDeletePageId, setPendingDeletePageId] = useState<number | null>(null)
   // ROADMAP P6.5 Q3 — remember which Work sub-route the user last visited
   // so the ModeSwitcher's Work pill lands them where they were, not at the
   // inbox default. Null on first paint (SSR + before localStorage sync).
@@ -359,38 +360,63 @@ export function Sidebar({
               {trashed.length === 0 && (
                 <p className="px-3 py-1 text-xs text-black/40 dark:text-white/40">Trash is empty</p>
               )}
-              {trashed.map((p) => (
-                <div
-                  key={p.id}
-                  className="group flex items-center gap-1.5 rounded-md px-2 py-1 text-sm text-black/60 dark:text-white/60"
-                >
-                  <span className="flex-1 truncate">
-                    {p.icon ? `${p.icon} ` : ''}
-                    {p.title || 'Untitled'}
-                  </span>
-                  <button
-                    type="button"
-                    title="Restore"
-                    onClick={() => void restorePage(p.id, workspace.id, workspace.slug)}
-                    className="hidden h-5 shrink-0 items-center rounded px-1 text-[11px] hover:bg-black/10 group-hover:flex dark:hover:bg-white/10"
+              {trashed.map((p) => {
+                const isPendingDelete = pendingDeletePageId === p.id
+                return (
+                  <div
+                    key={p.id}
+                    className="group flex items-center gap-1.5 rounded-md px-2 py-1 text-sm text-black/60 dark:text-white/60"
                   >
-                    Restore
-                  </button>
-                  <button
-                    type="button"
-                    title="Delete forever"
-                    onClick={() => {
-                      if (confirm(`Delete "${p.title || 'Untitled'}" forever? This cannot be undone.`)) {
-                        void deletePageForever(p.id, workspace.id, workspace.slug)
-                        if (p.id === activePageId) router.push(`/workspace/${workspace.slug}`)
-                      }
-                    }}
-                    className="hidden h-5 w-5 shrink-0 items-center justify-center rounded text-red-500 hover:bg-black/10 group-hover:flex dark:hover:bg-white/10"
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                </div>
-              ))}
+                    <span className="flex-1 truncate">
+                      {p.icon ? `${p.icon} ` : ''}
+                      {p.title || 'Untitled'}
+                    </span>
+                    {isPendingDelete ? (
+                      <>
+                        <button
+                          type="button"
+                          title="Confirm delete forever"
+                          onClick={() => {
+                            setPendingDeletePageId(null)
+                            void deletePageForever(p.id, workspace.id, workspace.slug)
+                            if (p.id === activePageId) router.push(`/workspace/${workspace.slug}`)
+                          }}
+                          className="flex h-5 shrink-0 items-center rounded px-1 text-[11px] font-medium text-red-500 hover:bg-red-500/10"
+                        >
+                          Confirm
+                        </button>
+                        <button
+                          type="button"
+                          title="Cancel"
+                          onClick={() => setPendingDeletePageId(null)}
+                          className="flex h-5 shrink-0 items-center rounded px-1 text-[11px] hover:bg-black/10 dark:hover:bg-white/10"
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          title="Restore"
+                          onClick={() => void restorePage(p.id, workspace.id, workspace.slug)}
+                          className="hidden h-5 shrink-0 items-center rounded px-1 text-[11px] hover:bg-black/10 group-hover:flex dark:hover:bg-white/10"
+                        >
+                          Restore
+                        </button>
+                        <button
+                          type="button"
+                          title="Delete forever — cannot be undone"
+                          onClick={() => setPendingDeletePageId(p.id)}
+                          className="hidden h-5 w-5 shrink-0 items-center justify-center rounded text-red-500 hover:bg-black/10 group-hover:flex dark:hover:bg-white/10"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           )}
         </div>
