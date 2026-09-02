@@ -19,6 +19,7 @@ export {
   setRunPageContext,
   listFailedRuns,
   listReviewReadyRuns,
+  dismissRun,
   getActiveRunForAgent,
   hasActiveRunForTask,
   listPendingSuggestionRunsForPage,
