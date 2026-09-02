@@ -3,7 +3,21 @@
 import { useEffect, useMemo, useOptimistic, useState, useTransition } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { Bot, ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight, Inbox, ListTodo, LogOut, Plus, Search, Trash2 } from 'lucide-react'
+import {
+  Bot,
+  ChevronDown,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  Home,
+  Inbox,
+  ListTodo,
+  LogOut,
+  Plus,
+  Search,
+  Trash2,
+  type LucideIcon,
+} from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { ThemeToggle } from '@/components/theme/theme-toggle'
 import { authClient } from '@/lib/auth-client'
@@ -15,6 +29,42 @@ import { ModeSwitcher } from './mode-switcher'
 import { createPage, deletePageForever, restorePage } from '@/app/(app)/actions'
 import type { Page, Workspace } from '@/payload-types'
 import { WORK_MODE_SUBROUTES, type WorkSubRoute } from '@/lib/entity-links'
+
+/**
+ * ROADMAP B-0 (Frame) — the Section level of the three-tier
+ * Workspace / Section / Entity navigation model. The full target set
+ * per the B-0 design is Home, Inbox, Projects, Tasks, Agents, Ask,
+ * Settings; `href` is workspace-relative (empty string = the workspace
+ * root, i.e. "Home"). Only sections with a real, already-existing route
+ * are listed here:
+ *
+ *   Home     -> `/workspace/:slug` (the existing WorkspaceHome landing page)
+ *   Inbox    -> `/workspace/:slug/inbox` (existing)
+ *   Tasks    -> `/workspace/:slug/tasks` (existing)
+ *   Agents   -> `/workspace/:slug/agents` (existing)
+ *   Projects -> NOT LINKED. No dedicated `/projects` list route exists yet
+ *               (the `projects` collection is only surfaced today as a
+ *               filter inside the Tasks page); building that page is a
+ *               later batch's job, not this one.
+ *   Ask      -> NOT LINKED. No route exists yet.
+ *   Settings -> NOT LINKED. No route exists yet.
+ */
+const SECTION_LINKS: Array<{ href: string; label: string; icon: LucideIcon }> = [
+  { href: '', label: 'Home', icon: Home },
+  { href: '/inbox', label: 'Inbox', icon: Inbox },
+  { href: '/tasks', label: 'Tasks', icon: ListTodo },
+  { href: '/agents', label: 'Agents', icon: Bot },
+]
+
+/** Is `pathname` the active route for a given section `href` (workspace-relative,
+ * '' meaning the workspace root/Home)? Home only matches the bare workspace
+ * landing page, never a sub-route, so it can't shadow Inbox/Tasks/Agents below it. */
+function isSectionActive(pathname: string, workspaceSlug: string, href: string): boolean {
+  if (href === '') {
+    return new RegExp(`^/workspace/${workspaceSlug}/?$`).test(pathname)
+  }
+  return pathname.endsWith(href)
+}
 
 export function Sidebar({
   workspace,
@@ -208,44 +258,29 @@ export function Sidebar({
         </kbd>
       </button>
 
-      <Link
-        href={`/workspace/${workspace.slug}/tasks`}
-        className={cn(
-          'mx-2 mt-1 flex items-center gap-2 rounded-md px-2 py-1.5 text-sm',
-          pathname.endsWith('/tasks')
-            ? 'bg-black/[.06] dark:bg-white/[.08]'
-            : 'text-black/60 hover:bg-black/[.06] dark:text-white/60 dark:hover:bg-white/[.08]',
-        )}
-      >
-        <ListTodo size={14} />
-        Tasks
-      </Link>
-
-      <Link
-        href={`/workspace/${workspace.slug}/agents`}
-        className={cn(
-          'mx-2 mt-1 flex items-center gap-2 rounded-md px-2 py-1.5 text-sm',
-          pathname.endsWith('/agents')
-            ? 'bg-black/[.06] dark:bg-white/[.08]'
-            : 'text-black/60 hover:bg-black/[.06] dark:text-white/60 dark:hover:bg-white/[.08]',
-        )}
-      >
-        <Bot size={14} />
-        Agents
-      </Link>
-
-      <Link
-        href={`/workspace/${workspace.slug}/inbox`}
-        className={cn(
-          'mx-2 mt-1 flex items-center gap-2 rounded-md px-2 py-1.5 text-sm',
-          pathname.endsWith('/inbox')
-            ? 'bg-black/[.06] dark:bg-white/[.08]'
-            : 'text-black/60 hover:bg-black/[.06] dark:text-white/60 dark:hover:bg-white/[.08]',
-        )}
-      >
-        <Inbox size={14} />
-        Inbox
-      </Link>
+      {/* ROADMAP B-0 (Frame) — Section-level nav, the middle of the three-tier
+          Workspace / Section / Entity navigation model. The target section
+          set is Home, Inbox, Projects, Tasks, Agents, Ask, Settings; only
+          sections with a real existing route are linked here — Projects, Ask,
+          and Settings have no dedicated page yet (building those is other
+          batches' job), so they're omitted rather than invented. Entity-level
+          navigation (a specific page/task/agent/run) lives in the page tree
+          below and in per-page breadcrumbs, not in this list. */}
+      {SECTION_LINKS.map(({ href, label, icon: Icon }) => (
+        <Link
+          key={href}
+          href={`/workspace/${workspace.slug}${href}`}
+          className={cn(
+            'mx-2 mt-1 flex items-center gap-2 rounded-md px-2 py-1.5 text-sm',
+            isSectionActive(pathname, workspace.slug, href)
+              ? 'bg-black/[.06] dark:bg-white/[.08]'
+              : 'text-black/60 hover:bg-black/[.06] dark:text-white/60 dark:hover:bg-white/[.08]',
+          )}
+        >
+          <Icon size={14} />
+          {label}
+        </Link>
+      ))}
 
       <div className="mt-2 flex-1 overflow-y-auto px-2 pb-4">
         {favorites.length > 0 && (
