@@ -9,23 +9,42 @@ import { Pool } from 'pg'
 // Exported so other server-only code (e.g. the mention-user-list route) can
 // query Better Auth's own tables directly without opening a second pool
 // against the same connection-capped Postgres instance.
-export const authPool = new Pool({
-  connectionString: process.env.DATABASE_URI || '',
-  // Kept small deliberately: the shared dev Postgres instance has a low
-  // session-mode connection cap, and Payload's own pool already competes
-  // for it — no reason for auth's low-traffic queries to claim more.
-  max: 3,
-})
+//
+// Cached on `globalThis`, not a bare module-level `const`: a plain `const`
+// re-executes `new Pool(...)` every time this module is re-evaluated, which
+// Next.js dev-mode Fast Refresh does on every edit to this file (or anything
+// that imports it) — each reset leaked the previous pool's connections
+// (nothing ever called `.end()` on it) and, combined with `lib/broker/db.ts`
+// having the exact same bug, was the real cause of EMAXCONNSESSION recurring
+// across a dev session regardless of any single pool's `max`. `globalThis`
+// survives module re-execution in Next dev, matching `lib/payload.ts`'s own
+// client cache.
+declare global {
+  var _notionforgeAuthPool: Pool | undefined
+  var _notionforgeAuth: ReturnType<typeof betterAuth> | undefined
+}
 
-export const auth = betterAuth({
-  database: authPool,
-  secret: process.env.BETTER_AUTH_SECRET || '',
-  baseURL: process.env.BETTER_AUTH_URL || 'http://localhost:3000',
-  trustedOrigins: [
-    'http://localhost:3000',
-    'http://digitech.tail7572d2.ts.net:3000',
-  ],
-  emailAndPassword: {
-    enabled: true,
-  },
-})
+export const authPool =
+  global._notionforgeAuthPool ??
+  (global._notionforgeAuthPool = new Pool({
+    connectionString: process.env.DATABASE_URI || '',
+    // Kept small deliberately: the shared dev Postgres instance has a low
+    // session-mode connection cap, and Payload's own pool already competes
+    // for it — no reason for auth's low-traffic queries to claim more.
+    max: 3,
+  }))
+
+export const auth =
+  global._notionforgeAuth ??
+  (global._notionforgeAuth = betterAuth({
+    database: authPool,
+    secret: process.env.BETTER_AUTH_SECRET || '',
+    baseURL: process.env.BETTER_AUTH_URL || 'http://localhost:3000',
+    trustedOrigins: [
+      'http://localhost:3000',
+      'http://digitech.tail7572d2.ts.net:3000',
+    ],
+    emailAndPassword: {
+      enabled: true,
+    },
+  }))
