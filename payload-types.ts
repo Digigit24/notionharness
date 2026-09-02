@@ -84,6 +84,7 @@ export interface Config {
     'runtime-profiles': RuntimeProfile;
     runtimes: Runtime;
     agents: Agent;
+    approvals: Approval;
     'payload-kv': PayloadKv;
     'payload-locked-documents': PayloadLockedDocument;
     'payload-preferences': PayloadPreference;
@@ -108,6 +109,7 @@ export interface Config {
     'runtime-profiles': RuntimeProfilesSelect<false> | RuntimeProfilesSelect<true>;
     runtimes: RuntimesSelect<false> | RuntimesSelect<true>;
     agents: AgentsSelect<false> | AgentsSelect<true>;
+    approvals: ApprovalsSelect<false> | ApprovalsSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
     'payload-locked-documents': PayloadLockedDocumentsSelect<false> | PayloadLockedDocumentsSelect<true>;
     'payload-preferences': PayloadPreferencesSelect<false> | PayloadPreferencesSelect<true>;
@@ -592,6 +594,43 @@ export interface Runtime {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "approvals".
+ */
+export interface Approval {
+  id: number;
+  /**
+   * The broker run id that triggered this approval request (raw pg runs table, not a Payload collection).
+   */
+  runId?: number | null;
+  /**
+   * ACP session/request_permission id — used to correlate with the ACP client.
+   */
+  externalId: string;
+  /**
+   * The user who can approve or deny this request.
+   */
+  requestedUser: number | User;
+  title: string;
+  detail?: string | null;
+  options:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  status: 'pending' | 'approved' | 'denied' | 'timeout';
+  /**
+   * The optionId the user selected when answering.
+   */
+  selectedOptionId?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "payload-kv".
  */
 export interface PayloadKv {
@@ -681,6 +720,10 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'agents';
         value: number | Agent;
+      } | null)
+    | ({
+        relationTo: 'approvals';
+        value: number | Approval;
       } | null);
   globalSlug?: string | null;
   user: {
@@ -972,6 +1015,22 @@ export interface AgentsSelect<T extends boolean = true> {
   maxConcurrentRuns?: T;
   permissionMode?: T;
   enabled?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "approvals_select".
+ */
+export interface ApprovalsSelect<T extends boolean = true> {
+  runId?: T;
+  externalId?: T;
+  requestedUser?: T;
+  title?: T;
+  detail?: T;
+  options?: T;
+  status?: T;
+  selectedOptionId?: T;
   updatedAt?: T;
   createdAt?: T;
 }

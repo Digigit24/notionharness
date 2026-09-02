@@ -54,6 +54,7 @@ export async function sendTurnWithIdentity(opts: SendTurnWithIdentityOptions): P
       args: opts.args,
       permissionTimeoutMs: opts.permissionTimeoutMs,
       permissionMode: opts.permissionMode,
+      permissionCallback: opts.permissionCallback,
       mcpServers: opts.mcpServers,
       turnTimeoutMs: opts.turnTimeoutMs,
       onEvent: opts.onEvent,

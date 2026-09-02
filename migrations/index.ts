@@ -9,6 +9,7 @@ import * as migration_20260902_060000_followers_page_entity_type from './2026090
 import * as migration_20260902_061000_agent_runtime_profiles from './20260902_061000_agent_runtime_profiles';
 import * as migration_20260902_070000_tasks_agents from './20260902_070000_tasks_agents';
 import * as migration_20260902_080000_tasks_page from './20260902_080000_tasks_page';
+import * as migration_20260902_090000_approvals from './20260902_090000_approvals';
 
 export const migrations = [
   {
@@ -65,5 +66,10 @@ export const migrations = [
     up: migration_20260902_080000_tasks_page.up,
     down: migration_20260902_080000_tasks_page.down,
     name: '20260902_080000_tasks_page'
+  },
+  {
+    up: migration_20260902_090000_approvals.up,
+    down: migration_20260902_090000_approvals.down,
+    name: '20260902_090000_approvals'
   },
 ];

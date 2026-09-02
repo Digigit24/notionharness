@@ -49,6 +49,11 @@ import type { RunEvent, RunEventEnvelope } from '@/lib/run-events'
 // Public options.
 // ---------------------------------------------------------------------------
 
+/** ACP `outcome` union for permission callbacks — matches protocol schema. */
+export type ApprovalOutcome =
+  | { outcome: 'selected'; optionId: string }
+  | { outcome: 'cancelled'; reason?: string }
+
 export interface SendTurnOptions {
   /** Absolute path to the `hermes-acp` binary (or `hermes-acp.exe` on Windows). */
   binaryPath: string
@@ -78,6 +83,18 @@ export interface SendTurnOptions {
   permissionTimeoutMs?: number
   /** Agent permission policy. `ask` is deferred to the approvals UI (P5.4). */
   permissionMode?: 'ask' | 'auto' | 'deny'
+  /**
+   * Callback for `permissionMode === 'ask'`. When provided, the ACP
+   * `session/request_permission` handler calls this instead of just timing
+   * out, allowing a real pending approval to be created and waited on.
+   * The result must match the ACP `outcome` union.
+   */
+  permissionCallback?: (params: {
+    id: string
+    title: string
+    detail: string
+    options: Array<{ optionId: string; kind: string; label?: string }>
+  }) => Promise<ApprovalOutcome>
   /** Optional MCP server list forwarded to `session/new` (roadmap 3.2 §4). */
   mcpServers?: unknown[]
   /** Wall-clock cap for the whole turn in ms — defaults to 60s. */
@@ -161,7 +178,11 @@ function spawnBinary(opts: SendTurnOptions): {
 // needs to talk to us.
 // ---------------------------------------------------------------------------
 
-function buildClientApp(permissionTimeoutMs: number, permissionMode: 'ask' | 'auto' | 'deny') {
+function buildClientApp(
+  permissionTimeoutMs: number,
+  permissionMode: 'ask' | 'auto' | 'deny',
+  permissionCallback?: SendTurnOptions['permissionCallback']
+) {
   return (
     client({ name: 'notionforge-harness' })
       // Roadmap 3.2: "timeout that denies *once* rather than cancelling the
@@ -176,9 +197,33 @@ function buildClientApp(permissionTimeoutMs: number, permissionMode: 'ask' | 'au
           if (allow?.optionId) return { outcome: { outcome: 'selected' as const, optionId: allow.optionId } }
         }
 
-        // `ask` belongs to the P5.4 approvals surface. Until that callback is
-        // wired in, both ask and deny fail closed after the normal timeout;
-        // an agent must never gain permission merely because no UI is present.
+        if (permissionMode === 'ask' && permissionCallback) {
+          const params = ctx.params as {
+            id?: string
+            title?: string
+            detail?: string
+            options?: Array<{ optionId?: string; kind?: string; label?: string }>
+          }
+          try {
+            const result = await Promise.race([
+              permissionCallback({
+                id: params.id ?? '',
+                title: params.title ?? '',
+                detail: params.detail ?? '',
+                options: (params.options ?? []).map((o) => ({
+                  optionId: o.optionId ?? '',
+                  kind: o.kind ?? '',
+                  label: o.label,
+                })),
+              }),
+              delay(permissionTimeoutMs).then(() => ({ outcome: 'cancelled' as const, reason: 'timeout' })),
+            ])
+            return { outcome: result }
+          } catch {
+            return { outcome: { outcome: 'cancelled' as const, reason: 'callback error' } }
+          }
+        }
+
         await delay(permissionTimeoutMs)
         return { outcome: { outcome: 'cancelled' as const } }
       })
@@ -387,7 +432,7 @@ export async function sendTurn(opts: SendTurnOptions): Promise<SendTurnResult> {
 
   try {
     const stream = ndJsonStream(writable, readable)
-    const app = buildClientApp(opts.permissionTimeoutMs ?? 50, opts.permissionMode ?? 'ask')
+    const app = buildClientApp(opts.permissionTimeoutMs ?? 50, opts.permissionMode ?? 'ask', opts.permissionCallback)
 
     const turnPromise = new Promise<void>((resolve, reject) => {
       // `connectWith` returns its own promise, independent of our
