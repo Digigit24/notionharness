@@ -52,9 +52,24 @@ export async function getNotifications(): Promise<NotificationView[]> {
 
 export async function markNotificationsRead(ids: number[]): Promise<void> {
   if (ids.length === 0) return
+  const user = await getCurrentPayloadUser()
+  if (!user) return
   const payload = await getPayloadClient()
+  // ROADMAP B5.2 (Batch B-5 "Attention") — real ownership check, not just an
+  // id-based update: `overrideAccess: true` bypasses Payload's own access
+  // control, so without this a caller could mark an arbitrary notification
+  // id read regardless of whose it is. Scope the write to ids that actually
+  // belong to the requesting user (same "identity from session, never a
+  // client-supplied value" rule this codebase applies everywhere else —
+  // see app/api/approvals/route.ts).
+  const owned = await payload.find({
+    collection: 'notifications',
+    where: { id: { in: ids }, user: { equals: user.id } },
+    limit: ids.length,
+    overrideAccess: true,
+  })
   await Promise.all(
-    ids.map((id) => payload.update({ collection: 'notifications', id, data: { isRead: true }, overrideAccess: true })),
+    owned.docs.map((doc) => payload.update({ collection: 'notifications', id: doc.id, data: { isRead: true }, overrideAccess: true })),
   )
   revalidatePath('/', 'layout')
 }

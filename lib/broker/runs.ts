@@ -32,6 +32,7 @@ interface RunRow {
   lease_expires_at: Date | null
   started_at: Date | null
   completed_at: Date | null
+  dismissed_at: Date | null
   error: string | null
   mcp_overlay: unknown
   run_token: string | null
@@ -65,6 +66,7 @@ function rowToRun(row: RunRow): Run {
     leaseExpiresAt: toISOStringOrNull(row.lease_expires_at),
     startedAt: toISOStringOrNull(row.started_at),
     completedAt: toISOStringOrNull(row.completed_at),
+    dismissedAt: toISOStringOrNull(row.dismissed_at),
     error: row.error,
     mcpOverlay: row.mcp_overlay,
     runToken: row.run_token,
@@ -419,12 +421,15 @@ export async function setSuggestionStatus(runId: number, status: SuggestionStatu
 // the P5.4 `approvals` collection (lib/hermes/approval-helpers.ts), not here.
 // ---------------------------------------------------------------------------
 
-/** Failed runs attributed to the user, newest first. */
+/** Failed runs attributed to the user, newest first. Excludes runs the user
+ * already dismissed from the Inbox (ROADMAP B5.2) — a dismissed failed run
+ * is still failed, it just no longer needs to sit in the inbox. */
 export async function listFailedRuns(userId: number, limit = 10): Promise<Run[]> {
   const pool = getBrokerPool()
   const res = await pool.query<RunRow>(
     `SELECT * FROM runs
      WHERE status = 'failed'
+       AND dismissed_at IS NULL
        AND (accountable_user = $1 OR originator_user = $1)
      ORDER BY updated_at DESC
      LIMIT $2`,
@@ -435,7 +440,8 @@ export async function listFailedRuns(userId: number, limit = 10): Promise<Run[]>
 
 /** Runs that finished with at least one `file_change` event — "a diff ready
  * to review" surfaced from the transcript, pre-Pillar-6 dedicated review
- * surface. */
+ * surface. Excludes runs the user already dismissed from the Inbox
+ * (ROADMAP B5.2), same reasoning as `listFailedRuns`. */
 export async function listReviewReadyRuns(userId: number, limit = 10): Promise<Run[]> {
   const pool = getBrokerPool()
   const res = await pool.query<RunRow>(
@@ -443,6 +449,7 @@ export async function listReviewReadyRuns(userId: number, limit = 10): Promise<R
      FROM runs r
      JOIN run_messages rm ON rm.run_id = r.id
      WHERE r.status = 'completed'
+       AND r.dismissed_at IS NULL
        AND rm.event->>'type' = 'file_change'
        AND (r.accountable_user = $1 OR r.originator_user = $1)
      ORDER BY r.updated_at DESC
@@ -450,4 +457,17 @@ export async function listReviewReadyRuns(userId: number, limit = 10): Promise<R
     [userId, limit],
   )
   return res.rows.map(rowToRun)
+}
+
+/** ROADMAP B5.2 (Batch B-5 "Attention") — clears a run out of the Inbox's
+ * failed/review-ready sections. Deliberately does not touch `status`/`error`
+ * — dismissing is an inbox-visibility concept, not an outcome correction.
+ * Idempotent (a second dismiss of an already-dismissed run is a no-op, not
+ * an error) so a double-click or a retried request can never fail loudly. */
+export async function dismissRun(runId: number): Promise<void> {
+  const pool = getBrokerPool()
+  await pool.query(
+    `UPDATE runs SET dismissed_at = now(), updated_at = now() WHERE id = $1 AND dismissed_at IS NULL`,
+    [runId],
+  )
 }
