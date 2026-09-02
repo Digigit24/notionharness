@@ -9,6 +9,7 @@ import { Breadcrumbs } from '@/components/nav/breadcrumbs'
 import { EmojiPicker } from './emoji-picker'
 import { CoverPicker } from './cover-picker'
 import { BlockSuiteEditor } from '@/components/editor/BlockSuiteEditor'
+import { SuggestionBar } from '@/components/editor/suggestions/suggestion-bar'
 import { ThemeToggle } from '@/components/theme/theme-toggle'
 import {
   archivePage,
@@ -220,6 +221,13 @@ export function PageCanvas({
           />
         </div>
       </div>
+
+      {/* ROADMAP B3.1 (Batch B-2, suggestions mode) — deliberately outside the
+          `max-w-4xl`/`max-w-none` content column above: a floating review bar
+          reads better anchored to the viewport than the (possibly narrow)
+          prose column. Renders nothing when the page has no pending agent
+          suggestions (own internal poll, see suggestion-bar.tsx). */}
+      <SuggestionBar pageId={page.id} />
     </div>
   )
 }

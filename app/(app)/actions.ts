@@ -6,8 +6,9 @@ import { getPayloadClient } from '@/lib/payload'
 import { getCurrentPayloadUser } from '@/lib/current-user'
 import { descendantIds } from '@/lib/tree'
 import { applyDocSync } from '@/lib/blocksuite-doc'
-import { enqueueRun, getRun, listRunEvents } from '@/lib/broker'
+import { enqueueRun, getRun, listPendingSuggestionRunsForPage, listRunEvents } from '@/lib/broker'
 import type { Run, RunMessageRow } from '@/lib/broker/types'
+import { acceptRunSuggestions, rejectRunSuggestions } from '@/lib/agent-suggestions'
 import type { Page, TaskStatus } from '@/payload-types'
 
 function parentIdOf(page: Page): number | null {
@@ -371,4 +372,65 @@ export async function movePage({
   )
 
   revalidatePath(`/workspace/${workspaceSlug}`)
+}
+
+/** Same "does this user belong to the page's workspace" check `enqueuePageRun`
+ * already inlines, shared here since both suggestion actions below need it
+ * too — a human must not be able to accept/reject another workspace's agent
+ * output just by knowing a run id. */
+async function assertPageAccess(payload: Awaited<ReturnType<typeof getPayloadClient>>, pageId: number, userId: number) {
+  const page = await payload.findByID({ collection: 'pages', id: pageId, depth: 0, overrideAccess: true, disableErrors: true }).catch(() => null)
+  if (!page) throw new Error('Page not found.')
+  const workspaceId = typeof page.workspace === 'number' ? page.workspace : page.workspace?.id
+  if (typeof workspaceId !== 'number') throw new Error('Page has no workspace.')
+  const workspace = await payload.findByID({ collection: 'workspaces', id: workspaceId, depth: 0, overrideAccess: true, disableErrors: true }).catch(() => null)
+  if (!workspace) throw new Error('Workspace not found.')
+  const ownerId = typeof workspace.owner === 'number' ? workspace.owner : workspace.owner?.id
+  const memberIds = Array.isArray(workspace.members)
+    ? workspace.members.map((member) => (typeof member === 'number' ? member : member.id))
+    : []
+  if (ownerId !== userId && !memberIds.includes(userId)) throw new Error('You do not have access to this page.')
+}
+
+/** ROADMAP B3.1 (Batch B-2, suggestions mode) — read side of the
+ * pending-suggestions bar: every run with a still-pending page subtree on
+ * this page, polled from `components/editor/BlockSuiteEditor.tsx` (for the
+ * pending-block visual treatment) and `suggestion-bar.tsx` (for the bar
+ * itself) independently, same "decoupled, each polls what it needs" pattern
+ * `affine-run-card`'s own polling already uses elsewhere in this editor. */
+export async function listPendingSuggestionsForPage(
+  pageId: number,
+): Promise<{ runId: number; subtreeBlockId: string; createdAt: string }[]> {
+  if (!Number.isSafeInteger(pageId) || pageId < 1) throw new Error('A valid page id is required.')
+  const [user, payload] = await Promise.all([getCurrentPayloadUser(), getPayloadClient()])
+  if (!user) throw new Error('You must be logged in.')
+  await assertPageAccess(payload, pageId, user.id)
+  const runs = await listPendingSuggestionRunsForPage(pageId)
+  return runs
+    .filter((run): run is Run & { pageSubtreeBlockId: string } => run.pageSubtreeBlockId !== null)
+    .map((run) => ({ runId: run.id, subtreeBlockId: run.pageSubtreeBlockId, createdAt: run.createdAt }))
+}
+
+/** ROADMAP B3.1 (Batch B-2, suggestions mode) — the "Accept all" action on a
+ * page's pending-suggestions bar (`components/editor/suggestions/suggestion-bar.tsx`).
+ * Whole-run granularity: see `lib/agent-suggestions.ts` for why. */
+export async function acceptSuggestionRun(runId: number): Promise<void> {
+  if (!Number.isSafeInteger(runId) || runId < 1) throw new Error('A valid run id is required.')
+  const [user, payload] = await Promise.all([getCurrentPayloadUser(), getPayloadClient()])
+  if (!user) throw new Error('You must be logged in.')
+  const run = await getRun(runId)
+  if (!run || !run.pageId) throw new Error('Run not found or has no page.')
+  await assertPageAccess(payload, run.pageId, user.id)
+  await acceptRunSuggestions(runId)
+}
+
+/** "Reject all" — deletes the run's whole page subtree. See `lib/agent-suggestions.ts`. */
+export async function rejectSuggestionRun(runId: number): Promise<void> {
+  if (!Number.isSafeInteger(runId) || runId < 1) throw new Error('A valid run id is required.')
+  const [user, payload] = await Promise.all([getCurrentPayloadUser(), getPayloadClient()])
+  if (!user) throw new Error('You must be logged in.')
+  const run = await getRun(runId)
+  if (!run || !run.pageId) throw new Error('Run not found or has no page.')
+  await assertPageAccess(payload, run.pageId, user.id)
+  await rejectRunSuggestions(payload, runId)
 }

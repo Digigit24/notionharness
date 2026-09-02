@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { syncPageDoc } from '@/app/(app)/actions'
+import { listPendingSuggestionsForPage, syncPageDoc } from '@/app/(app)/actions'
 import { NativeDatabaseBlockSchema } from '@/components/editor/blocks/native-database/schema'
 import { NativeDatabaseBlockSpec } from '@/components/editor/blocks/native-database/spec'
 import { registerNativeDatabaseSlashMenuItem } from '@/components/editor/blocks/native-database/slash-menu'
@@ -20,6 +20,11 @@ import { loadBlockSuiteRuntime } from '@/lib/blocksuite-runtime'
 
 const AUTOSAVE_DELAY_MS = 500
 const LIVE_STATE_POLL_MS = 3000
+// ROADMAP B3.1 (Batch B-2, suggestions mode) — how often this tab checks for
+// pending agent-run subtrees to apply/clear the `.suggestion-pending-subtree`
+// visual treatment (app/globals.css). Same cadence as the run-card embed's
+// own status poll; cheap (one small indexed query) even when nothing is pending.
+const SUGGESTIONS_POLL_MS = 4000
 
 let blockSuiteEffectsReady: Promise<void> | null = null
 
@@ -83,7 +88,11 @@ export function BlockSuiteEditor({
     let saveTimer: ReturnType<typeof setTimeout> | null = null
     let onUpdate: (() => void) | null = null
     let liveStateTimer: ReturnType<typeof setInterval> | null = null
+    let suggestionsTimer: ReturnType<typeof setInterval> | null = null
     let applyingRemote = false
+    // Block ids this tab has already tagged with the pending-suggestion CSS
+    // class, so each poll only touches what actually changed.
+    const appliedSuggestionBlockIds = new Set<string>()
 
     setMountError(null)
 
@@ -203,6 +212,44 @@ export function BlockSuiteEditor({
           }
         }
         liveStateTimer = setInterval(() => void pollLiveState(), LIVE_STATE_POLL_MS)
+
+        // ROADMAP B3.1 (Batch B-2, suggestions mode) — visual treatment for
+        // pending agent-run subtrees, at the granularity lib/agent-suggestions.ts
+        // ships (whole-run, not per-block): find each pending run's subtree
+        // handle by BlockSuite's own `data-block-id` attribute (set on every
+        // rendered block by @blocksuite/block-std's lit-host renderer — the
+        // same attribute BlockSuite's own selection/range code queries
+        // internally, not an internals hack) and toggle a class on it. No
+        // custom block schema or BlockComponent involved — this only ever
+        // touches BlockSuite's *rendered DOM*, the same boundary the
+        // `.page-canvas-title`/`affine-menu` overrides in app/globals.css
+        // already work within.
+        const pollPendingSuggestions = async () => {
+          if (cancelled) return
+          const root = containerRef.current
+          if (!root) return
+          try {
+            const suggestions = await listPendingSuggestionsForPage(pageId)
+            const nextIds = new Set(suggestions.map((s) => s.subtreeBlockId))
+            for (const id of appliedSuggestionBlockIds) {
+              if (nextIds.has(id)) continue
+              root.querySelector(`[data-block-id="${CSS.escape(id)}"]`)?.classList.remove('suggestion-pending-subtree')
+              appliedSuggestionBlockIds.delete(id)
+            }
+            for (const id of nextIds) {
+              if (appliedSuggestionBlockIds.has(id)) continue
+              const el = root.querySelector(`[data-block-id="${CSS.escape(id)}"]`)
+              if (el) {
+                el.classList.add('suggestion-pending-subtree')
+                appliedSuggestionBlockIds.add(id)
+              }
+            }
+          } catch {
+            // A later poll retries; a transient failure here must never break editing.
+          }
+        }
+        void pollPendingSuggestions()
+        suggestionsTimer = setInterval(() => void pollPendingSuggestions(), SUGGESTIONS_POLL_MS)
       } catch (err) {
         if (cancelled) return
         console.error(`Failed to mount BlockSuite editor for page ${pageId}.`, err)
@@ -216,6 +263,7 @@ export function BlockSuiteEditor({
       cancelled = true
       if (saveTimer) clearTimeout(saveTimer)
       if (liveStateTimer) clearInterval(liveStateTimer)
+      if (suggestionsTimer) clearInterval(suggestionsTimer)
       if (doc && onUpdate) doc.spaceDoc.off('update', onUpdate)
       editor?.remove()
     }

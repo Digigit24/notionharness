@@ -4,6 +4,18 @@ export type RunStatus = 'queued' | 'dispatched' | 'running' | 'waiting_directory
 
 export const TERMINAL_STATUSES: readonly RunStatus[] = ['completed', 'failed', 'cancelled']
 
+/** ROADMAP B3.1 (Batch B-2, suggestions mode) — whole-run accept/reject state
+ * for a run's page subtree (`pageSubtreeBlockId`). Coarse fallback per the
+ * plan's own pre-authorization: a per-block suggestion mark can't be stored
+ * durably without either mutating a stock BlockSuite block schema this app
+ * doesn't own, or registering a brand-new container block flavour with its
+ * own children-rendering BlockComponent — both real BlockSuite-internals work
+ * past this repo's lib/blocksuite-*.ts wrapper boundary. See
+ * lib/agent-suggestions.ts for the full reasoning and the accept/reject ops
+ * themselves. Meaningless (but always 'pending' by column default) for a run
+ * that never got a page subtree in the first place. */
+export type SuggestionStatus = 'pending' | 'accepted' | 'rejected'
+
 export interface Run {
   id: number
   taskId: number | null
@@ -19,6 +31,7 @@ export interface Run {
   externalSessionId: string | null
   pageId: number | null
   pageSubtreeBlockId: string | null
+  suggestionStatus: SuggestionStatus
   /** Serialized prompt for page-scoped runs (taskId is null). */
   prompt: string | null
   nextSeq: number

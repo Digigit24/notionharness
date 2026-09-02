@@ -15,12 +15,15 @@ async function main() {
     fs.readFileSync(path.join(import.meta.dirname, '0002_run_page_context.sql'), 'utf8'),
     fs.readFileSync(path.join(import.meta.dirname, '0003_run_prompt.sql'), 'utf8'),
     fs.readFileSync(path.join(import.meta.dirname, '0004_runs_task_agent_active_uidx_null_safe.sql'), 'utf8'),
+    fs.readFileSync(path.join(import.meta.dirname, '0005_run_suggestion_status.sql'), 'utf8'),
   ].join('\n')
 
   const pool = new Pool({ connectionString: process.env.DATABASE_URI || '', max: 1 })
   try {
     await pool.query(sql)
-    console.log('Broker schema applied: runs, run_messages, run_usage, run page context, NULL-safe active-run index.')
+    console.log(
+      'Broker schema applied: runs, run_messages, run_usage, run page context, NULL-safe active-run index, run suggestion status.',
+    )
   } finally {
     await pool.end()
   }

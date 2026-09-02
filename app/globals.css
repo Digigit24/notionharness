@@ -181,6 +181,42 @@ affine-menu .affine-menu-body::-webkit-scrollbar-thumb:hover {
   background-color: rgba(255, 255, 255, 0.32);
 }
 
+/*
+ * ROADMAP B3.1 (Batch B-2 "Moat") — pending-suggestion visual treatment.
+ * `components/editor/BlockSuiteEditor.tsx` toggles this class directly (plain
+ * `classList`, no Lit/custom-element work) on a run-subtree's own rendered
+ * element, found via BlockSuite's own `data-block-id` attribute — the same
+ * hook BlockSuite's selection/range code uses internally
+ * (@blocksuite/block-std's BLOCK_ID_ATTR), not an internals hack. Whole-run
+ * granularity (the class lands on the subtree's toggle-list container, which
+ * visually covers every block the run appended beneath it) rather than
+ * per-block — see lib/agent-suggestions.ts for why per-block state can't be
+ * stored durably here. This is the *reverse* of the input-cascade gotcha
+ * above (BlockSuite's own unlayered rules leaking onto OUR elements): here
+ * we're styling BlockSuite's own rendered element from outside, so no
+ * unlayered-vs-Tailwind-layer conflict is expected for these properties —
+ * `!important` is kept anyway as the established defensive pattern for
+ * anything touching BlockSuite-rendered markup in this file.
+ */
+.suggestion-pending-subtree {
+  position: relative !important;
+  border-radius: 6px !important;
+  border-left: 3px solid var(--primary) !important;
+  background: color-mix(in oklch, var(--primary), transparent 94%) !important;
+  padding-left: 8px !important;
+  margin-left: -8px !important;
+}
+
+.suggestion-pending-subtree::before {
+  content: 'Suggested — pending review';
+  display: block;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--primary);
+  padding-top: 4px;
+}
+
 :root {
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
