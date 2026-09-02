@@ -3,12 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { saveAgent } from '@/app/(app)/workspace/[workspaceSlug]/agents/actions'
 import { Button } from '@/components/ui/button'
-
-type Agent = {
-  id: number
-  name: string
-  skills?: unknown
-}
+import type { Agent } from '@/components/agents/agent-editor'
 
 type SkillItem = {
   name: string

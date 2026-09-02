@@ -5,7 +5,7 @@ import { saveAgent } from '@/app/(app)/workspace/[workspaceSlug]/agents/actions'
 import { AgentCapabilities } from '@/components/agents/agent-capabilities'
 import { Button } from '@/components/ui/button'
 
-type Agent = {
+export type Agent = {
   id: number
   name: string
   runtimeProfile: number | { id: number }

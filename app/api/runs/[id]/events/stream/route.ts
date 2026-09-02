@@ -77,13 +77,13 @@ async function userCanReadRun(userId: number, run: Run): Promise<boolean> {
  * re-fetching everything on a fixed clock regardless of whether anything
  * changed.
  */
-export async function GET(req: NextRequest, { params }: { params: Promise<{ runId: string }> }) {
+export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentPayloadUser()
   if (!user) {
     return new Response('Unauthorized', { status: 401 })
   }
 
-  const { runId: runIdParam } = await params
+  const { id: runIdParam } = await params
   const runId = Number(runIdParam)
   if (!Number.isSafeInteger(runId) || runId < 1) {
     return new Response('Invalid run id', { status: 400 })

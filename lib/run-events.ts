@@ -26,7 +26,7 @@ export type RunEvent =
       subtree: string
       blockId: string
       operation: 'append'
-      kind: 'heading' | 'paragraph'
+      kind: 'heading' | 'paragraph' | 'list' | 'code'
       status: 'committed'
     }
 

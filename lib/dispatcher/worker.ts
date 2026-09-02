@@ -88,6 +88,7 @@ export async function dispatchNextRun(workerId: string): Promise<DispatchOutcome
   if (!run) return { claimed: false }
 
   const execution = executeRun(run)
+    .then(() => undefined)
     .catch(async (err) => {
       // Anything unexpected (agent lookup blew up, worktree creation
       // failed, the binary isn't on this machine) is still a run that
