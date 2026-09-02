@@ -54,7 +54,13 @@ export async function subscribeToPush(): Promise<PushSubscription> {
     existing ??
     (await registration.pushManager.subscribe({
       userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(publicKey),
+      // TS's DOM lib types `Uint8Array` as generic over its backing buffer
+      // (`ArrayBufferLike`, which also covers `SharedArrayBuffer`), while
+      // `PushSubscriptionOptionsInit.applicationServerKey` wants a plain
+      // `BufferSource` backed specifically by `ArrayBuffer` — a real value
+      // constructed via `new Uint8Array(length)` is always `ArrayBuffer`-
+      // backed at runtime, so this cast is safe, not a type-hole.
+      applicationServerKey: urlBase64ToUint8Array(publicKey) as BufferSource,
     }))
 
   const res = await fetch('/api/notifications/subscribe', {
