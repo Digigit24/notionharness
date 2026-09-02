@@ -67,6 +67,7 @@ import { enqueueRun, closeBrokerPool } from '../lib/broker'
 import { loadDoc, seedEmptyDoc, encodeDocUpdate } from '../lib/blocksuite-doc'
 import { Text } from '../lib/blocksuite-store'
 import type { Payload } from 'payload'
+import type { TaskStatus } from '../payload-types'
 
 nextEnv.loadEnvConfig(process.cwd())
 
@@ -114,7 +115,7 @@ async function ensureTaskStatuses(payload: Payload, workspaceId: number) {
     return all.docs.find((s) => s.category === 'todo') ?? all.docs[0]
   }
 
-  const specs: Array<{ name: string; category: string; position: number }> = [
+  const specs: Array<{ name: string; category: NonNullable<TaskStatus['category']>; position: number }> = [
     { name: 'Backlog', category: 'backlog', position: 0 },
     { name: 'To do', category: 'todo', position: 1 },
     { name: 'In Progress', category: 'inProgress', position: 2 },
