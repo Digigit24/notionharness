@@ -1,7 +1,7 @@
 import { notFound } from 'next/navigation'
 import { getPayloadClient } from '@/lib/payload'
 import { getWorkspaceBySlug } from '@/lib/pages-cache'
-import { getActiveRunForAgent } from '@/lib/broker'
+import { getActiveRunForAgent, getAgentUsageRollup } from '@/lib/broker'
 import { AgentDetailView } from '@/components/agents/agent-detail-view'
 
 // ROADMAP B-1 (Detail) — the real, linkable home for one agent. Conforms to
@@ -40,6 +40,10 @@ export default async function AgentDetailPage({
     getActiveRunForAgent(agentId),
   ])
 
+  // ROADMAP B7.2 — the Overview tab's per-agent spend, same 7-day window as
+  // the list page and the ambient status bar elsewhere in this app.
+  const weeklySpend = await getAgentUsageRollup(agentId, 7)
+
   const agentWorkspaceId = agent ? (typeof agent.workspace === 'number' ? agent.workspace : agent.workspace.id) : null
   if (!agent || agentWorkspaceId !== workspace.id) notFound()
 
@@ -63,6 +67,7 @@ export default async function AgentDetailPage({
       runtimeProfile={runtimeProfile}
       activeRunId={activeRun?.id ?? null}
       ownerName={ownerName}
+      weeklySpendTicks={weeklySpend.totalCostTicks}
     />
   )
 }

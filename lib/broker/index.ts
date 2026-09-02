@@ -34,5 +34,7 @@ export {
   getRunUsageTotalsForRuns,
   getProjectUsageRollup,
   getWorkspaceUsageRollup,
+  getAgentUsageRollup,
+  getAgentUsageRollupForAgents,
 } from './usage'
 export type { UsageInput, RunUsageTotals, TaskUsageTotals } from './usage'

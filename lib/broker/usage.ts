@@ -116,6 +116,58 @@ export async function getProjectUsageRollup(projectId: number, sinceDays = 30): 
   }
 }
 
+/** ROADMAP B7.2 (Batch B-6 "Finish") — cost audit's real gap: the agents list
+ * page had no per-agent spend anywhere, and `runs.agent_id` already exists
+ * directly on the row (see lib/broker/runs.ts's `RunRow`/`getActiveRunForAgent`),
+ * so this needs no join through tasks/pages at all — simplest of the five
+ * rollups in this file. Same trailing-window/summed-on-read shape as
+ * `getProjectUsageRollup`. */
+export async function getAgentUsageRollup(agentId: number, sinceDays = 7): Promise<RunUsageTotals> {
+  const pool = getBrokerPool()
+  const res = await pool.query<{ total_tokens: string | null; total_cost_ticks: string | null }>(
+    `SELECT COALESCE(SUM(ru.tokens), 0) AS total_tokens, COALESCE(SUM(ru.cost_ticks), 0) AS total_cost_ticks
+     FROM run_usage ru
+     INNER JOIN runs r ON r.id = ru.run_id
+     WHERE r.agent_id = $1
+       AND ru.created_at >= now() - ($2::text || ' days')::interval`,
+    [agentId, sinceDays],
+  )
+  const row = res.rows[0]
+  return {
+    totalTokens: Number(row?.total_tokens ?? 0),
+    totalCostTicks: Number(row?.total_cost_ticks ?? 0),
+  }
+}
+
+/** ROADMAP B7.2 — batched version of `getAgentUsageRollup` for an agent list
+ * page, same shape as `getRunUsageTotalsForRuns`: one query for every agent
+ * id at once rather than N. Agents with no usage rows in the window are
+ * simply absent from the returned map (callers should default to zero). */
+export async function getAgentUsageRollupForAgents(
+  agentIds: number[],
+  sinceDays = 7,
+): Promise<Record<number, RunUsageTotals>> {
+  if (agentIds.length === 0) return {}
+  const pool = getBrokerPool()
+  const res = await pool.query<{ agent_id: string; total_tokens: string | null; total_cost_ticks: string | null }>(
+    `SELECT r.agent_id, COALESCE(SUM(ru.tokens), 0) AS total_tokens, COALESCE(SUM(ru.cost_ticks), 0) AS total_cost_ticks
+     FROM run_usage ru
+     INNER JOIN runs r ON r.id = ru.run_id
+     WHERE r.agent_id = ANY($1::bigint[])
+       AND ru.created_at >= now() - ($2::text || ' days')::interval
+     GROUP BY r.agent_id`,
+    [agentIds, sinceDays],
+  )
+  const map: Record<number, RunUsageTotals> = {}
+  for (const row of res.rows) {
+    map[Number(row.agent_id)] = {
+      totalTokens: Number(row.total_tokens ?? 0),
+      totalCostTicks: Number(row.total_cost_ticks ?? 0),
+    }
+  }
+  return map
+}
+
 /** ROADMAP B5.1/B1.5 (home surface "what it is costing" + the ambient status
  * bar's spend stat) — same join-through-`tasks` pattern as
  * `getProjectUsageRollup`, one level up (workspace instead of project), plus

@@ -37,11 +37,16 @@ export function AgentEditor({
   workspaceSlug,
   profiles,
   initialAgents,
+  weeklySpendByAgentId,
 }: {
   workspaceId: number
   workspaceSlug: string
   profiles: AgentProfile[]
   initialAgents: Agent[]
+  /** ROADMAP B7.2 — cost ticks per agent, trailing 7 days. Keyed by agent id
+   * (string, since it arrives via Object.fromEntries from the server
+   * component). Agents with no runs in the window are simply absent. */
+  weeklySpendByAgentId?: Record<string, number>
 }) {
   const router = useRouter()
   const [agents, setAgents] = useState(initialAgents)
@@ -61,22 +66,30 @@ export function AgentEditor({
             No agents configured yet.
           </p>
         ) : (
-          sortedAgents.map((agent) => (
-            <Link
-              key={agent.id}
-              href={`/workspace/${workspaceSlug}/agents/${agent.id}`}
-              className="flex w-full items-center justify-between rounded-lg border border-black/10 p-4 text-left hover:bg-black/[.03] dark:border-white/10 dark:hover:bg-white/[.04]"
-            >
-              <span>
-                <span className="block font-medium">{agent.name}</span>
-                <span className="text-xs text-black/50 dark:text-white/50">
-                  {agent.model || 'Default model'} · {agent.permissionMode || 'ask'}
-                  {agent.enabled === false ? ' · disabled' : ''}
+          sortedAgents.map((agent) => {
+            const spendTicks = weeklySpendByAgentId?.[String(agent.id)] ?? 0
+            return (
+              <Link
+                key={agent.id}
+                href={`/workspace/${workspaceSlug}/agents/${agent.id}`}
+                className="flex w-full items-center justify-between rounded-lg border border-black/10 p-4 text-left hover:bg-black/[.03] dark:border-white/10 dark:hover:bg-white/[.04]"
+              >
+                <span>
+                  <span className="block font-medium">{agent.name}</span>
+                  <span className="text-xs text-black/50 dark:text-white/50">
+                    {agent.model || 'Default model'} · {agent.permissionMode || 'ask'}
+                    {agent.enabled === false ? ' · disabled' : ''}
+                  </span>
                 </span>
-              </span>
-              <span className="text-xs text-black/40">View →</span>
-            </Link>
-          ))
+                <span className="flex items-center gap-3">
+                  <span className="text-xs tabular-nums text-black/50 dark:text-white/50" title="Spend, last 7 days">
+                    ${(spendTicks / 100).toFixed(2)}<span className="text-black/30 dark:text-white/30"> /7d</span>
+                  </span>
+                  <span className="text-xs text-black/40">View →</span>
+                </span>
+              </Link>
+            )
+          })
         )}
       </section>
 

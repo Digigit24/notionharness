@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { FolderKanban } from 'lucide-react'
 import { getPayloadClient } from '@/lib/payload'
 import { getWorkspaceBySlug } from '@/lib/pages-cache'
+import { getProjectUsageRollup } from '@/lib/broker'
 import { EmptyState } from '@/components/ui/empty-state'
 
 // ROADMAP B-1 (project detail) — a minimal list route, added specifically so
@@ -25,6 +26,20 @@ export default async function ProjectsListPage({ params }: { params: Promise<{ w
     depth: 0,
     overrideAccess: true,
   })
+
+  // ROADMAP B7.2 (Batch B-6 "Finish") — this list previously showed no
+  // per-project spend at all, even though `getProjectUsageRollup` (built for
+  // the project detail Overview tab in B-1) already exists and needs no new
+  // query infrastructure to reuse here. Bounded by this workspace's own
+  // project count, same "small enough for N queries" reasoning task-detail's
+  // per-run usage loop already uses.
+  const spendByProjectId = new Map<number, number>()
+  await Promise.all(
+    result.docs.map(async (project) => {
+      const rollup = await getProjectUsageRollup(project.id, 30)
+      spendByProjectId.set(project.id, rollup.totalCostTicks)
+    }),
+  )
 
   return (
     <main className="mx-auto w-full max-w-3xl px-6 py-8">
@@ -57,6 +72,9 @@ export default async function ProjectsListPage({ params }: { params: Promise<{ w
                   {project.description && (
                     <span className="block truncate text-xs text-black/40 dark:text-white/40">{project.description}</span>
                   )}
+                </span>
+                <span className="shrink-0 text-xs tabular-nums text-black/50 dark:text-white/50" title="Spend, last 30 days">
+                  ${((spendByProjectId.get(project.id) ?? 0) / 100).toFixed(2)}<span className="text-black/30 dark:text-white/30"> /30d</span>
                 </span>
               </Link>
             </li>

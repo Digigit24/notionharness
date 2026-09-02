@@ -14,6 +14,7 @@ import * as migration_20260902_100000_pages_project from './20260902_100000_page
 import * as migration_20260902_120000_saved_views from './20260902_120000_saved_views';
 import * as migration_20260902_130000_tasks_archived from './20260902_130000_tasks_archived';
 import * as migration_20260902_140000_push_notifications from './20260902_140000_push_notifications';
+import * as migration_20260902_150000_spend_caps from './20260902_150000_spend_caps';
 
 export const migrations = [
   {
@@ -95,5 +96,10 @@ export const migrations = [
     up: migration_20260902_140000_push_notifications.up,
     down: migration_20260902_140000_push_notifications.down,
     name: '20260902_140000_push_notifications'
+  },
+  {
+    up: migration_20260902_150000_spend_caps.up,
+    down: migration_20260902_150000_spend_caps.down,
+    name: '20260902_150000_spend_caps'
   },
 ];
