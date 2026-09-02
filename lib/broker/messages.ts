@@ -50,6 +50,20 @@ export async function listRunEvents(runId: number): Promise<RunMessageRow[]> {
   return res.rows.map((r) => ({ seq: Number(r.seq), event: r.event, createdAt: r.created_at.toISOString() }))
 }
 
+/** Reads only the tail of a run's transcript after `sinceSeq`, still in
+ * `seq` order — what the P5.7 SSE stream route (`app/api/runs/[runId]/
+ * events/stream/route.ts`) uses both for a reconnecting client's catch-up
+ * flush and for each poll tick, so a client never re-receives (or, worse,
+ * misses) events across a reconnect. */
+export async function listRunEventsSince(runId: number, sinceSeq: number): Promise<RunMessageRow[]> {
+  const pool = getBrokerPool()
+  const res = await pool.query<{ seq: string | number; event: RunEvent; created_at: Date }>(
+    `SELECT seq, event, created_at FROM run_messages WHERE run_id = $1 AND seq > $2 ORDER BY seq ASC`,
+    [runId, sinceSeq],
+  )
+  return res.rows.map((r) => ({ seq: Number(r.seq), event: r.event, createdAt: r.created_at.toISOString() }))
+}
+
 /** ROADMAP 6.3 — the run-card block's "N steps" chip needs a count, not the
  * full transcript `listRunEvents` returns (which would mean fetching every
  * tool_call/tool_result payload just to count them). */
