@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation'
 import { getPayloadClient } from '@/lib/payload'
 import { getWorkspaceBySlug, getWorkspacePages } from '@/lib/pages-cache'
 import { buildBreadcrumbChain } from '@/lib/tree'
+import { getPageProvenance } from '@/lib/provenance'
 import { PageCanvas } from '@/components/canvas/page-canvas'
 
 export default async function PageView({
@@ -28,10 +29,14 @@ export default async function PageView({
 
   // Same `getWorkspacePages` call (and argument) as `WorkspaceLayout` makes for
   // this same request — `React.cache()` means this reuses that result instead
-  // of firing a second query.
-  const allPages = await getWorkspacePages(workspace.id)
+  // of firing a second query. `getPageProvenance` (ROADMAP B-2) is independent
+  // of it, so both run in the same Promise.all rather than sequentially.
+  const [allPages, provenance] = await Promise.all([
+    getWorkspacePages(workspace.id),
+    getPageProvenance(payload, page.id),
+  ])
 
   const chain = buildBreadcrumbChain(allPages, page.id)
 
-  return <PageCanvas workspace={workspace} page={page} breadcrumbChain={chain} />
+  return <PageCanvas workspace={workspace} page={page} breadcrumbChain={chain} provenance={provenance} />
 }
