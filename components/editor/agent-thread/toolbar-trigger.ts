@@ -1,4 +1,4 @@
-import { ConfigExtension, type ExtensionType, type EditorHost } from '@/lib/blocksuite-block-std'
+import { type EditorHost } from '@/lib/blocksuite-block-std'
 import type { AdvancedMenuItem, MenuItemGroup } from '@/lib/blocksuite-blocks'
 import type { BlockModel, Doc } from '@/lib/blocksuite-store'
 import { getAskAgentHandler } from './registry'
@@ -46,13 +46,16 @@ function buildAskAgentGroup<T extends ToolbarMenuContext>(): MenuItemGroup<T> {
   }
 }
 
-export const AskAgentToolbarSpec: ExtensionType[] = [
-  ConfigExtension('affine:page', {
-    toolbarMoreMenu: {
-      configure: <T extends ToolbarMenuContext>(groups: MenuItemGroup<T>[]): MenuItemGroup<T>[] => [
-        ...groups,
-        buildAskAgentGroup<T>(),
-      ],
-    },
-  }),
-]
+// NOT wrapped in its own `ConfigExtension('affine:page', ...)` here — see
+// mentions/spec.ts's `mentionPageConfig` comment for why: BlockSuite throws
+// `DuplicateServiceDefinitionError` if two separate `ConfigExtension` calls
+// both target `affine:page`. This raw config object gets merged with
+// mentions/spec.ts's into ONE `ConfigExtension` call in BlockSuiteEditor.tsx.
+export const askAgentPageConfig = {
+  toolbarMoreMenu: {
+    configure: <T extends ToolbarMenuContext>(groups: MenuItemGroup<T>[]): MenuItemGroup<T>[] => [
+      ...groups,
+      buildAskAgentGroup<T>(),
+    ],
+  },
+}

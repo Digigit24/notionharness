@@ -7,8 +7,9 @@ import { NativeDatabaseBlockSpec } from '@/components/editor/blocks/native-datab
 import { registerNativeDatabaseSlashMenuItem } from '@/components/editor/blocks/native-database/slash-menu'
 import { RunCardBlockSchema } from '@/components/editor/blocks/run-card/schema'
 import { RunCardBlockSpec } from '@/components/editor/blocks/run-card/spec'
-import { MentionSpec } from '@/components/editor/mentions/spec'
-import { AskAgentToolbarSpec } from '@/components/editor/agent-thread/toolbar-trigger'
+import { MentionSpec, mentionPageConfig } from '@/components/editor/mentions/spec'
+import { askAgentPageConfig } from '@/components/editor/agent-thread/toolbar-trigger'
+import { ConfigExtension } from '@/lib/blocksuite-block-std'
 // Side-effect only: registers the "Ask agent" handler the toolbar trigger
 // calls through (see components/editor/agent-thread/registry.ts).
 import '@/components/editor/agent-thread/block-anchored-thread'
@@ -140,7 +141,15 @@ export function BlockSuiteEditor({
           ...NativeDatabaseBlockSpec,
           ...RunCardBlockSpec,
           ...MentionSpec,
-          ...AskAgentToolbarSpec,
+          // Merged into a single `ConfigExtension('affine:page', ...)` call —
+          // mentions/spec.ts and agent-thread/toolbar-trigger.ts each need an
+          // `affine:page` config, but BlockSuite throws
+          // `DuplicateServiceDefinitionError` if two separate ConfigExtension
+          // calls target the same flavour (real bug hit live: "Service
+          // [Config](affine:page) already exists", which killed the whole
+          // editor's widget/service tree before it could finish mounting —
+          // broke the slash menu and every other interaction).
+          ConfigExtension('affine:page', { ...mentionPageConfig, ...askAgentPageConfig }),
         ]
         editor.doc = doc
         editor.mode = 'page'
