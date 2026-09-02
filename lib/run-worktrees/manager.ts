@@ -90,6 +90,12 @@ export class RunWorktreeManager {
     return withLock(barePath, async () => {
       await mkdir(join(this.options.rootDir, 'runs'), { recursive: true })
       await rm(descriptor.worktreePath, { recursive: true, force: true })
+      // A worker can die after creating the worktree but before settling the
+      // run. Prune its missing registration and remove the run-scoped branch
+      // so lease recovery can recreate the isolated checkout cleanly.
+      await git(barePath, ['worktree', 'prune'])
+      const existingBranch = await git(barePath, ['branch', '--list', descriptor.branch])
+      if (existingBranch.stdout.trim()) await git(barePath, ['branch', '--delete', '--force', descriptor.branch])
       await git(barePath, ['worktree', 'add', '-b', descriptor.branch, descriptor.worktreePath, ref])
       return descriptor
     })
