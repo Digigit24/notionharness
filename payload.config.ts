@@ -23,6 +23,7 @@ import { RuntimeProfiles } from './collections/RuntimeProfiles'
 import { Runtimes } from './collections/Runtimes'
 import { Agents } from './collections/Agents'
 import { Approvals } from './collections/Approvals'
+import { SavedViews } from './collections/SavedViews'
 
 const filename = fileURLToPath(import.meta.url)
 const dirname = path.dirname(filename)
@@ -53,6 +54,7 @@ export default buildConfig({
     Runtimes,
     Agents,
     Approvals,
+    SavedViews,
   ],
   editor: lexicalEditor(),
   secret: process.env.PAYLOAD_SECRET || '',

@@ -11,6 +11,8 @@ import * as migration_20260902_070000_tasks_agents from './20260902_070000_tasks
 import * as migration_20260902_080000_tasks_page from './20260902_080000_tasks_page';
 import * as migration_20260902_090000_approvals from './20260902_090000_approvals';
 import * as migration_20260902_100000_pages_project from './20260902_100000_pages_project';
+import * as migration_20260902_120000_saved_views from './20260902_120000_saved_views';
+import * as migration_20260902_130000_tasks_archived from './20260902_130000_tasks_archived';
 
 export const migrations = [
   {
@@ -77,5 +79,15 @@ export const migrations = [
     up: migration_20260902_100000_pages_project.up,
     down: migration_20260902_100000_pages_project.down,
     name: '20260902_100000_pages_project'
+  },
+  {
+    up: migration_20260902_120000_saved_views.up,
+    down: migration_20260902_120000_saved_views.down,
+    name: '20260902_120000_saved_views'
+  },
+  {
+    up: migration_20260902_130000_tasks_archived.up,
+    down: migration_20260902_130000_tasks_archived.down,
+    name: '20260902_130000_tasks_archived'
   },
 ];
