@@ -49,6 +49,9 @@ dev-detached*.log
 dispatcher-loop.log
 .dispatcher-loop.pid
 dev-permanent.log
+build-output.log
+server-output.log
+server-error.log
 *.tmp
 
 # agent tooling scratch state (not app source)
