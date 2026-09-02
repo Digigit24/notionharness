@@ -110,13 +110,26 @@ function childStdioToStreams(child: ChildProcessWithoutNullStreams): {
   const readable = Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>
   const writable = Writable.toWeb(child.stdin) as WritableStream<Uint8Array>
   child.once('exit', () => {
+    // `ReadableStream#cancel()`/`WritableStream#close()` are always async —
+    // they return a Promise rather than throwing synchronously, even when
+    // the stream is in a state that can't be cancelled/closed cleanly (e.g.
+    // "locked" because the ACP SDK still holds an active reader on it after
+    // we've abandoned the turn on timeout). A bare try/catch around a call
+    // that never throws synchronously does nothing; the real rejection
+    // surfaces later as an unhandled promise rejection, which crashed the
+    // whole process the first time this path was actually exercised
+    // (confirmed live: `ERR_INVALID_STATE: ReadableStream is locked`).
     try {
-      readable.cancel()
+      readable.cancel().catch(() => {
+        // already closed/locked — nothing more to do
+      })
     } catch {
       // already closed
     }
     try {
-      writable.close()
+      writable.close().catch(() => {
+        // already closed/locked — nothing more to do
+      })
     } catch {
       // already closed
     }
@@ -377,7 +390,14 @@ export async function sendTurn(opts: SendTurnOptions): Promise<SendTurnResult> {
     const app = buildClientApp(opts.permissionTimeoutMs ?? 50, opts.permissionMode ?? 'ask')
 
     const turnPromise = new Promise<void>((resolve, reject) => {
-      void app.connectWith(stream, async (ctx) => {
+      // `connectWith` returns its own promise, independent of our
+      // resolve/reject calls inside the callback below. When we abandon a
+      // hung turn on timeout and force the underlying streams closed (see
+      // `childStdioToStreams`), the SDK's own connection object rejects its
+      // internal pending state with "ACP connection closed" — confirmed
+      // live, an unhandled rejection that crashed the process. `void` alone
+      // discards the promise but does not attach a rejection handler.
+      app.connectWith(stream, async (ctx) => {
         try {
           // `ClientContext` has no dedicated `.initialize()`/`.newSession()`
           // methods — confirmed against the installed SDK's own type
@@ -422,6 +442,11 @@ export async function sendTurn(opts: SendTurnOptions): Promise<SendTurnResult> {
           pushEvent({ type: 'done', status: 'error', reason: String(err) })
           reject(err)
         }
+      }).catch(() => {
+        // Already surfaced via reject() above in the normal case; this only
+        // absorbs a rejection from connectWith's OWN promise (e.g. the
+        // transport closing after we abandon a hung turn), which resolve/
+        // reject inside the callback never sees.
       })
     })
 
@@ -441,10 +466,23 @@ export async function sendTurn(opts: SendTurnOptions): Promise<SendTurnResult> {
         status: 'error',
         reason: `turn exceeded ${turnTimeoutMs}ms wall-clock cap`,
       })
+      // Do NOT await turnPromise here — it lost the race, which means
+      // whatever it's doing (most often `active.nextUpdate()` blocked on a
+      // stream from a child process that already died without the ACP SDK
+      // detecting stream closure) may never settle. Awaiting it turned every
+      // timeout into a permanent hang: the `finally` block's `child.kill()`
+      // never ran, so the process was never even reaped, let alone the
+      // caller (the dispatcher's HTTP request) ever getting a response.
+      // Attach a catch without awaiting so a late rejection doesn't surface
+      // as an unhandled promise rejection, but let this function return now.
+      turnPromise.catch(() => {})
+    } else {
+      // turnPromise won the race and has already settled — this only
+      // drains a rejection it already produced, never blocks.
+      await turnPromise.catch(() => {
+        // Already recorded as `done: error` above; swallow.
+      })
     }
-    await turnPromise.catch(() => {
-      // Already recorded as `done: error` above; swallow.
-    })
 
     return { envelopes, sessionId: pinnedSessionId, agentName }
   } finally {
