@@ -9,6 +9,9 @@ import { RunCardBlockSchema } from '@/components/editor/blocks/run-card/schema'
 import { RunCardBlockSpec } from '@/components/editor/blocks/run-card/spec'
 import { MentionSpec } from '@/components/editor/mentions/spec'
 import { AskAgentToolbarSpec } from '@/components/editor/agent-thread/toolbar-trigger'
+// Side-effect only: registers the "Ask agent" handler the toolbar trigger
+// calls through (see components/editor/agent-thread/registry.ts).
+import '@/components/editor/agent-thread/block-anchored-thread'
 import type { AffineEditorContainer } from '@/lib/blocksuite-presets'
 import type { Doc } from '@/lib/blocksuite-store'
 import { ensureBlockSuiteEffects as loadBlockSuiteEffects } from '@/lib/blocksuite-effects'

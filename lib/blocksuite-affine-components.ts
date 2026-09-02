@@ -15,4 +15,4 @@ export * from '@blocksuite/affine-components/rich-text'
 // flags the `export *` collision as a build warning even when a later
 // explicit export shadows it. Naming only what's actually consumed here
 // avoids the collision at the source instead of overriding it after the fact.
-export { popMenu, popupTargetFromElement, menu } from '@blocksuite/affine-components/context-menu'
+export { popMenu, popupTargetFromElement, createPopup, menu } from '@blocksuite/affine-components/context-menu'
