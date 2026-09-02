@@ -123,9 +123,15 @@ async function executeRun(run: Run): Promise<{ status: 'completed' | 'failed'; e
       // follow-up, etc.) is the closest thing this product has to a
       // conversation, and those runs execute serially by construction (you
       // only request changes once the prior run has settled), so this
-      // satisfies "a shard has one writer" exactly as 3.4 requires. Falls
-      // back to the run's own id for a run with no task at all.
-      conversationId: run.taskId ?? run.id,
+      // satisfies "a shard has one writer" exactly as 3.4 requires. Runs with
+      // no task (P6.1/6.2's page-anchored runs) shard by their page instead,
+      // for the same reason: multiple runs against the same page also
+      // execute serially by construction (a human triggers each one) —
+      // falling all the way through to `run.id` (always unique) would give
+      // every page-scoped run its own throwaway shard and silently drop
+      // memory across turns on the same page. `run.id` remains the last
+      // resort for a run with neither a task nor a page.
+      conversationId: run.taskId ?? run.pageId ?? run.id,
       enabledSkills: agent.skills,
       args: [...stringArray(runtimeProfile.fixedArgs), ...stringArray(agent.customArgs)],
       permissionMode: agent.permissionMode,
