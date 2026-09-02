@@ -186,10 +186,13 @@ export async function buildHermesHomeOverlay(opts: BuildHermesHomeOverlayOptions
   // disposable directory and is shared across every run of this agent. This
   // sharing is exactly why two concurrent runs of the same agent are
   // last-writer-wins on memory (roadmap 3.4's own accepted limitation —
-  // surfaced in `components/agents/agent-editor.tsx`'s max-concurrent-runs
-  // warning, not hidden): both runs' `memories/` links resolve to this
-  // identical directory, and Hermes rewrites its memory files whole rather
-  // than appending.
+  // surfaced in `components/agents/agent-memories.tsx`'s Memory tab banner
+  // and `agent-settings-form.tsx`'s max-concurrent-runs warning as of
+  // ROADMAP B7.1/B7.4, Batch B-6 "Finish"; this comment previously pointed
+  // at a warning in `agent-editor.tsx` that no longer exists there after
+  // B-1's Settings/Capabilities split — corrected, not hidden): both runs'
+  // `memories/` links resolve to this identical directory, and Hermes
+  // rewrites its memory files whole rather than appending.
   const memoriesDir = join(agentMemoryRoot, String(opts.agentId))
   await mkdir(memoriesDir, { recursive: true })
   await linkDir(memoriesDir, join(homeDir, 'memories'))

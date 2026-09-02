@@ -6,6 +6,7 @@ import { DetailLayout, type DetailLayoutTab } from '@/components/layout/detail-l
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { AgentCapabilities } from '@/components/agents/agent-capabilities'
+import { AgentMemories } from '@/components/agents/agent-memories'
 import { AgentSettingsForm, type AgentProfile } from '@/components/agents/agent-settings-form'
 import { saveAgent } from '@/app/(app)/workspace/[workspaceSlug]/agents/actions'
 import type { Agent } from '@/components/agents/agent-editor'
@@ -21,6 +22,10 @@ import type { Agent } from '@/components/agents/agent-editor'
 //     untouched) from where it used to live — a client-side tab toggle
 //     inside the list page's inline editor, not a real route. This is now
 //     the only place that UI is mounted.
+//   - Memory (ROADMAP B7.1, Batch B-6 "Finish"): <AgentMemories>, a real
+//     proxy to Hermes's per-agent memory files (app/api/hermes/memories/*)
+//     — list/read/edit/delete, plus the honest last-writer-wins caveat the
+//     plan itself calls for.
 //   - Settings: the actual edit form (agent-settings-form.tsx, extracted out
 //     of the old inline editor) — model, env/args, MCP config, concurrency,
 //     permission mode, enabled toggle.
@@ -32,6 +37,7 @@ export function AgentDetailView({
   runtimeProfile,
   activeRunId,
   ownerName,
+  weeklySpendTicks,
 }: {
   workspaceId: number
   workspaceSlug: string
@@ -40,6 +46,8 @@ export function AgentDetailView({
   runtimeProfile: { name: string; commandName: string; protocolFamily: string } | null
   activeRunId: number | null
   ownerName: string | null
+  /** ROADMAP B7.2 — cost ticks for this agent, trailing 7 days. */
+  weeklySpendTicks?: number
 }) {
   const router = useRouter()
   const [agent, setAgent] = useState(initialAgent)
@@ -89,6 +97,7 @@ export function AgentDetailView({
         <OverviewField label="Permission mode" value={agent.permissionMode || 'ask'} />
         <OverviewField label="Max concurrent runs" value={String(agent.maxConcurrentRuns ?? 1)} />
         <OverviewField label="Skills bound" value={String(skillsCount)} />
+        <OverviewField label="Spend, last 7 days" value={`$${((weeklySpendTicks ?? 0) / 100).toFixed(2)}`} />
       </div>
       {agent.instructions && (
         <div>
@@ -112,6 +121,12 @@ export function AgentDetailView({
     </div>
   )
 
+  const memoryContent = (
+    <div className="p-6">
+      <AgentMemories agent={agent} />
+    </div>
+  )
+
   const settingsContent = (
     <div className="max-w-2xl p-6">
       <AgentSettingsForm
@@ -127,6 +142,7 @@ export function AgentDetailView({
   const tabs: DetailLayoutTab[] = [
     { key: 'overview', label: 'Overview', content: overviewContent },
     { key: 'capabilities', label: 'Capabilities', count: skillsCount, content: capabilitiesContent },
+    { key: 'memory', label: 'Memory', content: memoryContent },
     { key: 'settings', label: 'Settings', content: settingsContent },
   ]
 

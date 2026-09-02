@@ -253,6 +253,12 @@ export function AgentSettingsForm({
             }
             className="mt-1 w-full rounded border border-black/15 px-2 py-1.5 text-sm dark:border-white/15 dark:bg-white/[.04]"
           />
+          {draft.maxConcurrentRuns > 1 && (
+            <span className="mt-1 block text-[11px] font-normal text-amber-700 dark:text-amber-400">
+              Above 1: this agent&apos;s memory is last-writer-wins across its own concurrent runs (see the Memory
+              tab) — the run that finishes last overwrites what an earlier one just learned.
+            </span>
+          )}
         </label>
 
         <label className="block text-xs">

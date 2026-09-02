@@ -10,12 +10,14 @@ import {
   ChevronsLeft,
   ChevronsRight,
   FolderKanban,
+  History,
   Home,
   Inbox,
   ListTodo,
   LogOut,
   Plus,
   Search,
+  Settings,
   Trash2,
   type LucideIcon,
 } from 'lucide-react'
@@ -52,7 +54,12 @@ import { WORK_MODE_SUBROUTES, type WorkSubRoute } from '@/lib/entity-links'
  *               previously NOT LINKED, no route existed).
  *   Agents   -> `/workspace/:slug/agents` (existing)
  *   Ask      -> NOT LINKED. No route exists yet.
- *   Settings -> NOT LINKED. No route exists yet.
+ *   Settings -> `/workspace/:slug/settings` (ROADMAP B7.2, Batch B-6
+ *               "Finish" — previously NOT LINKED, no route existed).
+ *   Audit    -> `/workspace/:slug/audit` (ROADMAP B7.3, same batch — not
+ *               part of the original B-0 target set, added because the
+ *               workspace-wide audit log needs to be reachable from
+ *               somewhere real, not an orphaned route).
  */
 const SECTION_LINKS: Array<{ href: string; label: string; icon: LucideIcon }> = [
   { href: '', label: 'Home', icon: Home },
@@ -60,6 +67,8 @@ const SECTION_LINKS: Array<{ href: string; label: string; icon: LucideIcon }> = 
   { href: '/tasks', label: 'Tasks', icon: ListTodo },
   { href: '/projects', label: 'Projects', icon: FolderKanban },
   { href: '/agents', label: 'Agents', icon: Bot },
+  { href: '/audit', label: 'Audit', icon: History },
+  { href: '/settings', label: 'Settings', icon: Settings },
 ]
 
 /** Is `pathname` the active route for a given section `href` (workspace-relative,
