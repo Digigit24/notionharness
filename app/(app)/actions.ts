@@ -190,13 +190,16 @@ export async function syncPageDoc(pageId: number, update: string) {
 /** Queue work anchored to a page rather than a task (P6.2 block-anchored
  * threads). The prompt is persisted on the raw-pg run row so the dispatcher
  * can deliver it without depending on a Payload request or a second write.
- * Agent selection is intentionally separate: a later assignment step can set
- * agent_id before dispatch; this action never trusts a caller-supplied user.
+ * `agentId` is caller-supplied (the "ask agent" trigger resolves which
+ * agent, via a picker when a workspace has more than one) but always
+ * re-validated server-side against the page's own workspace below — never
+ * trusted blindly, same standard as the accountable-user resolution.
  */
-export async function enqueuePageRun(prompt: string, pageId: number): Promise<{ runId: number }> {
+export async function enqueuePageRun(prompt: string, pageId: number, agentId: number): Promise<{ runId: number }> {
   const text = typeof prompt === 'string' ? prompt.trim() : ''
   if (!text || text.length > 20_000) throw new Error('A prompt between 1 and 20,000 characters is required.')
   if (!Number.isSafeInteger(pageId) || pageId < 1) throw new Error('A valid page id is required.')
+  if (!Number.isSafeInteger(agentId) || agentId < 1) throw new Error('A valid agent id is required.')
 
   const [user, payload] = await Promise.all([getCurrentPayloadUser(), getPayloadClient()])
   if (!user) throw new Error('You must be logged in to enqueue a page run.')
@@ -212,9 +215,14 @@ export async function enqueuePageRun(prompt: string, pageId: number): Promise<{ 
     : []
   if (ownerId !== user.id && !memberIds.includes(user.id)) throw new Error('You do not have access to this page.')
 
+  const agent = await payload.findByID({ collection: 'agents', id: agentId, depth: 0, overrideAccess: true, disableErrors: true }).catch(() => null)
+  if (!agent || agent.enabled === false) throw new Error('Agent not found or disabled.')
+  const agentWorkspaceId = typeof agent.workspace === 'number' ? agent.workspace : agent.workspace?.id
+  if (agentWorkspaceId !== workspaceId) throw new Error('That agent does not belong to this page\'s workspace.')
+
   const run = await enqueueRun({
     taskId: null,
-    agentId: null,
+    agentId,
     pageId,
     prompt: text,
     originatorUser: user.id,

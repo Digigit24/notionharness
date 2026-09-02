@@ -7,10 +7,17 @@ import { useRunEventStream, type RunEventSnapshot } from '@/components/runs/use-
 import { adaptRunEventsToThread } from '@/lib/hermes/runEvent-adapter'
 import type { RunEventEnvelope } from '@/lib/run-events'
 import { getRunSnapshot, enqueuePageRun } from '@/app/(app)/actions'
-import { createPopup, popupTargetFromElement } from '@/lib/blocksuite-affine-components'
+import { createPopup, popupTargetFromElement, popMenu, menu } from '@/lib/blocksuite-affine-components'
 import { registerAskAgentHandler } from './registry'
 import type { AskAgentSelection, AskAgentHandler } from './types'
 import type { BlockModel, Doc } from '@/lib/blocksuite-store'
+import type { EditorHost } from '@/lib/blocksuite-block-std'
+
+interface MentionableAgent {
+  id: number
+  name: string
+  model: string | null
+}
 
 /**
  * ROADMAP 6.2 — block-anchored thread: "Ask agent" on a selection creates a
@@ -43,6 +50,54 @@ function pageIdFromDoc(doc: Doc): number | null {
   return match ? Number(match[1]) : null
 }
 
+/** Same `data-workspace-id` lookup `native-database-block.ts` and the
+ * @mention menu already use — set on the editor's container in
+ * BlockSuiteEditor.tsx. */
+function workspaceIdFromHost(host: EditorHost): string | null {
+  return host.closest('[data-workspace-id]')?.getAttribute('data-workspace-id') ?? null
+}
+
+/**
+ * Resolves which agent a run should target: the workspace's only enabled
+ * agent is used silently (no reason to make the common case click twice),
+ * more than one prompts a picker anchored to `anchorElement`, zero surfaces
+ * a clear error instead of enqueueing a run nothing can ever execute.
+ */
+async function resolveAgent(host: EditorHost, anchorElement: HTMLElement): Promise<MentionableAgent | null> {
+  const workspaceId = workspaceIdFromHost(host)
+  if (!workspaceId) {
+    console.error('[ask-agent] Could not resolve a workspace id — aborting.')
+    return null
+  }
+
+  const res = await fetch(`/api/agents?workspaceId=${workspaceId}`)
+  if (!res.ok) {
+    console.error('[ask-agent] Failed to load agents for this workspace.')
+    return null
+  }
+  const { agents } = (await res.json()) as { agents: MentionableAgent[] }
+  if (agents.length === 0) {
+    console.error('[ask-agent] No agents configured for this workspace — create one before asking an agent.')
+    return null
+  }
+  if (agents.length === 1) return agents[0]
+
+  return new Promise((resolve) => {
+    popMenu(popupTargetFromElement(anchorElement), {
+      options: {
+        title: { text: 'Ask which agent?' },
+        items: agents.map((agent) =>
+          menu.action({
+            name: agent.model ? `${agent.name} (${agent.model})` : agent.name,
+            select: () => resolve(agent),
+          }),
+        ),
+        onClose: () => resolve(null),
+      },
+    })
+  })
+}
+
 const handleAskAgent: AskAgentHandler = async (selection: AskAgentSelection) => {
   const { selectedBlockModels, doc, host } = selection
   if (selectedBlockModels.length === 0) return
@@ -56,20 +111,25 @@ const handleAskAgent: AskAgentHandler = async (selection: AskAgentSelection) => 
   const prompt = serializeSelectedBlocks(selectedBlockModels)
   if (!prompt) return
 
-  let runId: number
-  try {
-    ;({ runId } = await enqueuePageRun(prompt, pageId))
-  } catch (err) {
-    console.error('[ask-agent] Failed to enqueue a run for this selection.', err)
-    return
-  }
-
   const lastBlock = selectedBlockModels[selectedBlockModels.length - 1]
   const parent = lastBlock.parent
   if (!parent) {
     console.error('[ask-agent] Selected block has no parent — cannot place a run-card next to it.')
     return
   }
+
+  const pickerAnchor = host.view.getBlock(lastBlock.id) ?? host
+  const agent = await resolveAgent(host, pickerAnchor)
+  if (!agent) return
+
+  let runId: number
+  try {
+    ;({ runId } = await enqueuePageRun(prompt, pageId, agent.id))
+  } catch (err) {
+    console.error('[ask-agent] Failed to enqueue a run for this selection.', err)
+    return
+  }
+
   const insertAt = parent.children.indexOf(lastBlock) + 1
   const runCardBlockId = doc.addBlock('affine:embed-run-card', { runId }, parent.id, insertAt)
 
