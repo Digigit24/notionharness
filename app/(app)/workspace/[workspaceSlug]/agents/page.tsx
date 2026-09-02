@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation'
 import { getPayloadClient } from '@/lib/payload'
 import { getWorkspaceBySlug } from '@/lib/pages-cache'
 import { AgentEditor } from '@/components/agents/agent-editor'
+import { Breadcrumbs } from '@/components/nav/breadcrumbs'
 
 export default async function AgentsPage({ params }: { params: Promise<{ workspaceSlug: string }> }) {
   const { workspaceSlug } = await params
@@ -12,5 +13,16 @@ export default async function AgentsPage({ params }: { params: Promise<{ workspa
     payload.find({ collection: 'agents', where: { workspace: { equals: workspace.id } }, sort: 'name', limit: 100, depth: 0, overrideAccess: true }),
     payload.find({ collection: 'runtime-profiles', where: { workspace: { equals: workspace.id } }, sort: 'name', limit: 100, depth: 0, overrideAccess: true }),
   ])
-  return <main className="mx-auto w-full max-w-5xl px-6 py-8"><div className="mb-6"><h1 className="text-2xl font-semibold">Agents</h1><p className="mt-1 text-sm text-black/50 dark:text-white/50">Configure how agents run in this workspace.</p></div><AgentEditor workspaceId={workspace.id} workspaceSlug={workspace.slug} profiles={profiles.docs as never} initialAgents={agents.docs as never} /></main>
+  return <main className="mx-auto w-full max-w-5xl px-6 py-8"><div className="mb-6">
+    {/* ROADMAP B-0 (Frame) — proof-of-concept mount of the new <Breadcrumbs>
+        primitive (components/nav/breadcrumbs.tsx). Copy this pattern onto
+        other detail pages; wiring it in everywhere is a separate task. */}
+    <Breadcrumbs
+      className="mb-2"
+      segments={[
+        { label: workspace.name, href: `/workspace/${workspace.slug}` },
+        { label: 'Agents' },
+      ]}
+    />
+    <h1 className="text-2xl font-semibold">Agents</h1><p className="mt-1 text-sm text-black/50 dark:text-white/50">Configure how agents run in this workspace.</p></div><AgentEditor workspaceId={workspace.id} workspaceSlug={workspace.slug} profiles={profiles.docs as never} initialAgents={agents.docs as never} /></main>
 }
