@@ -1,11 +1,11 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import Link from 'next/link'
+import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { ChevronRight, Lock, LockOpen, Maximize2, Minimize2, MoreHorizontal, Trash2 } from 'lucide-react'
+import { Lock, LockOpen, Maximize2, Minimize2, MoreHorizontal, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { PopoverMenu } from '@/components/ui/popover-menu'
+import { Breadcrumbs } from '@/components/nav/breadcrumbs'
 import { EmojiPicker } from './emoji-picker'
 import { CoverPicker } from './cover-picker'
 import { BlockSuiteEditor } from '@/components/editor/BlockSuiteEditor'
@@ -55,29 +55,32 @@ export function PageCanvas({
   const [fullWidth, setFullWidth] = useState(!!page.isFullWidth)
   const isGradientCover = page.coverImage?.startsWith('gradient:')
 
+  // ROADMAP B-1 (Detail) — page view is a full-bleed document editor, not a
+  // tabbed entity like an agent/run/task, so it does NOT adopt
+  // <DetailLayout>'s tab system: there's no real second "view" of a page to
+  // put in a second tab, and a persistent right rail would eat horizontal
+  // space from the writing surface for no benefit. The one piece of
+  // <DetailLayout>'s conformance that *does* genuinely fit is the
+  // breadcrumb — this used to be a hand-rolled duplicate of exactly what
+  // <Breadcrumbs> (components/nav/breadcrumbs.tsx, already used on
+  // agents/page.tsx) does; swapped in here instead of maintaining two
+  // implementations of the same "workspace / ancestor chain / current page"
+  // breadcrumb.
+  const breadcrumbSegments = useMemo(
+    () => [
+      { label: workspace.name, href: `/workspace/${workspace.slug}` },
+      ...breadcrumbChain.map((p, idx) => ({
+        label: `${p.icon ? `${p.icon} ` : ''}${p.title || 'Untitled'}`,
+        href: idx === breadcrumbChain.length - 1 ? undefined : `/workspace/${workspace.slug}/p/${p.id}`,
+      })),
+    ],
+    [workspace.name, workspace.slug, breadcrumbChain],
+  )
+
   return (
     <div className="flex h-full flex-1 flex-col overflow-y-auto">
       <header className="sticky top-0 z-10 flex h-11 shrink-0 items-center justify-between gap-2 border-b border-black/5 bg-white/90 px-4 backdrop-blur dark:border-white/10 dark:bg-[#191919]/90">
-        <nav className="flex min-w-0 items-center gap-1 text-sm text-black/50 dark:text-white/50">
-          <Link href={`/workspace/${workspace.slug}`} className="shrink-0 truncate hover:text-black/80 dark:hover:text-white/80">
-            {workspace.name}
-          </Link>
-          {breadcrumbChain.map((p) => (
-            <span key={p.id} className="flex min-w-0 items-center gap-1">
-              <ChevronRight size={13} className="shrink-0" />
-              <Link
-                href={`/workspace/${workspace.slug}/p/${p.id}`}
-                className={cn(
-                  'truncate hover:text-black/80 dark:hover:text-white/80',
-                  p.id === page.id && 'text-black/80 dark:text-white/80',
-                )}
-              >
-                {p.icon ? `${p.icon} ` : ''}
-                {p.title || 'Untitled'}
-              </Link>
-            </span>
-          ))}
-        </nav>
+        <Breadcrumbs segments={breadcrumbSegments} className="min-w-0" />
 
         <div className="flex shrink-0 items-center gap-1">
           <ThemeToggle />
