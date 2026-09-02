@@ -17,7 +17,10 @@ import { claimNextRun, markRunStarted, settleRun, appendRunEvent, recordUsage, t
 import { RunWorktreeManager } from '@/lib/run-worktrees/manager'
 import { resolveRunWorktreeConfig } from '@/lib/run-worktrees/config'
 import { sendTurnWithIdentity } from '@/lib/hermes/run-with-identity'
+import { createPendingApproval, waitForApproval } from '@/lib/hermes/approval-helpers'
 import type { Agent, Task } from '@/payload-types'
+import type { ApprovalOption } from '@/collections/Approvals'
+import type { ApprovalOutcome } from '@/lib/hermes/acp-client'
 
 export interface DispatchOutcome {
   claimed: boolean
@@ -66,6 +69,38 @@ function buildPromptText(task: Task | null, agent: Agent, run: Run): string {
   // is real future work, not something to fake here.
   parts.push(task ? `Task: ${task.title}` : run.prompt || 'No task is attached to this run.')
   return parts.join('\n\n')
+}
+
+function buildPermissionCallback(
+  runId: number,
+  requestedUserId: number,
+  permissionTimeoutMs: number
+) {
+  return async (params: {
+    id: string
+    title: string
+    detail: string
+    options: Array<{ optionId: string; kind: string; label?: string }>
+  }): Promise<ApprovalOutcome> => {
+      const approvalId = await createPendingApproval({
+      runId,
+      externalId: params.id,
+      requestedUserId,
+      title: params.title,
+      detail: params.detail,
+      options: params.options.map((o) => ({
+        optionId: o.optionId,
+        kind: o.kind as ApprovalOption['kind'],
+        label: o.label,
+      })),
+    })
+    try {
+      const outcome = await waitForApproval(params.id, permissionTimeoutMs)
+      return outcome
+    } finally {
+      void approvalId
+    }
+  }
 }
 
 async function executeRun(run: Run): Promise<{ status: 'completed' | 'failed'; error?: string }> {
@@ -135,6 +170,16 @@ async function executeRun(run: Run): Promise<{ status: 'completed' | 'failed'; e
       enabledSkills: agent.skills,
       args: [...stringArray(runtimeProfile.fixedArgs), ...stringArray(agent.customArgs)],
       permissionMode: agent.permissionMode,
+      // P5.4: when permissionMode is 'ask', wire the callback that creates a
+      // real pending approval and waits for the user to resolve it. Also raise
+      // timeouts significantly — the turn can now be blocked waiting for a human.
+      ...(agent.permissionMode === 'ask'
+        ? {
+            permissionCallback: buildPermissionCallback(run.id, run.accountableUser, 5 * 60 * 1000),
+            permissionTimeoutMs: 5 * 60 * 1000,
+            turnTimeoutMs: 10 * 60 * 1000,
+          }
+        : {}),
       // Pillar 4.7 — `run.runToken` is minted fresh by `claimNextRun` and
       // reaches the agent's own process the same way every other
       // identity-scoped value does (HERMES_HOME, per `sendTurnWithIdentity`)

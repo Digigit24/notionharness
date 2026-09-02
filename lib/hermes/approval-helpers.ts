@@ -1,5 +1,6 @@
 import { getPayloadClient } from '@/lib/payload'
 import type { ApprovalOption, ApprovalStatus } from '@/collections/Approvals'
+import type { ApprovalOutcome } from './acp-client'
 
 const pendingApprovalWaiters = new Map<
   string,
@@ -8,12 +9,6 @@ const pendingApprovalWaiters = new Map<
     reject: (err: Error) => void
   }
 >()
-
-export interface ApprovalOutcome {
-  outcome: 'selected' | 'cancelled'
-  optionId?: string
-  reason?: string
-}
 
 export interface CreateApprovalParams {
   runId: number
