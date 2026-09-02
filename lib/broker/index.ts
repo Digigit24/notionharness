@@ -13,11 +13,10 @@ export {
   listActiveRunsForWorkspace,
   getRunPageContext,
   setRunPageContext,
-  listPendingPermissions,
   listFailedRuns,
   listReviewReadyRuns,
 } from './runs'
-export type { SettleOutcome, PermissionRequestRun } from './runs'
+export type { SettleOutcome } from './runs'
 export { appendRunEvent, listRunEvents } from './messages'
 export { recordUsage } from './usage'
 export type { UsageInput } from './usage'

@@ -6,12 +6,8 @@ import { getPayloadClient } from '@/lib/payload'
 import { getCurrentPayloadUser } from '@/lib/current-user'
 import { getWorkspaceBySlug } from '@/lib/pages-cache'
 import { hrefForEntity } from '@/lib/entity-links'
-import {
-  listPendingPermissions,
-  listFailedRuns,
-  listReviewReadyRuns,
-  type PermissionRequestRun,
-} from '@/lib/broker'
+import { listPendingApprovalsForUser, type ApprovalDoc } from '@/lib/hermes/approval-helpers'
+import { getRun, listFailedRuns, listReviewReadyRuns } from '@/lib/broker'
 import type { Run } from '@/lib/broker'
 import type { Activity } from '@/payload-types'
 
@@ -22,8 +18,9 @@ import type { Activity } from '@/payload-types'
 // for why the inbox reads aren't workspace-filtered).
 //
 // Four categorized sections:
-//   * approvals pending — outstanding `permission` RunEvents on non-terminal
-//     runs (the queryable proxy until P5.4's first-class approval objects land)
+//   * approvals pending — P5.4's first-class `approvals` collection rows
+//     awaiting a human decision, filtered to the current user (source of truth
+//     once the producer/deliverable lands; supersedes the run_messages proxy)
 //   * failed runs        — broker runs that settled as `failed`
 //   * mentions           — activity rows whose action names a mention; no
 //     producer emits these yet, so the section reads the spine and lights up
@@ -47,9 +44,9 @@ export default async function InboxPage({
   const currentUser = await getCurrentPayloadUser()
   const userId = currentUser?.id ?? null
 
-  const [permissions, failedRuns, reviewRuns] = userId
+  const [approvals, failedRuns, reviewRuns] = userId
     ? await Promise.all([
-        listPendingPermissions(userId, 10),
+        listPendingApprovalsForUser(userId).catch(() => []),
         listFailedRuns(userId, 10),
         listReviewReadyRuns(userId, 10),
       ])
@@ -67,8 +64,8 @@ export default async function InboxPage({
       ).docs
     : []
 
-  const [permissionItems, failedItems, reviewItems, mentionItems] = await Promise.all([
-    Promise.all(permissions.map((p) => permissionToItem(payload, p))),
+  const [approvalItems, failedItems, reviewItems, mentionItems] = await Promise.all([
+    Promise.all(approvals.map((approval) => approvalToItem(payload, approval))),
     Promise.all(failedRuns.map((run) => runToItem(payload, run))),
     Promise.all(reviewRuns.map((run) => runToItem(payload, run))),
     Promise.all(mentionActivity.map((activity) => activityToItem(payload, activity))),
@@ -87,7 +84,7 @@ export default async function InboxPage({
         <InboxSection
           title="Approvals pending"
           icon={<ShieldAlert size={14} />}
-          items={permissionItems}
+          items={approvalItems}
           emptyText="Nothing waiting on your approval."
         />
         <InboxSection
@@ -121,18 +118,32 @@ interface InboxItem {
   href: string | null
 }
 
-async function permissionToItem(
+async function approvalToItem(
   payload: Awaited<ReturnType<typeof getPayloadClient>>,
-  req: PermissionRequestRun,
+  approval: ApprovalDoc,
 ): Promise<InboxItem> {
-  const href = await taskOrNullHref(payload, req)
+  const href = await taskForApprovalHref(payload, approval)
+  const options =
+    approval.options.length > 0
+      ? approval.options.map((o) => o.label ?? o.optionId).join(' · ')
+      : null
   return {
-    id: `permission-${req.id}`,
-    headline: req.permission.title || 'Permission request',
-    subline: req.permission.detail || 'An agent needs your approval to act.',
-    time: req.requestedAt,
+    id: `approval-${approval.id}`,
+    headline: approval.title || 'Approval request',
+    subline: approval.detail || options || 'An agent needs your approval to act.',
+    time: approval.createdAt,
     href,
   }
+}
+
+async function taskForApprovalHref(
+  payload: Awaited<ReturnType<typeof getPayloadClient>>,
+  approval: ApprovalDoc,
+): Promise<string | null> {
+  if (approval.runId == null) return null
+  const run = await getRun(approval.runId)
+  if (!run || run.taskId == null) return null
+  return hrefForEntity(payload, 'task', String(run.taskId))
 }
 
 async function runToItem(

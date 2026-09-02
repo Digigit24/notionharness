@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { getBrokerPool } from './db'
-import type { Run, RunEvent, RunStatus } from './types'
+import type { Run, RunStatus } from './types'
 
 const DEFAULT_LEASE_MS = 60_000
 
@@ -272,44 +272,9 @@ export async function setRunPageContext(runId: number, pageId: number, subtreeBl
 // not workspace-scoped: the runs/run_messages tables have no workspace column
 // (runs are D5 raw-pg tables, and a task->run join can't scope them either
 // since task_id is unpopulated today). Matches the notifications bell, which
-// is also cross-workspace by design.
+// is also cross-workspace by design. The outstanding-approval read lives in
+// the P5.4 `approvals` collection (lib/hermes/approval-helpers.ts), not here.
 // ---------------------------------------------------------------------------
-
-export interface PermissionRequestRun extends Run {
-  /** The permission RunEvent that is waiting on a human decision. */
-  permission: Extract<RunEvent, { type: 'permission' }>
-  /** When that permission request was posed. */
-  requestedAt: string
-}
-
-/** Latest outstanding `permission` event per non-terminal run the user is
- * accountable for (or originated). A run counts as pending while it hasn't
- * reached a terminal status — P5.4's first-class approval objects will
- * supersede this proxy when they land; nothing reads this contract's shape. */
-export async function listPendingPermissions(userId: number, limit = 10): Promise<PermissionRequestRun[]> {
-  const pool = getBrokerPool()
-  const res = await pool.query<RunRow & { perm_event: RunEvent; requested_at: string }>(
-    `SELECT r.*, rm.event AS perm_event, rm.created_at AS requested_at
-     FROM runs r
-     JOIN LATERAL (
-       SELECT event, created_at
-       FROM run_messages
-       WHERE run_id = r.id AND event->>'type' = 'permission'
-       ORDER BY seq DESC
-       LIMIT 1
-     ) rm ON true
-     WHERE r.status NOT IN ('completed', 'failed', 'cancelled')
-       AND (r.accountable_user = $1 OR r.originator_user = $1)
-     ORDER BY rm.created_at DESC
-     LIMIT $2`,
-    [userId, limit],
-  )
-  return res.rows.map((row) => ({
-    ...rowToRun(row),
-    permission: row.perm_event as Extract<RunEvent, { type: 'permission' }>,
-    requestedAt: row.requested_at,
-  }))
-}
 
 /** Failed runs attributed to the user, newest first. */
 export async function listFailedRuns(userId: number, limit = 10): Promise<Run[]> {
