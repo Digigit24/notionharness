@@ -117,7 +117,8 @@ export function TaskBlockView({
   return (
     <div className="flex w-full flex-wrap items-center gap-2 rounded-lg border border-black/10 bg-black/[.015] px-2.5 py-1.5 dark:border-white/10 dark:bg-white/[.02]">
       <input
-        className="min-w-[120px] flex-1 border-none bg-transparent text-sm outline-none placeholder:text-black/30 dark:placeholder:text-white/30"
+        className="min-w-[120px] flex-1 rounded-sm border-none bg-transparent text-sm outline-none placeholder:text-black/30 focus-visible:ring-2 focus-visible:ring-ring/40 dark:placeholder:text-white/30"
+        aria-label="Task title"
         value={title}
         placeholder="Untitled task"
         onChange={(e) => setTitle(e.target.value)}

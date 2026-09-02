@@ -263,3 +263,28 @@ affine-menu .affine-menu-body::-webkit-scrollbar-thumb:hover {
     @apply font-sans;
   }
 }
+
+/*
+ * ROADMAP B8.2 (Batch B-6 "Finish") — respect prefers-reduced-motion.
+ * Radix primitives (dialog/dropdown/select/tabs, all under components/ui/*)
+ * drive their open/close motion through `tw-animate-css`'s `animate-in`/
+ * `animate-out` utilities keyed off `data-[state=...]` attributes; this app
+ * also uses plain Tailwind `transition-*` utilities in several hand-rolled
+ * components (buttons, hover states, sidebar collapse). Neither respects the
+ * user's OS-level reduced-motion preference by default — this is the one
+ * global rule that makes both comply, rather than hunting down and patching
+ * every individual animated component. `!important` is required here
+ * because it must win over component-level utility classes with arbitrary
+ * specificity (matching this file's own established pattern above for
+ * anything that must reliably override component-authored classes).
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

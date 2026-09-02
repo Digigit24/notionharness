@@ -68,7 +68,8 @@ export function CoverPicker({ onSelect, trigger }: { onSelect: (value: string) =
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               placeholder="Paste an image URL..."
-              className="min-w-0 flex-1 rounded border border-black/10 bg-transparent px-2 py-1 text-xs outline-none dark:border-white/10"
+              aria-label="Paste an image URL"
+              className="min-w-0 flex-1 rounded border border-black/10 bg-transparent px-2 py-1 text-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50 dark:border-white/10"
             />
             <button
               type="button"

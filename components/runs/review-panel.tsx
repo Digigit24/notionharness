@@ -204,8 +204,9 @@ export function ReviewPanel({
                 value={requestNote}
                 onChange={(e) => setRequestNote(e.target.value)}
                 placeholder="What needs to change? (recorded on the task's Activity tab and queued as a follow-up run)"
+                aria-label="What needs to change"
                 rows={3}
-                className="w-full rounded border border-black/10 bg-transparent px-2 py-1.5 text-sm outline-none dark:border-white/10"
+                className="w-full rounded border border-black/10 bg-transparent px-2 py-1.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50 dark:border-white/10"
               />
               <div className="flex justify-end gap-2">
                 <button type="button" onClick={() => setShowRequestForm(false)} className="rounded px-3 py-1.5 text-xs hover:bg-black/[.06] dark:hover:bg-white/[.08]">

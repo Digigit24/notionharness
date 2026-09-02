@@ -39,8 +39,9 @@ export function AuthForm({ mode }: { mode: 'login' | 'signup' }) {
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="Name"
+          aria-label="Name"
           autoComplete="name"
-          className="rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-[#202020]"
+          className="rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50 dark:border-white/10 dark:bg-[#202020]"
         />
       )}
       <input
@@ -49,8 +50,9 @@ export function AuthForm({ mode }: { mode: 'login' | 'signup' }) {
         type="email"
         required
         placeholder="Email"
+        aria-label="Email"
         autoComplete="email"
-        className="rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-[#202020]"
+        className="rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50 dark:border-white/10 dark:bg-[#202020]"
       />
       <input
         value={password}
@@ -59,8 +61,9 @@ export function AuthForm({ mode }: { mode: 'login' | 'signup' }) {
         required
         minLength={8}
         placeholder="Password"
+        aria-label="Password"
         autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
-        className="rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-[#202020]"
+        className="rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50 dark:border-white/10 dark:bg-[#202020]"
       />
 
       {error && <p className="text-sm text-red-500">{error}</p>}

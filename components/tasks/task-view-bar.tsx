@@ -154,7 +154,8 @@ export function TaskViewBar({
               }
             }}
             placeholder="View name"
-            className="h-7 w-36 rounded border border-black/10 bg-white px-2 text-xs outline-none dark:border-white/10 dark:bg-[#2a2a2a]"
+            aria-label="View name"
+            className="h-7 w-36 rounded border border-black/10 bg-white px-2 text-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50 dark:border-white/10 dark:bg-[#2a2a2a]"
           />
           <Select value={draftScope} onValueChange={(value) => setDraftScope(value as SavedViewScope)}>
             <SelectTrigger size="sm" className="h-7"><SelectValue /></SelectTrigger>

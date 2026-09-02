@@ -13,6 +13,7 @@ import {
   listReviewReadyRuns,
   listRecentPageRunsForWorkspace,
   getWorkspaceUsageRollup,
+  hasAnyRunForWorkspace,
 } from '@/lib/broker'
 import type { Run } from '@/lib/broker'
 import { formatRelativeTime } from '@/lib/relative-time'
@@ -21,6 +22,7 @@ import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
 import { NewPageButton } from '@/components/canvas/new-page-button'
 import { RecentPagesSection } from '@/components/home/recent-pages-section'
+import { FirstRunChecklist } from '@/components/home/first-run-checklist'
 
 // ROADMAP B5.1 — "not a board. The workspace root should answer, in order:
 // what needs me, what is happening right now, what I was doing, and what it
@@ -53,31 +55,58 @@ export default async function WorkspaceHome({
     ],
   }
 
-  const [approvals, failedRuns, reviewRuns, mentionActivity, activeRuns, recentTasks, recentThreadRuns, usage7d] =
-    await Promise.all([
-      userId ? listPendingApprovalsForUser(userId).catch(() => []) : Promise.resolve([]),
-      userId ? listFailedRuns(userId, 5) : Promise.resolve([]),
-      userId ? listReviewReadyRuns(userId, 5) : Promise.resolve([]),
-      userId
-        ? payload
-            .find({
-              collection: 'activity',
-              where: { action: { contains: 'mention' } },
-              sort: '-createdAt',
-              limit: 5,
-              overrideAccess: true,
-            })
-            .then((r) => r.docs)
-        : Promise.resolve([]),
-      listActiveRunsForWorkspace(workspace.id),
-      userId
-        ? payload
-            .find({ collection: 'tasks', where: myTasksWhere, sort: '-updatedAt', limit: 5, overrideAccess: true })
-            .then((r) => r.docs)
-        : Promise.resolve([]),
-      listRecentPageRunsForWorkspace(workspace.id, 5),
-      getWorkspaceUsageRollup(workspace.id, 7),
-    ])
+  const [
+    approvals,
+    failedRuns,
+    reviewRuns,
+    mentionActivity,
+    activeRuns,
+    recentTasks,
+    recentThreadRuns,
+    usage7d,
+    pageCount,
+    taskCount,
+    enabledAgentCount,
+    enabledRuntimeProfileCount,
+    hasAnyRun,
+  ] = await Promise.all([
+    userId ? listPendingApprovalsForUser(userId).catch(() => []) : Promise.resolve([]),
+    userId ? listFailedRuns(userId, 5) : Promise.resolve([]),
+    userId ? listReviewReadyRuns(userId, 5) : Promise.resolve([]),
+    userId
+      ? payload
+          .find({
+            collection: 'activity',
+            where: { action: { contains: 'mention' } },
+            sort: '-createdAt',
+            limit: 5,
+            overrideAccess: true,
+          })
+          .then((r) => r.docs)
+      : Promise.resolve([]),
+    listActiveRunsForWorkspace(workspace.id),
+    userId
+      ? payload
+          .find({ collection: 'tasks', where: myTasksWhere, sort: '-updatedAt', limit: 5, overrideAccess: true })
+          .then((r) => r.docs)
+      : Promise.resolve([]),
+    listRecentPageRunsForWorkspace(workspace.id, 5),
+    getWorkspaceUsageRollup(workspace.id, 7),
+    // ROADMAP B8.5 — "a fresh workspace currently shows nothing" detection.
+    // Real existence counts (`totalDocs` from a 1-row find, the standard
+    // cheap-count pattern the rest of this file already uses), not a guess.
+    payload.find({ collection: 'pages', where: { workspace: { equals: workspace.id } }, limit: 1, overrideAccess: true }).then((r) => r.totalDocs),
+    payload.find({ collection: 'tasks', where: { workspace: { equals: workspace.id } }, limit: 1, overrideAccess: true }).then((r) => r.totalDocs),
+    payload.find({ collection: 'agents', where: { workspace: { equals: workspace.id }, enabled: { equals: true } }, limit: 1, overrideAccess: true }).then((r) => r.totalDocs),
+    payload.find({ collection: 'runtime-profiles', where: { workspace: { equals: workspace.id }, enabled: { equals: true } }, limit: 1, overrideAccess: true }).then((r) => r.totalDocs),
+    hasAnyRunForWorkspace(workspace.id),
+  ])
+
+  // Genuinely empty = no pages, no tasks, and no runs ever — not merely
+  // "nothing needs *this* user right now" (that's already handled per-section
+  // above). A workspace with real content but nothing currently needing
+  // attention should keep seeing its normal home, not an onboarding checklist.
+  const isGenuinelyEmpty = pageCount === 0 && taskCount === 0 && !hasAnyRun
 
   // Batch-resolve display names for the live-runs and recent-threads rows —
   // one query per entity kind across every run, not one query per row.
@@ -139,6 +168,21 @@ export default async function WorkspaceHome({
         <header>
           <h1 className="text-2xl font-semibold">{workspace.name}</h1>
         </header>
+
+        {/* ROADMAP B8.5 — first-run checklist, only on a genuinely empty
+            workspace (see `isGenuinelyEmpty` above). An active workspace
+            with real content doesn't need to be told how to get started,
+            even on a day nothing happens to need this user's attention. */}
+        {isGenuinelyEmpty && (
+          <FirstRunChecklist
+            workspaceSlug={workspace.slug}
+            status={{
+              hasEnabledRuntimeProfile: enabledRuntimeProfileCount > 0,
+              hasEnabledAgent: enabledAgentCount > 0,
+              hasAnyRun,
+            }}
+          />
+        )}
 
         {/* What needs me */}
         <Section title="What needs me" href={`/workspace/${workspace.slug}/inbox`} hrefLabel="Open Inbox">

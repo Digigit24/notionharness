@@ -22,6 +22,7 @@ export {
   dismissRun,
   getActiveRunForAgent,
   hasActiveRunForTask,
+  hasAnyRunForWorkspace,
   listPendingSuggestionRunsForPage,
   setSuggestionStatus,
 } from './runs'
@@ -38,3 +39,5 @@ export {
   getAgentUsageRollupForAgents,
 } from './usage'
 export type { UsageInput, RunUsageTotals, TaskUsageTotals } from './usage'
+export { getWorkspaceHealthMetrics } from './health'
+export type { WorkspaceHealthMetrics } from './health'

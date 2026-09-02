@@ -52,7 +52,15 @@ export function AmbientStatus({
   }, [workspaceId])
 
   return (
-    <div className="flex items-center gap-1 border-t border-black/5 px-2 py-1.5 dark:border-white/10">
+    // ROADMAP B8.2 — polls a Server Action every 12s with no user action
+    // triggering the update (see this component's own header comment);
+    // `aria-live="polite"` lets assistive tech pick up the changed counts
+    // without interrupting whatever the user is doing.
+    <div
+      className="flex items-center gap-1 border-t border-black/5 px-2 py-1.5 dark:border-white/10"
+      aria-live="polite"
+      aria-atomic="true"
+    >
       <StatusStat
         href={`/workspace/${workspaceSlug}/active-runs`}
         icon={<PlayCircle size={12} />}
@@ -93,12 +101,13 @@ function StatusStat({
     <Link
       href={href}
       title={title}
+      aria-label={title}
       className={
         'flex flex-1 items-center justify-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-medium tabular-nums hover:bg-black/[.06] dark:hover:bg-white/[.08] ' +
         (emphasize ? 'text-amber-600 dark:text-amber-400' : 'text-black/50 dark:text-white/50')
       }
     >
-      {icon}
+      <span aria-hidden="true">{icon}</span>
       {value}
     </Link>
   )

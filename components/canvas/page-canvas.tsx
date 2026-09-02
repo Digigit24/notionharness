@@ -223,7 +223,8 @@ export function PageCanvas({
               if (title !== page.title) void renamePage(page.id, workspace.slug, title)
             }}
             placeholder="Untitled"
-            className="page-canvas-title w-full bg-transparent text-5xl font-bold leading-tight outline-none placeholder:text-black/20 disabled:cursor-not-allowed dark:placeholder:text-white/20"
+            aria-label="Page title"
+            className="page-canvas-title w-full rounded-sm bg-transparent text-5xl font-bold leading-tight outline-none placeholder:text-black/20 focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed dark:placeholder:text-white/20"
           />
 
           {rowFields && <RowProperties fields={rowFields} />}

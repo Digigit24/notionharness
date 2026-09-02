@@ -4,147 +4,39 @@ import { NativeDatabaseBlockSchema } from '@/components/editor/blocks/native-dat
 import { RunCardBlockSchema } from '@/components/editor/blocks/run-card/schema'
 import { MENTION_NODE } from '@/components/editor/mentions/insert-mention'
 import type { Payload } from 'payload'
+// ROADMAP B8.3 (Batch B-6 "Finish") — module splitting. The pure markdown-
+// formatting helpers `docToMarkdown`'s block-serialization walker (below)
+// calls have moved to `lib/blocksuite-markdown-helpers.ts` (a sibling with no
+// BlockSuite `Doc`/schema dependency of its own); re-exported here so this
+// file's previous export surface (`MAX_EXPORT_ROWS`, `TeableDatabaseSnapshot`,
+// `DatabaseResolver`, `snapshotToMarkdownTable`) is unchanged for any caller
+// that imports them from `@/lib/blocksuite-doc`. See that file's own header
+// comment for why this particular split was judged safe to make without
+// deep BlockSuite-internals verification.
+import {
+  escapeTableCell,
+  propStr,
+  textToString,
+  humanSize,
+  embedLink,
+  snapshotToMarkdownTable,
+  MAX_EXPORT_ROWS,
+  type TeableDatabaseSnapshot,
+  type DatabaseResolver,
+} from './blocksuite-markdown-helpers'
+
+export { MAX_EXPORT_ROWS, snapshotToMarkdownTable }
+export type { TeableDatabaseSnapshot, DatabaseResolver }
 
 // Server-side (Node) mirror of the headless doc setup in `BlockSuiteEditor.tsx`,
 // minus `@blocksuite/*/effects` (those register browser custom elements and
 // aren't needed to read/write the block tree). Must register the same custom
 // block schemas as the client or hydrating a doc that contains one throws.
 
-type AnyBlockModel = {
+export type AnyBlockModel = {
   flavour: string
   children: AnyBlockModel[]
   [key: string]: unknown
-}
-
-/** Cap on the number of table rows written into a document export, to keep the
- * markdown from growing unboundedly with a large Teable table. */
-export const MAX_EXPORT_ROWS = 100
-
-/** A resolved snapshot of a connected Teable table, shaped for markdown export. */
-export interface TeableDatabaseSnapshot {
-  /** Table name (from the connection record) — shown above the exported table. */
-  title: string
-  fields: { id: string; name: string; type: string; options?: { choices?: { id?: string; name: string }[] } }[]
-  records: { id: string; fields: Record<string, unknown> }[]
-  /** True when records were capped at MAX_EXPORT_ROWS. */
-  truncated: boolean
-}
-
-/**
- * Resolves a `teable-databases` Payload record id to a {@link TeableDatabaseSnapshot}.
- * Return `null` to fall back to the placeholder (unconnected, unconfigured, or a
- * fetch failure must never break the whole export).
- */
-export type DatabaseResolver = (teableDatabaseId: number) => Promise<TeableDatabaseSnapshot | null>
-
-/** Marks a cell value as readable plain text for a markdown table cell. */
-function formatCellValue(
-  field: { type: string; options?: { choices?: { id?: string; name: string }[] } },
-  value: unknown,
-): string {
-  if (value === null || value === undefined) return ''
-  switch (field.type) {
-    case 'checkbox':
-      return value ? '✓' : '✗'
-    case 'multipleSelect':
-      return Array.isArray(value) ? value.map((v) => String(v)).join(', ') : String(value)
-    case 'singleSelect':
-      return String(value)
-    case 'date': {
-      const s = typeof value === 'string' ? value : String(value)
-      const day = s.match(/^(\d{4}-\d{2}-\d{2})/)
-      return day ? day[1] : s
-    }
-    case 'user': {
-      if (Array.isArray(value)) {
-        return value
-          .map((u) => (u && typeof u === 'object' && 'name' in u && (u as { name?: unknown }).name ? String((u as { name: unknown }).name) : ''))
-          .filter(Boolean)
-          .join(', ')
-      }
-      if (value && typeof value === 'object' && 'name' in value) return String((value as { name: unknown }).name)
-      return String(value)
-    }
-    default:
-      if (typeof value === 'string') return value
-      if (typeof value === 'number' || typeof value === 'boolean') return String(value)
-      if (Array.isArray(value)) return value.map((v) => String(v)).join(', ')
-      if (value && typeof value === 'object') {
-        // Teable link/rollup cell values are plain objects that typically carry a
-        // human-readable `title`/`text` alongside internal ids — surface that
-        // rather than dumping raw JSON into the document.
-        const obj = value as Record<string, unknown>
-        if (typeof obj.title === 'string' && obj.title) return obj.title
-        if (typeof obj.text === 'string' && obj.text) return obj.text
-        if (typeof obj.name === 'string' && obj.name) return obj.name
-        return JSON.stringify(value)
-      }
-      return String(value)
-  }
-}
-
-/** Escapes a value so it is safe to place inside a GFM table cell. */
-function escapeTableCell(value: string): string {
-  return value.replace(/\|/g, '\\|').replace(/\r?\n+/g, ' ').replace(/\s{2,}/g, ' ').trim()
-}
-
-/** Reads a string prop off a block model, normalizing non-strings and empty values to ''. */
-function propStr(model: AnyBlockModel, key: string, fallback = ''): string {
-  const v = model[key]
-  return typeof v === 'string' && v ? v : fallback
-}
-
-/**
- * Flattens a block's `Text` to a plain string, same as `.toString()`, except a
- * `mention` delta (whose `insert` is a lone placeholder character, not the
- * person's name) is rendered as `@Name` instead of silently vanishing — the
- * same "never let content disappear on export" standard applied elsewhere in
- * this file (bookmarks, embeds, attachments, etc.).
- */
-function textToString(text: { toDelta?(): { insert?: string; attributes?: Record<string, unknown> }[]; toString(): string } | undefined): string {
-  if (!text) return ''
-  if (typeof text.toDelta !== 'function') return text.toString()
-  return text
-    .toDelta()
-    .map((op) => {
-      const mention = op.attributes?.mention as { name?: unknown } | undefined
-      if (mention && typeof mention.name === 'string') return `@${mention.name}`
-      return op.insert ?? ''
-    })
-    .join('')
-}
-
-/** Renders a readable size suffix for attachment/file sizes. */
-function humanSize(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) return ''
-  if (bytes === 0) return ''
-  if (bytes < 1024) return ` (${bytes} B)`
-  if (bytes < 1024 * 1024) return ` (${(bytes / 1024).toFixed(1)} KB)`
-  return ` (${(bytes / (1024 * 1024)).toFixed(1)} MB)`
-}
-
-/** A markdown link with a graceful fallback if the model has no URL. */
-function embedLink(model: AnyBlockModel, defaultLabel: string): string {
-  const url = propStr(model, 'url')
-  const label = propStr(model, 'title') || propStr(model, 'caption') || url || defaultLabel
-  if (url) return `[${escapeTableCell(label)}](${url})`
-  return `[${defaultLabel}${label !== defaultLabel ? `: ${escapeTableCell(label)}` : ''}]`
-}
-
-/** Renders a {@link TeableDatabaseSnapshot} as a GitHub-Flavored-Markdown table. */
-export function snapshotToMarkdownTable(snapshot: TeableDatabaseSnapshot): string {
-  if (!snapshot.fields.length || !snapshot.records.length) {
-    const header = snapshot.fields.map((f) => escapeTableCell(f.name)).join(' | ')
-    const separators = snapshot.fields.map(() => '---').join(' | ')
-    return `| ${header} |\n| ${separators} |`
-  }
-  const headers = snapshot.fields.map((f) => escapeTableCell(f.name))
-  const lines = [`| ${headers.join(' | ')} |`, `| ${snapshot.fields.map(() => '---').join(' | ')} |`]
-  for (const record of snapshot.records) {
-    const cells = snapshot.fields.map((f) => escapeTableCell(formatCellValue(f, record.fields[f.name])))
-    lines.push(`| ${cells.join(' | ')} |`)
-  }
-  return lines.join('\n')
 }
 
 function createCollection() {
