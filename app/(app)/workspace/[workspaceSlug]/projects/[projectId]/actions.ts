@@ -2,8 +2,8 @@
 
 import { revalidatePath } from 'next/cache'
 import { getPayloadClient } from '@/lib/payload'
-import { listRunsForProject, getRunUsageTotalsForRuns, type RunUsageTotals } from '@/lib/broker'
-import type { Project, Run } from '@/payload-types'
+import { listRunsForProject, getRunUsageTotalsForRuns, type RunUsageTotals, type Run } from '@/lib/broker'
+import type { Project } from '@/payload-types'
 
 // ROADMAP B-1 (project detail) — the project's own fields are deliberately
 // minimal today (collections/Projects.ts: name/workspace/icon/description

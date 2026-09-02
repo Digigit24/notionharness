@@ -10,9 +10,9 @@ import { getPayloadClient } from '@/lib/payload'
 import { getCurrentPayloadUser } from '@/lib/current-user'
 import { recordActivity } from '@/lib/activity'
 import { ensureTaskPage } from '@/lib/task-pages'
-import { enqueueRun } from '@/lib/broker'
+import { enqueueRun, type Run } from '@/lib/broker'
 import { createTask } from '@/app/(app)/workspace/[workspaceSlug]/tasks/actions'
-import type { Comment, Run, Task } from '@/payload-types'
+import type { Comment, Task } from '@/payload-types'
 
 function taskDetailPath(workspaceSlug: string, taskId: number) {
   return `/workspace/${workspaceSlug}/tasks/${taskId}`
