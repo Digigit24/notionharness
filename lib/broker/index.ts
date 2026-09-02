@@ -19,5 +19,5 @@ export {
 } from './runs'
 export type { SettleOutcome } from './runs'
 export { appendRunEvent, listRunEvents, listRunEventsSince } from './messages'
-export { recordUsage } from './usage'
-export type { UsageInput } from './usage'
+export { recordUsage, getRunUsageTotals, getTaskUsageTotals } from './usage'
+export type { UsageInput, RunUsageTotals, TaskUsageTotals } from './usage'

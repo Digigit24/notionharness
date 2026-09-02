@@ -39,3 +39,33 @@ export async function getRunUsageTotals(runId: number): Promise<RunUsageTotals> 
     totalCostTicks: Number(row?.total_cost_ticks ?? 0),
   }
 }
+
+export interface TaskUsageTotals {
+  totalTokens: number
+  totalCostTicks: number
+  runCount: number
+}
+
+/** ROADMAP B-1 — the task detail page's right-rail "execution aggregate":
+ * lifetime tokens/cost/run count across every run ever queued against a
+ * task, not just the latest. No per-task rollup table exists — same
+ * "summed on read" reasoning as `getRunUsageTotals` above, one level up: a
+ * task has few enough runs for a live join to stay cheap. */
+export async function getTaskUsageTotals(taskId: number): Promise<TaskUsageTotals> {
+  const pool = getBrokerPool()
+  const res = await pool.query<{ total_tokens: string | null; total_cost_ticks: string | null; run_count: string | null }>(
+    `SELECT COALESCE(SUM(ru.tokens), 0) AS total_tokens,
+            COALESCE(SUM(ru.cost_ticks), 0) AS total_cost_ticks,
+            (SELECT COUNT(*) FROM runs WHERE task_id = $1) AS run_count
+     FROM run_usage ru
+     JOIN runs r ON r.id = ru.run_id
+     WHERE r.task_id = $1`,
+    [taskId],
+  )
+  const row = res.rows[0]
+  return {
+    totalTokens: Number(row?.total_tokens ?? 0),
+    totalCostTicks: Number(row?.total_cost_ticks ?? 0),
+    runCount: Number(row?.run_count ?? 0),
+  }
+}
