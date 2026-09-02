@@ -21,6 +21,7 @@ export const auth = betterAuth({
   database: authPool,
   secret: process.env.BETTER_AUTH_SECRET || '',
   baseURL: process.env.BETTER_AUTH_URL || 'http://localhost:3000',
+  trustedOrigins: ['http://digitech.tail7572d2.ts.net:3000'],
   emailAndPassword: {
     enabled: true,
   },

@@ -58,6 +58,7 @@ export default buildConfig({
   ],
   editor: lexicalEditor(),
   secret: process.env.PAYLOAD_SECRET || '',
+  cors: ['http://digitech.tail7572d2.ts.net:3000'],
   typescript: {
     outputFile: path.resolve(dirname, 'payload-types.ts'),
   },
