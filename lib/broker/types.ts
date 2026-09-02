@@ -38,6 +38,12 @@ export interface Run {
   leaseExpiresAt: string | null
   startedAt: string | null
   completedAt: string | null
+  /** ROADMAP B5.2 (Batch B-5) — set once the user clears this run from the
+   * Inbox's failed/review-ready sections (`dismissRun`); null forever for a
+   * run the inbox has never shown, or has shown but not yet cleared. Does
+   * not affect `status`/`error` — a dismissed failed run is still a failed
+   * run, it just no longer needs the user's attention. */
+  dismissedAt: string | null
   error: string | null
   mcpOverlay: unknown
   runToken: string | null

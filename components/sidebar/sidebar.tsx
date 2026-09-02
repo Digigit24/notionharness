@@ -27,6 +27,8 @@ import { WorkspaceSwitcher } from './workspace-switcher'
 import { CommandBar } from '@/components/command-bar/command-bar'
 import { openCommandBar } from '@/lib/command-bar-bus'
 import { NotificationsBell } from '@/components/notifications/notifications-bell'
+import { AmbientStatus } from '@/components/shell/ambient-status'
+import type { AmbientStatus as AmbientStatusData } from '@/app/(app)/workspace/[workspaceSlug]/actions'
 import { ModeSwitcher } from './mode-switcher'
 import { useSidebarCollapsed } from '@/lib/keyboard/sidebar-collapse-store'
 import { createPage, deletePageForever, restorePage } from '@/app/(app)/actions'
@@ -77,6 +79,7 @@ export function Sidebar({
   userEmail,
   currentUserId,
   unreadNotificationCount,
+  ambientStatus,
 }: {
   workspace: Workspace
   workspaces: Workspace[]
@@ -84,6 +87,7 @@ export function Sidebar({
   userEmail: string
   currentUserId: number | null
   unreadNotificationCount: number
+  ambientStatus: AmbientStatusData
 }) {
   const router = useRouter()
   const pathname = usePathname()
@@ -391,6 +395,8 @@ export function Sidebar({
           )}
         </div>
       </div>
+
+      <AmbientStatus workspaceId={workspace.id} workspaceSlug={workspace.slug} initialStatus={ambientStatus} />
 
       <div className="flex items-center justify-between gap-1 border-t border-black/5 px-2 py-2 dark:border-white/10">
         <span className="truncate text-xs text-black/40 dark:text-white/40" title={userEmail}>

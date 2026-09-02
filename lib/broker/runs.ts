@@ -32,6 +32,7 @@ interface RunRow {
   lease_expires_at: Date | null
   started_at: Date | null
   completed_at: Date | null
+  dismissed_at: Date | null
   error: string | null
   mcp_overlay: unknown
   run_token: string | null
@@ -65,6 +66,7 @@ function rowToRun(row: RunRow): Run {
     leaseExpiresAt: toISOStringOrNull(row.lease_expires_at),
     startedAt: toISOStringOrNull(row.started_at),
     completedAt: toISOStringOrNull(row.completed_at),
+    dismissedAt: toISOStringOrNull(row.dismissed_at),
     error: row.error,
     mcpOverlay: row.mcp_overlay,
     runToken: row.run_token,
@@ -347,6 +349,35 @@ export async function hasActiveRunForTask(taskId: number): Promise<boolean> {
   return res.rows[0]?.exists ?? false
 }
 
+/** ROADMAP B5.1 (home surface, "what I was doing") — one row per distinct
+ * page with a page-scoped run (`task_id IS NULL`, i.e. an Ask thread rather
+ * than a task run), most-recently-active page first. Same "join through the
+ * Payload-owned table for workspace scoping" pattern `listActiveRunsForWorkspace`
+ * established for `tasks`; `pages` lives in the same physical Postgres
+ * instance (D5 — Payload owns the table, not this pool), so the join is
+ * exactly as safe here. `DISTINCT ON` collapses a page's run history down to
+ * its single latest run (a "thread" for home-surface purposes is a page,
+ * not each individual turn), then the outer query re-sorts those one-per-page
+ * rows by recency since `DISTINCT ON` requires ordering by its own key first. */
+export async function listRecentPageRunsForWorkspace(workspaceId: number, limit = 5): Promise<Run[]> {
+  const pool = getBrokerPool()
+  const res = await pool.query<RunRow>(
+    `SELECT * FROM (
+       SELECT DISTINCT ON (r.page_id) r.*
+       FROM runs r
+       INNER JOIN pages p ON p.id = r.page_id
+       WHERE p.workspace_id = $1
+         AND r.page_id IS NOT NULL
+         AND r.task_id IS NULL
+       ORDER BY r.page_id, r.updated_at DESC
+     ) recent
+     ORDER BY recent.updated_at DESC
+     LIMIT $2`,
+    [workspaceId, limit],
+  )
+  return res.rows.map(rowToRun)
+}
+
 export async function getRunPageContext(runId: number): Promise<{ pageId: number; subtreeBlockId: string } | null> {
   const pool = getBrokerPool()
   const res = await pool.query<{ page_id: string | number | null; page_subtree_block_id: string | null }>(
@@ -419,12 +450,15 @@ export async function setSuggestionStatus(runId: number, status: SuggestionStatu
 // the P5.4 `approvals` collection (lib/hermes/approval-helpers.ts), not here.
 // ---------------------------------------------------------------------------
 
-/** Failed runs attributed to the user, newest first. */
+/** Failed runs attributed to the user, newest first. Excludes runs the user
+ * already dismissed from the Inbox (ROADMAP B5.2) — a dismissed failed run
+ * is still failed, it just no longer needs to sit in the inbox. */
 export async function listFailedRuns(userId: number, limit = 10): Promise<Run[]> {
   const pool = getBrokerPool()
   const res = await pool.query<RunRow>(
     `SELECT * FROM runs
      WHERE status = 'failed'
+       AND dismissed_at IS NULL
        AND (accountable_user = $1 OR originator_user = $1)
      ORDER BY updated_at DESC
      LIMIT $2`,
@@ -435,7 +469,8 @@ export async function listFailedRuns(userId: number, limit = 10): Promise<Run[]>
 
 /** Runs that finished with at least one `file_change` event — "a diff ready
  * to review" surfaced from the transcript, pre-Pillar-6 dedicated review
- * surface. */
+ * surface. Excludes runs the user already dismissed from the Inbox
+ * (ROADMAP B5.2), same reasoning as `listFailedRuns`. */
 export async function listReviewReadyRuns(userId: number, limit = 10): Promise<Run[]> {
   const pool = getBrokerPool()
   const res = await pool.query<RunRow>(
@@ -443,6 +478,7 @@ export async function listReviewReadyRuns(userId: number, limit = 10): Promise<R
      FROM runs r
      JOIN run_messages rm ON rm.run_id = r.id
      WHERE r.status = 'completed'
+       AND r.dismissed_at IS NULL
        AND rm.event->>'type' = 'file_change'
        AND (r.accountable_user = $1 OR r.originator_user = $1)
      ORDER BY r.updated_at DESC
@@ -450,4 +486,17 @@ export async function listReviewReadyRuns(userId: number, limit = 10): Promise<R
     [userId, limit],
   )
   return res.rows.map(rowToRun)
+}
+
+/** ROADMAP B5.2 (Batch B-5 "Attention") — clears a run out of the Inbox's
+ * failed/review-ready sections. Deliberately does not touch `status`/`error`
+ * — dismissing is an inbox-visibility concept, not an outcome correction.
+ * Idempotent (a second dismiss of an already-dismissed run is a no-op, not
+ * an error) so a double-click or a retried request can never fail loudly. */
+export async function dismissRun(runId: number): Promise<void> {
+  const pool = getBrokerPool()
+  await pool.query(
+    `UPDATE runs SET dismissed_at = now(), updated_at = now() WHERE id = $1 AND dismissed_at IS NULL`,
+    [runId],
+  )
 }

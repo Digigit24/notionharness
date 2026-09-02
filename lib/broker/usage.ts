@@ -115,3 +115,30 @@ export async function getProjectUsageRollup(projectId: number, sinceDays = 30): 
     totalCostTicks: Number(row?.total_cost_ticks ?? 0),
   }
 }
+
+/** ROADMAP B5.1/B1.5 (home surface "what it is costing" + the ambient status
+ * bar's spend stat) — same join-through-`tasks` pattern as
+ * `getProjectUsageRollup`, one level up (workspace instead of project), plus
+ * a second `LEFT JOIN` to `pages` so page-scoped runs (Ask threads, which
+ * carry `page_id` but no `task_id` — see `listRecentPageRunsForWorkspace`)
+ * are counted too; a rollup that only walked `tasks` would silently miss
+ * every dollar an Ask thread spent. A run is task-scoped xor page-scoped in
+ * practice, so exactly one of the two joins matches per row. */
+export async function getWorkspaceUsageRollup(workspaceId: number, sinceDays = 7): Promise<RunUsageTotals> {
+  const pool = getBrokerPool()
+  const res = await pool.query<{ total_tokens: string | null; total_cost_ticks: string | null }>(
+    `SELECT COALESCE(SUM(ru.tokens), 0) AS total_tokens, COALESCE(SUM(ru.cost_ticks), 0) AS total_cost_ticks
+     FROM run_usage ru
+     INNER JOIN runs r ON r.id = ru.run_id
+     LEFT JOIN tasks t ON t.id = r.task_id
+     LEFT JOIN pages p ON p.id = r.page_id
+     WHERE (t.workspace_id = $1 OR p.workspace_id = $1)
+       AND ru.created_at >= now() - ($2::text || ' days')::interval`,
+    [workspaceId, sinceDays],
+  )
+  const row = res.rows[0]
+  return {
+    totalTokens: Number(row?.total_tokens ?? 0),
+    totalCostTicks: Number(row?.total_cost_ticks ?? 0),
+  }
+}

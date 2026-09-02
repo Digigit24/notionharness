@@ -1,0 +1,12 @@
+-- ROADMAP B5.2 (Batch B-5 "Attention") — "zero-able" inbox: a failed run
+-- needs an explicit acknowledgment concept independent of retrying it (a
+-- retry creates a brand-new row; the failed row itself still needs a way to
+-- leave the inbox without lying about its outcome by mutating `status`), and
+-- a review-ready run needs a way to say "I looked at this diff" without
+-- touching its terminal status either. One column serves both inbox
+-- sections since both already read from this same `runs` table (see
+-- `listFailedRuns`/`listReviewReadyRuns` in lib/broker/runs.ts). NULL = still
+-- needs the user's attention (the default for every existing row); non-NULL
+-- = the user cleared it. Idempotent for safe restarts, same pattern as every
+-- other migration in this directory.
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS dismissed_at TIMESTAMPTZ;

@@ -24,6 +24,8 @@ import { Runtimes } from './collections/Runtimes'
 import { Agents } from './collections/Agents'
 import { Approvals } from './collections/Approvals'
 import { SavedViews } from './collections/SavedViews'
+import { PushSubscriptions } from './collections/PushSubscriptions'
+import { NotificationPreferences } from './collections/NotificationPreferences'
 
 const filename = fileURLToPath(import.meta.url)
 const dirname = path.dirname(filename)
@@ -55,6 +57,8 @@ export default buildConfig({
     Agents,
     Approvals,
     SavedViews,
+    PushSubscriptions,
+    NotificationPreferences,
   ],
   editor: lexicalEditor(),
   secret: process.env.PAYLOAD_SECRET || '',

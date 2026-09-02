@@ -13,6 +13,7 @@ import * as migration_20260902_090000_approvals from './20260902_090000_approval
 import * as migration_20260902_100000_pages_project from './20260902_100000_pages_project';
 import * as migration_20260902_120000_saved_views from './20260902_120000_saved_views';
 import * as migration_20260902_130000_tasks_archived from './20260902_130000_tasks_archived';
+import * as migration_20260902_140000_push_notifications from './20260902_140000_push_notifications';
 
 export const migrations = [
   {
@@ -89,5 +90,10 @@ export const migrations = [
     up: migration_20260902_130000_tasks_archived.up,
     down: migration_20260902_130000_tasks_archived.down,
     name: '20260902_130000_tasks_archived'
+  },
+  {
+    up: migration_20260902_140000_push_notifications.up,
+    down: migration_20260902_140000_push_notifications.down,
+    name: '20260902_140000_push_notifications'
   },
 ];

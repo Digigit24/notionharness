@@ -21,6 +21,8 @@ import { RunWorktreeManager } from '@/lib/run-worktrees/manager'
 import { resolveRunWorktreeConfig } from '@/lib/run-worktrees/config'
 import { sendTurnWithIdentity } from '@/lib/hermes/run-with-identity'
 import { createPendingApproval, waitForApproval } from '@/lib/hermes/approval-helpers'
+import { hrefForEntity } from '@/lib/entity-links.server'
+import { sendPushToUser } from '@/lib/push/send'
 import type { Agent, Task } from '@/payload-types'
 import type { ApprovalOption } from '@/collections/Approvals'
 import type { ApprovalOutcome } from '@/lib/hermes/acp-client'
@@ -97,6 +99,9 @@ export async function dispatchNextRun(workerId: string): Promise<DispatchOutcome
       // fail cleanly now.
       const message = err instanceof Error ? err.message : String(err)
       await settleRun(run.id, 'failed', { error: message, retryable: true }).catch(() => undefined)
+      void getPayloadClient()
+        .then((payload) => notifyRunSettled(payload, run, null, 'failed'))
+        .catch(() => undefined)
       console.error(`[dispatcher] Run ${run.id} failed outside executeRun's own error handling.`, err)
     })
     .finally(() => {
@@ -140,6 +145,34 @@ function buildPromptText(task: Task | null, agent: Agent, run: Run): string {
   return parts.join('\n\n')
 }
 
+// ROADMAP B5.3 (Batch B-5 "Attention") — "web push for... completions."
+// Notifies both the accountable and originating user (often the same
+// person, but not always — see Run's own field comments) that a run they
+// care about reached a terminal state. Fire-and-forget from every call
+// site's perspective: a push failure must never affect the settle it's
+// reporting on.
+function notifyRunSettled(
+  payload: Awaited<ReturnType<typeof getPayloadClient>>,
+  run: Run,
+  task: Task | null,
+  status: 'completed' | 'failed',
+): void {
+  const recipients = new Set<number>([run.accountableUser])
+  if (run.originatorUser != null) recipients.add(run.originatorUser)
+
+  void hrefForEntity(payload, 'run', String(run.id))
+    .then((url) => {
+      const subject = task ? `"${task.title}"` : `run ${run.id}`
+      const message = {
+        title: status === 'completed' ? 'Run completed' : 'Run failed',
+        body: status === 'completed' ? `Your run for ${subject} finished.` : `Your run for ${subject} failed.`,
+        url,
+      }
+      return Promise.all([...recipients].map((userId) => sendPushToUser(userId, 'completion', message)))
+    })
+    .catch((err) => console.error(`[dispatcher] Failed to push completion notification for run ${run.id}.`, err))
+}
+
 function buildPermissionCallback(
   runId: number,
   requestedUserId: number,
@@ -163,6 +196,21 @@ function buildPermissionCallback(
         label: o.label,
       })),
     })
+    // ROADMAP B5.3 (Batch B-5 "Attention") — "web push for approvals... This
+    // is what converts 'agents work while I am away' from a claim into a
+    // fact." Fire-and-forget: a push failure must never block or fail the
+    // approval wait itself (same posture as every other best-effort notify
+    // call in this file — see appendRunEvent/recordUsage above).
+    void getPayloadClient()
+      .then((payload) => hrefForEntity(payload, 'run', String(runId)))
+      .then((url) =>
+        sendPushToUser(requestedUserId, 'approval', {
+          title: 'Approval needed',
+          body: params.title,
+          url,
+        }),
+      )
+      .catch((err) => console.error(`[dispatcher] Failed to push approval notification for run ${runId}.`, err))
     try {
       const outcome = await waitForApproval(params.id, permissionTimeoutMs)
       return outcome
@@ -336,6 +384,7 @@ async function executeClaimedRun(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     await settleRun(run.id, 'failed', { error: message, retryable: true })
+    notifyRunSettled(payload, run, task, 'failed')
     return { status: 'failed', error: message }
   } finally {
     decrAgentInFlight(agentId)
@@ -347,6 +396,7 @@ async function executeClaimedRun(
   const failureReason = !succeeded ? (doneEvent?.type === 'done' ? doneEvent.reason : 'Turn did not produce a done event.') : undefined
 
   await settleRun(run.id, finalStatus, { error: failureReason, retryable: !succeeded })
+  notifyRunSettled(payload, run, task, finalStatus)
 
   return { status: finalStatus, error: failureReason }
 }
