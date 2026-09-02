@@ -1,7 +1,8 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { X } from 'lucide-react'
+import Link from 'next/link'
+import { Maximize2, X } from 'lucide-react'
 import { getRunMessages, getTaskActivity, getTaskRuns, updateTaskFields } from '@/app/(app)/workspace/[workspaceSlug]/tasks/actions'
 import { ThreadDrawerTab } from '@/components/hermes'
 import type { Activity, Agent, Project, Task, TaskStatus, User, Workspace } from '@/payload-types'
@@ -53,16 +54,30 @@ export function TaskDrawer({
       }}
     >
       <div className="flex h-full w-full max-w-[420px] flex-col border-l border-black/10 bg-white shadow-2xl dark:border-white/10 dark:bg-[#252525]">
-        <div className="flex items-center justify-between border-b border-black/10 px-4 py-3 dark:border-white/10">
+        <div className="flex items-center justify-between gap-2 border-b border-black/10 px-4 py-3 dark:border-white/10">
           <h2 className="truncate text-sm font-semibold">{task.title || 'Untitled'}</h2>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close task details"
-            className="rounded-md p-1.5 text-black/50 hover:bg-black/[.06] dark:text-white/50 dark:hover:bg-white/[.08]"
-          >
-            <X size={16} />
-          </button>
+          <div className="flex shrink-0 items-center gap-1">
+            {/* ROADMAP B-1 — the drawer stays the quick-peek surface; this is
+                the one way out to the full-bleed detail page (Work/Runs/
+                Changes/Sub-tasks/Activity) per the plan's own wording. */}
+            <Link
+              href={`/workspace/${workspace.slug}/tasks/${task.id}`}
+              onClick={onClose}
+              title="Open full page"
+              aria-label="Open full page"
+              className="rounded-md p-1.5 text-black/50 hover:bg-black/[.06] dark:text-white/50 dark:hover:bg-white/[.08]"
+            >
+              <Maximize2 size={14} />
+            </Link>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close task details"
+              className="rounded-md p-1.5 text-black/50 hover:bg-black/[.06] dark:text-white/50 dark:hover:bg-white/[.08]"
+            >
+              <X size={16} />
+            </button>
+          </div>
         </div>
 
         <div className="flex border-b border-black/10 px-2 dark:border-white/10">
