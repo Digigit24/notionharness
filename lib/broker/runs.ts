@@ -47,6 +47,7 @@ function rowToRun(row: RunRow): Run {
     externalSessionId: row.external_session_id,
     pageId: row.page_id === null ? null : Number(row.page_id),
     pageSubtreeBlockId: row.page_subtree_block_id,
+    prompt: row.prompt,
     nextSeq: Number(row.next_seq),
     leaseExpiresAt: row.lease_expires_at,
     startedAt: row.started_at,
@@ -77,7 +78,7 @@ export async function enqueueRun(input: {
   const pool = getBrokerPool()
   const res = await pool.query<RunRow>(
     `INSERT INTO runs (task_id, agent_id, status, originator_user, accountable_user, priority, max_attempts, prompt, page_id)
-     VALUES ($1, $2, 'queued', $3, $4, $5, $6, $7, $8, $9)
+     VALUES ($1, $2, 'queued', $3, $4, $5, $6, $7, $8)
      RETURNING *`,
     [
       input.taskId ?? null,
