@@ -1,10 +1,14 @@
 // B0: Frame — shared shapes for the ⌘K command bar.
 //
-// This batch builds `'navigate'` and `'act'` only. Full-text search (B1.3,
-// Postgres full-text over pages/tasks/projects/agents/skills/run
-// transcripts/comments) and the "ask → agent run" natural-language path
-// (B1.2 / B3) are explicitly out of scope here — see the SEAM comments
-// below and in `command-bar.tsx` for exactly where each slots in later.
+// B0 built `'navigate'` and `'act'` only, with `'navigate'` backed by
+// per-category `like` queries. B-3 "Surface" (B1.3) filled that seam in
+// with real Postgres full-text search over pages/tasks/projects/agents/
+// comments/run transcripts (`lib/search.ts`, wired through `searchCommandBar`
+// in `.../command-bar/actions.ts`) plus a filter-triggered Hermes skills
+// query — see `NAVIGATE_PROVIDERS` below and `lib/search.ts`'s top-of-file
+// comment for the full picture. The "ask → agent run" natural-language
+// path (B1.2 / B3) is still out of scope here — see the SEAM comment below
+// and in `command-bar.tsx` for exactly where it slots in later.
 
 /**
  * SEAM (B1.2): the palette's top-level mode. `'ask'` is not implemented in
@@ -21,19 +25,28 @@ export type CommandBarMode = 'navigate' | 'act' /* | 'ask' — B1.2, not yet imp
  * array is the seam B1.3 hooks into: the *category list itself* (order,
  * labels, empty states) lives here, independent from how each category's
  * `searchCommandBar` results get produced (see that function's own SEAM
- * comment in `.../command-bar/actions.ts` for the search-implementation
- * half of this seam).
+ * comment in `.../command-bar/actions.ts`, and `lib/search.ts`'s own
+ * top-of-file comment, for the search-implementation half of this seam).
  *
- * Projects are deliberately not a navigate-mode category: `lib/entity-
- * links.server.ts`'s own `hrefForEntity` comment says it plainly —
- * "project (and other future entityTypes) -> null until a detail route
- * exists" — there is no per-project page anywhere in this app yet, only a
- * picker used from inside the create-task act-mode flow. Inventing a fake
- * destination for a "Projects" navigate category would violate the "don't
- * fake it" rule for this pass more than skipping the category does.
+ * `projects` was excluded here at B-0 time ("no detail route exists yet")
+ * — that reason is now stale: `roadmap/b1-project-detail` (merged the same
+ * day) shipped `projects/[projectId]/page.tsx`, confirmed live via
+ * `lib/entity-links.server.ts`'s `hrefForEntity('project', ...)`. B-3
+ * re-adds it rather than leaving a category out for a reason that no
+ * longer holds.
+ *
+ * `comments` navigates to its parent task (`tasks?task=<id>`) — comments
+ * have no page of their own, same as runs landing on their review page
+ * rather than a nonexistent per-comment route.
+ *
+ * `skills` is real (Hermes's own skills API, not Postgres) but
+ * deliberately query-on-filter, not query-on-every-keystroke — see
+ * `lib/search.ts`'s `searchSkills` comment for why. `command-bar.tsx`'s
+ * default (no filter chip active) view skips this category for that
+ * reason; it only queries once the user filters to it explicitly.
  */
 export interface NavigateProviderKey {
-  key: 'pages' | 'tasks' | 'agents' | 'runs'
+  key: 'pages' | 'tasks' | 'projects' | 'agents' | 'comments' | 'runs' | 'skills'
   label: string
   emptyLabel: string
 }
@@ -41,8 +54,11 @@ export interface NavigateProviderKey {
 export const NAVIGATE_PROVIDERS: NavigateProviderKey[] = [
   { key: 'pages', label: 'Pages', emptyLabel: 'No matching pages' },
   { key: 'tasks', label: 'Tasks', emptyLabel: 'No matching tasks' },
+  { key: 'projects', label: 'Projects', emptyLabel: 'No matching projects' },
   { key: 'agents', label: 'Agents', emptyLabel: 'No matching agents' },
+  { key: 'comments', label: 'Comments', emptyLabel: 'No matching comments' },
   { key: 'runs', label: 'Runs', emptyLabel: 'No matching runs' },
+  { key: 'skills', label: 'Skills', emptyLabel: 'No matching skills' },
 ]
 
 /**

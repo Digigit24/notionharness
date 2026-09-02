@@ -1,11 +1,16 @@
 'use client'
 
-// B0: Frame — the ⌘K command bar. Builds navigate mode (jump to any page,
+// B0: Frame — the ⌘K command bar. Built navigate mode (jump to any page,
 // task, agent, or run) and act mode (create task / assign / start run /
-// change status) only, per this batch's scope. Full-text search (B1.3) and
-// the "ask → agent run" natural-language mode (B1.2/B3) are NOT built here
-// — see the SEAM comments below and in `components/command-bar/types.ts`
-// and `.../command-bar/actions.ts` for exactly where each slots in later.
+// change status), with navigate mode's search backed by a swappable seam
+// (`NAVIGATE_PROVIDERS` / `NAVIGATE_ITEM_BUILDERS` below).
+//
+// B-3 "Surface" (B1.3) filled that seam in with real Postgres full-text
+// search (projects/comments/skills categories added too — see
+// `components/command-bar/types.ts`'s `NAVIGATE_PROVIDERS` comment) and
+// added the filter chips below it. The "ask → agent run" natural-language
+// mode (B1.2/B3) is still not built here — see the SEAM comment in
+// `./types.ts` for where it slots in later.
 //
 // This component owns the ⌘K hotkey entirely (its own `keydown` listener,
 // not the shared keyboard-shortcut registry another parallel workstream is
@@ -18,9 +23,12 @@ import { useCallback, useEffect, useMemo, useState, useTransition, type ReactNod
 import { useRouter } from 'next/navigation'
 import {
   ArrowLeft,
+  BookOpen,
   Bot,
   FileText,
+  Folder,
   ListTodo,
+  MessageSquare,
   Play,
   Plus,
   Search,
@@ -47,7 +55,19 @@ import {
 import { ACT_COMMANDS, NAVIGATE_PROVIDERS, type ActCommand, type NavigateProviderKey } from './types'
 import type { Agent, Project, Task, TaskStatus, User, Workspace } from '@/payload-types'
 
-const EMPTY_SEARCH: CommandBarSearchResult = { pages: [], tasks: [], agents: [], runs: [] }
+const EMPTY_SEARCH: CommandBarSearchResult = {
+  pages: [],
+  tasks: [],
+  projects: [],
+  agents: [],
+  comments: [],
+  runs: [],
+  skills: [],
+}
+// Already within the plan's 150-250ms guidance for debouncing full-text
+// queries (more expensive than B0's `like` scans) — B0 had already tuned
+// this value, so B-3 keeps it as-is rather than re-tuning something that
+// already satisfies the requirement.
 const SEARCH_DEBOUNCE_MS = 200
 
 interface RowItem {
@@ -99,6 +119,13 @@ const NAVIGATE_ITEM_BUILDERS: Record<
       label: t.title,
       onSelect: () => goTo(`tasks?task=${t.id}`),
     })),
+  projects: (r, goTo) =>
+    r.projects.map((p) => ({
+      key: `project-${p.id}`,
+      icon: <span>{p.icon || <Folder size={14} />}</span>,
+      label: p.name,
+      onSelect: () => goTo(`projects/${p.id}`),
+    })),
   agents: (r, goTo) =>
     r.agents.map((a) => ({
       key: `agent-${a.id}`,
@@ -109,6 +136,16 @@ const NAVIGATE_ITEM_BUILDERS: Record<
       // inventing a fake `/agents/[id]` URL.
       onSelect: () => goTo('agents'),
     })),
+  comments: (r, goTo) =>
+    r.comments.map((c) => ({
+      key: `comment-${c.id}`,
+      icon: <MessageSquare size={14} />,
+      // Comments have no page of their own — land on the parent task,
+      // same pattern runs use for their review page.
+      label: c.body.length > 96 ? `${c.body.slice(0, 96)}…` : c.body,
+      sublabel: c.taskTitle,
+      onSelect: () => goTo(`tasks?task=${c.taskId}`),
+    })),
   runs: (r, goTo) =>
     r.runs.map((run) => ({
       key: `run-${run.id}`,
@@ -116,6 +153,16 @@ const NAVIGATE_ITEM_BUILDERS: Record<
       label: `Run #${run.id}`,
       sublabel: run.taskTitle ? `${run.status} · ${run.taskTitle}` : run.status,
       onSelect: () => goTo(`runs/${run.id}/review`),
+    })),
+  skills: (r, goTo) =>
+    r.skills.map((s) => ({
+      key: `skill-${s.name}`,
+      icon: <BookOpen size={14} />,
+      label: s.name,
+      sublabel: s.description || undefined,
+      // No global "skills" page exists in this app — same honest fallback
+      // the `agents` builder above already uses for the same reason.
+      onSelect: () => goTo('agents'),
     })),
 }
 
@@ -137,6 +184,12 @@ export function CommandBar({
   // Navigate-mode results.
   const [navResults, setNavResults] = useState<CommandBarSearchResult>(EMPTY_SEARCH)
   const [navLoading, setNavLoading] = useState(false)
+  // Filters by type (B-3): `null` means "all" (every category except
+  // `skills` — see NAVIGATE_PROVIDERS' own comment on why skills stays
+  // out of the default hot path). Selecting a chip narrows both which
+  // sections render and which categories `searchCommandBar` actually
+  // queries, which is also the only way `skills` ever gets queried.
+  const [navFilter, setNavFilter] = useState<NavigateProviderKey['key'] | null>(null)
 
   // Act-mode pickers — fetched lazily per step, not on mount, so a
   // component mounted on every page (it lives in the sidebar) never fetches
@@ -160,6 +213,7 @@ export function CommandBar({
     setActTask(null)
     setActiveIndex(0)
     setNavResults(EMPTY_SEARCH)
+    setNavFilter(null)
     setTaskPickerResults([])
     setNewTaskTitle('')
     setNewTaskProjectId('')
@@ -209,7 +263,7 @@ export function CommandBar({
     setNavLoading(true)
     let cancelled = false
     const timer = setTimeout(() => {
-      searchCommandBar({ workspaceId: workspace.id, query: q }).then((res) => {
+      searchCommandBar({ workspaceId: workspace.id, query: q, types: navFilter ? [navFilter] : undefined }).then((res) => {
         if (!cancelled) {
           setNavResults(res)
           setNavLoading(false)
@@ -220,7 +274,7 @@ export function CommandBar({
       cancelled = true
       clearTimeout(timer)
     }
-  }, [query, mode, workspace.id])
+  }, [query, mode, workspace.id, navFilter])
 
   // Act-mode step 1: task picker (Assign / Start run / Change status all begin with "which task").
   const needsTaskPicker = mode === 'act' && actStep !== 'create-task' && actTask === null
@@ -405,8 +459,15 @@ export function CommandBar({
         },
       ]
       if (query.trim() !== '') {
+        // Filter chips (B-3): a selected `navFilter` shows only that one
+        // category's section. Unfiltered, every category except `skills`
+        // shows — `skills` only ever appears once the user filters to it
+        // (see NAVIGATE_PROVIDERS' comment for why).
+        const visibleProviders = navFilter
+          ? NAVIGATE_PROVIDERS.filter((p) => p.key === navFilter)
+          : NAVIGATE_PROVIDERS.filter((p) => p.key !== 'skills')
         list.push(
-          ...NAVIGATE_PROVIDERS.map((provider) => ({
+          ...visibleProviders.map((provider) => ({
             key: provider.key,
             label: provider.label,
             emptyLabel: provider.emptyLabel,
@@ -495,6 +556,7 @@ export function CommandBar({
     filteredActions,
     navResults,
     navLoading,
+    navFilter,
     taskPickerResults,
     taskPickerLoading,
     filteredAgents,
@@ -582,6 +644,44 @@ export function CommandBar({
             </kbd>
           </div>
 
+          {mode === 'navigate' && query.trim() !== '' && (
+            <div className="flex flex-wrap gap-1 border-b border-black/5 px-3 py-1.5 dark:border-white/10">
+              <button
+                type="button"
+                onClick={() => {
+                  setNavFilter(null)
+                  setActiveIndex(0)
+                }}
+                className={cn(
+                  'rounded-full px-2 py-0.5 text-xs',
+                  navFilter === null
+                    ? 'bg-black/[.08] text-black dark:bg-white/[.12] dark:text-white'
+                    : 'text-black/50 hover:bg-black/[.05] dark:text-white/50 dark:hover:bg-white/[.06]',
+                )}
+              >
+                All
+              </button>
+              {NAVIGATE_PROVIDERS.map((provider) => (
+                <button
+                  key={provider.key}
+                  type="button"
+                  onClick={() => {
+                    setNavFilter((current) => (current === provider.key ? null : provider.key))
+                    setActiveIndex(0)
+                  }}
+                  className={cn(
+                    'rounded-full px-2 py-0.5 text-xs',
+                    navFilter === provider.key
+                      ? 'bg-black/[.08] text-black dark:bg-white/[.12] dark:text-white'
+                      : 'text-black/50 hover:bg-black/[.05] dark:text-white/50 dark:hover:bg-white/[.06]',
+                  )}
+                >
+                  {provider.label}
+                </button>
+              ))}
+            </div>
+          )}
+
           {breadcrumbLabel && (
             <div className="border-b border-black/5 px-3 py-1.5 text-xs text-black/40 dark:border-white/10 dark:text-white/40">
               {breadcrumbLabel}
@@ -664,7 +764,7 @@ export function CommandBar({
               {mode === 'navigate' && query.trim() === '' && (
                 <p className="flex items-center gap-1.5 px-2.5 pt-2 text-xs text-black/40 dark:text-white/40">
                   <Sparkles size={12} />
-                  Ask (natural language → agent run) and full-text search land in a later batch.
+                  Ask (natural language → agent run) lands in a later batch.
                 </p>
               )}
             </div>
