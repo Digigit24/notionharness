@@ -18,6 +18,7 @@ import { ensureBlockSuiteEffects as loadBlockSuiteEffects } from '@/lib/blocksui
 import { loadBlockSuiteRuntime } from '@/lib/blocksuite-runtime'
 
 const AUTOSAVE_DELAY_MS = 500
+const LIVE_STATE_POLL_MS = 3000
 
 let blockSuiteEffectsReady: Promise<void> | null = null
 
@@ -80,6 +81,8 @@ export function BlockSuiteEditor({
     let doc: Doc | null = null
     let saveTimer: ReturnType<typeof setTimeout> | null = null
     let onUpdate: (() => void) | null = null
+    let liveStateTimer: ReturnType<typeof setInterval> | null = null
+    let applyingRemote = false
 
     setMountError(null)
 
@@ -152,6 +155,7 @@ export function BlockSuiteEditor({
         }
 
         onUpdate = () => {
+          if (applyingRemote) return
           if (saveTimer) clearTimeout(saveTimer)
           saveTimer = setTimeout(() => {
             if (!doc) return
@@ -160,6 +164,36 @@ export function BlockSuiteEditor({
           }, AUTOSAVE_DELAY_MS)
         }
         doc.spaceDoc.on('update', onUpdate)
+
+        // ROADMAP 6.1 — "streams blocks into the page as it works": an agent
+        // writes through /api/daemon/page-writes out-of-band (see
+        // lib/blocksuite-doc.ts's applyDocSync, which already merges rather
+        // than overwrites), but this tab's own live Y.Doc has no way to know
+        // that happened until it reloads. Poll while the page is open;
+        // `Y.applyUpdate` is commutative/idempotent, so merging the same or
+        // an already-known update repeatedly is always safe. Cheap when
+        // nothing's running — the endpoint only does the (larger) docState
+        // fetch once a non-terminal run actually targets this page.
+        let lastAppliedUpdate: string | null = null
+        const pollLiveState = async () => {
+          if (cancelled || !doc) return
+          try {
+            const res = await fetch(`/api/pages/${pageId}/live-state`)
+            if (!res.ok) return
+            const data = (await res.json()) as { hasActiveRun: boolean; update: string | null }
+            if (!data.hasActiveRun || !data.update || data.update === lastAppliedUpdate) return
+            lastAppliedUpdate = data.update
+            applyingRemote = true
+            try {
+              DocCollection.Y.applyUpdate(doc.spaceDoc, base64ToUpdate(data.update), 'remote-agent')
+            } finally {
+              applyingRemote = false
+            }
+          } catch {
+            // A later poll retries; a transient failure here must never break editing.
+          }
+        }
+        liveStateTimer = setInterval(() => void pollLiveState(), LIVE_STATE_POLL_MS)
       } catch (err) {
         if (cancelled) return
         console.error(`Failed to mount BlockSuite editor for page ${pageId}.`, err)
@@ -172,6 +206,7 @@ export function BlockSuiteEditor({
     return () => {
       cancelled = true
       if (saveTimer) clearTimeout(saveTimer)
+      if (liveStateTimer) clearInterval(liveStateTimer)
       if (doc && onUpdate) doc.spaceDoc.off('update', onUpdate)
       editor?.remove()
     }
