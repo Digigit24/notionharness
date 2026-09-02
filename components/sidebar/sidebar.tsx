@@ -9,6 +9,7 @@ import {
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
+  FolderKanban,
   Home,
   Inbox,
   ListTodo,
@@ -43,11 +44,11 @@ import { WORK_MODE_SUBROUTES, type WorkSubRoute } from '@/lib/entity-links'
  *   Home     -> `/workspace/:slug` (the existing WorkspaceHome landing page)
  *   Inbox    -> `/workspace/:slug/inbox` (existing)
  *   Tasks    -> `/workspace/:slug/tasks` (existing)
+ *   Projects -> `/workspace/:slug/projects` (ROADMAP B-1 — the list route
+ *               this batch added specifically so the new project detail
+ *               page isn't reachable only via a task's project picker;
+ *               previously NOT LINKED, no route existed).
  *   Agents   -> `/workspace/:slug/agents` (existing)
- *   Projects -> NOT LINKED. No dedicated `/projects` list route exists yet
- *               (the `projects` collection is only surfaced today as a
- *               filter inside the Tasks page); building that page is a
- *               later batch's job, not this one.
  *   Ask      -> NOT LINKED. No route exists yet.
  *   Settings -> NOT LINKED. No route exists yet.
  */
@@ -55,6 +56,7 @@ const SECTION_LINKS: Array<{ href: string; label: string; icon: LucideIcon }> = 
   { href: '', label: 'Home', icon: Home },
   { href: '/inbox', label: 'Inbox', icon: Inbox },
   { href: '/tasks', label: 'Tasks', icon: ListTodo },
+  { href: '/projects', label: 'Projects', icon: FolderKanban },
   { href: '/agents', label: 'Agents', icon: Bot },
 ]
 
@@ -272,14 +274,15 @@ export function Sidebar({
         </kbd>
       </button>
 
-      {/* ROADMAP B-0 (Frame) — Section-level nav, the middle of the three-tier
-          Workspace / Section / Entity navigation model. The target section
-          set is Home, Inbox, Projects, Tasks, Agents, Ask, Settings; only
-          sections with a real existing route are linked here — Projects, Ask,
-          and Settings have no dedicated page yet (building those is other
-          batches' job), so they're omitted rather than invented. Entity-level
-          navigation (a specific page/task/agent/run) lives in the page tree
-          below and in per-page breadcrumbs, not in this list. */}
+      {/* ROADMAP B-0 (Frame) / B-1 (project detail) — Section-level nav, the
+          middle of the three-tier Workspace / Section / Entity navigation
+          model. The target section set is Home, Inbox, Projects, Tasks,
+          Agents, Ask, Settings; only sections with a real existing route are
+          linked here — Ask and Settings have no dedicated page yet (building
+          those is other batches' job), so they're omitted rather than
+          invented. Entity-level navigation (a specific page/task/agent/run)
+          lives in the page tree below and in per-page breadcrumbs, not in
+          this list. */}
       {SECTION_LINKS.map(({ href, label, icon: Icon }) => (
         <Link
           key={href}

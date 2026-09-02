@@ -23,10 +23,11 @@ import type { Activity } from '@/payload-types'
 type PayloadClient = Awaited<ReturnType<typeof getPayloadClient>>
 
 // Defaults per docs/p6-5-plan-work-review-design.md:
-//   - task -> the task itself (highlighted in the tasks list)
-//   - page -> the page itself
-//   - run  -> the run's review panel
-//   - project (and other future entityTypes) -> null until a detail route exists
+//   - task    -> the task itself (highlighted in the tasks list)
+//   - page    -> the page itself
+//   - run     -> the run's review panel
+//   - project -> the project detail route (ROADMAP B-1; previously null —
+//                no detail route existed to land on)
 //
 // A few extra lookups per notification (task/page/run -> its workspace,
 // for the slug in the URL) is an accepted cost for a "fetch when the
@@ -57,6 +58,16 @@ export async function hrefForEntity(
       .findByID({ collection: 'workspaces', id: workspaceId, overrideAccess: true, disableErrors: true })
       .catch(() => null)
     return workspace ? `/workspace/${workspace.slug}/p/${page.id}` : null
+  }
+
+  if (entityType === 'project') {
+    const project = await payload.findByID({ collection: 'projects', id, overrideAccess: true, disableErrors: true }).catch(() => null)
+    if (!project) return null
+    const workspaceId = typeof project.workspace === 'number' ? project.workspace : project.workspace.id
+    const workspace = await payload
+      .findByID({ collection: 'workspaces', id: workspaceId, overrideAccess: true, disableErrors: true })
+      .catch(() => null)
+    return workspace ? `/workspace/${workspace.slug}/projects/${project.id}` : null
   }
 
   if (entityType === 'run') {

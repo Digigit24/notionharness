@@ -44,6 +44,7 @@ export function TaskBoard({
   currentUserId,
   pageSize,
   initialSelectedTaskId = null,
+  defaultProjectId = null,
 }: {
   workspace: Workspace
   columns: ColumnData[]
@@ -53,6 +54,12 @@ export function TaskBoard({
   currentUserId: number | null
   pageSize: number
   initialSelectedTaskId?: number | null
+  /** ROADMAP B-1 — when this board is embedded on a project detail page
+   * (columns already pre-filtered to that project), new tasks added via
+   * "+ Add task" must be scoped to the same project too, or they'd vanish
+   * from the board on the next server-scoped refetch. Left null (unset) for
+   * the plain, unscoped Tasks page. */
+  defaultProjectId?: number | null
 }) {
   const [tasksByStatus, setTasksByStatus] = useState<Record<number, Task[]>>(() =>
     Object.fromEntries(columns.map((c) => [c.status.id, c.tasks])),
@@ -117,6 +124,7 @@ export function TaskBoard({
         statusId,
         title,
         createdById: currentUserId,
+        ...(defaultProjectId ? { projectId: defaultProjectId } : {}),
       })
       setTasksByStatus((prev) => ({ ...prev, [statusId]: [...(prev[statusId] ?? []), created] }))
       setTotalsByStatus((prev) => ({ ...prev, [statusId]: (prev[statusId] ?? 0) + 1 }))

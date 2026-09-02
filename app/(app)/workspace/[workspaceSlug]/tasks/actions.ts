@@ -27,12 +27,17 @@ export async function createTask({
   statusId,
   title,
   createdById,
+  projectId,
 }: {
   workspaceId: number
   workspaceSlug: string
   statusId: number
   title: string
   createdById: number
+  /** ROADMAP B-1 — project detail page's "New task" primary action pre-fills
+   * this instead of leaving the task unscoped. Optional so every other
+   * caller (the plain Tasks board) is unaffected. */
+  projectId?: number
 }): Promise<Task> {
   const payload = await getPayloadClient()
   const position = await nextColumnPosition(payload, workspaceId, statusId)
@@ -44,10 +49,12 @@ export async function createTask({
       status: statusId,
       createdBy: createdById,
       position,
+      ...(projectId ? { project: projectId } : {}),
     },
     overrideAccess: true,
   })
   revalidatePath(`/workspace/${workspaceSlug}/tasks`)
+  if (projectId) revalidatePath(`/workspace/${workspaceSlug}/projects/${projectId}`)
   return task
 }
 

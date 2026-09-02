@@ -260,6 +260,52 @@ export async function listActiveRunsForWorkspace(workspaceId: number): Promise<R
   return res.rows.map(rowToRun)
 }
 
+/** ROADMAP B-1 (project detail, Runs tab) — every run across a project's
+ * tasks, newest first, optionally narrowed to one agent. Same "join through
+ * the Payload-owned `tasks` table" pattern `listActiveRunsForWorkspace`
+ * already established (runs carry no project/workspace column of their
+ * own — D5). `limit` is optional; omitted, the caller gets every run (the
+ * Runs tab wants the full list for its cost rollup, not a page of it). */
+export async function listRunsForProject(projectId: number, opts: { agentId?: number | null; limit?: number } = {}): Promise<Run[]> {
+  const pool = getBrokerPool()
+  const conditions = ['t.project_id = $1']
+  const params: unknown[] = [projectId]
+  if (opts.agentId != null) {
+    params.push(opts.agentId)
+    conditions.push(`r.agent_id = $${params.length}`)
+  }
+  let limitClause = ''
+  if (opts.limit) {
+    params.push(opts.limit)
+    limitClause = `LIMIT $${params.length}`
+  }
+  const res = await pool.query<RunRow>(
+    `SELECT r.* FROM runs r
+     INNER JOIN tasks t ON t.id = r.task_id
+     WHERE ${conditions.join(' AND ')}
+     ORDER BY r.created_at DESC
+     ${limitClause}`,
+    params,
+  )
+  return res.rows.map(rowToRun)
+}
+
+/** Same non-terminal status set as `listActiveRunsForWorkspace`, scoped to
+ * one project's tasks instead of a whole workspace — backs the Overview
+ * tab's "active runs" count. */
+export async function listActiveRunsForProject(projectId: number): Promise<Run[]> {
+  const pool = getBrokerPool()
+  const res = await pool.query<RunRow>(
+    `SELECT r.* FROM runs r
+     INNER JOIN tasks t ON t.id = r.task_id
+     WHERE t.project_id = $1
+       AND r.status IN ('queued', 'dispatched', 'running', 'waiting_directory')
+     ORDER BY r.created_at DESC`,
+    [projectId],
+  )
+  return res.rows.map(rowToRun)
+}
+
 /** ROADMAP 6.3 audit — the @mention live-status dot's data source: is this
  * agent doing something right now, regardless of which task/page it's on.
  * Same non-terminal status set `listActiveRunsForWorkspace` and the run-card
