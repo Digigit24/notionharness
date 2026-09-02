@@ -6,6 +6,7 @@ import { getPayloadClient } from '@/lib/payload'
 import { getCurrentPayloadUser } from '@/lib/current-user'
 import { descendantIds } from '@/lib/tree'
 import { applyDocSync } from '@/lib/blocksuite-doc'
+import { enqueueRun } from '@/lib/broker'
 import type { Page, TaskStatus } from '@/payload-types'
 
 function parentIdOf(page: Page): number | null {
@@ -183,6 +184,42 @@ export async function toggleLocked(pageId: number, workspaceSlug: string, value:
 export async function syncPageDoc(pageId: number, update: string) {
   const payload = await getPayloadClient()
   await applyDocSync(payload, pageId, update)
+}
+
+/** Queue work anchored to a page rather than a task (P6.2 block-anchored
+ * threads). The prompt is persisted on the raw-pg run row so the dispatcher
+ * can deliver it without depending on a Payload request or a second write.
+ * Agent selection is intentionally separate: a later assignment step can set
+ * agent_id before dispatch; this action never trusts a caller-supplied user.
+ */
+export async function enqueuePageRun(prompt: string, pageId: number): Promise<{ runId: number }> {
+  const text = typeof prompt === 'string' ? prompt.trim() : ''
+  if (!text || text.length > 20_000) throw new Error('A prompt between 1 and 20,000 characters is required.')
+  if (!Number.isSafeInteger(pageId) || pageId < 1) throw new Error('A valid page id is required.')
+
+  const [user, payload] = await Promise.all([getCurrentPayloadUser(), getPayloadClient()])
+  if (!user) throw new Error('You must be logged in to enqueue a page run.')
+  const page = await payload.findByID({ collection: 'pages', id: pageId, depth: 0, overrideAccess: true, disableErrors: true }).catch(() => null)
+  if (!page) throw new Error('Page not found.')
+  const workspaceId = typeof page.workspace === 'number' ? page.workspace : page.workspace?.id
+  if (typeof workspaceId !== 'number') throw new Error('Page has no workspace.')
+  const workspace = await payload.findByID({ collection: 'workspaces', id: workspaceId, depth: 0, overrideAccess: true, disableErrors: true }).catch(() => null)
+  if (!workspace) throw new Error('Workspace not found.')
+  const ownerId = typeof workspace.owner === 'number' ? workspace.owner : workspace.owner?.id
+  const memberIds = Array.isArray(workspace.members)
+    ? workspace.members.map((member) => typeof member === 'number' ? member : member.id)
+    : []
+  if (ownerId !== user.id && !memberIds.includes(user.id)) throw new Error('You do not have access to this page.')
+
+  const run = await enqueueRun({
+    taskId: null,
+    agentId: null,
+    pageId,
+    prompt: text,
+    originatorUser: user.id,
+    accountableUser: user.id,
+  })
+  return { runId: run.id }
 }
 
 async function subtreeIds(

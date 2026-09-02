@@ -57,14 +57,14 @@ function stringEnv(raw: unknown): Record<string, string> | undefined {
   return env
 }
 
-function buildPromptText(task: Task | null, agent: Agent): string {
+function buildPromptText(task: Task | null, agent: Agent, run: Run): string {
   const parts: string[] = []
   if (agent.instructions) parts.push(agent.instructions)
   // Tasks have no description/body field yet (P2.1) — title is the only
   // task-authored content available to hand the agent today. Richer prompt
   // construction (task description, linked page content, thread context)
   // is real future work, not something to fake here.
-  parts.push(task ? `Task: ${task.title}` : 'No task is attached to this run.')
+  parts.push(task ? `Task: ${task.title}` : run.prompt || 'No task is attached to this run.')
   return parts.join('\n\n')
 }
 
@@ -115,7 +115,7 @@ async function executeRun(run: Run): Promise<{ status: 'completed' | 'failed'; e
     result = await sendTurnWithIdentity({
       binaryPath: runtimeProfile.commandName,
       cwd: worktree.worktreePath,
-      text: buildPromptText(task, agent),
+      text: buildPromptText(task, agent, run),
       runId: String(run.id),
       agentId: run.agentId,
       // Roadmap 3.4: state.db is sharded per CONVERSATION, not per run — a

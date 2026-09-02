@@ -19,6 +19,7 @@ interface RunRow {
   external_session_id: string | null
   page_id: string | number | null
   page_subtree_block_id: string | null
+  prompt: string | null
   next_seq: string | number
   lease_expires_at: string | null
   started_at: string | null
@@ -68,11 +69,15 @@ export async function enqueueRun(input: {
   accountableUser: number
   priority?: number
   maxAttempts?: number
+  /** Prompt delivered to the agent for a page-scoped run. */
+  prompt?: string | null
+  /** Page owning a page-scoped run; independent of task_id. */
+  pageId?: number | null
 }): Promise<Run> {
   const pool = getBrokerPool()
   const res = await pool.query<RunRow>(
-    `INSERT INTO runs (task_id, agent_id, status, originator_user, accountable_user, priority, max_attempts)
-     VALUES ($1, $2, 'queued', $3, $4, $5, $6)
+    `INSERT INTO runs (task_id, agent_id, status, originator_user, accountable_user, priority, max_attempts, prompt, page_id)
+     VALUES ($1, $2, 'queued', $3, $4, $5, $6, $7, $8, $9)
      RETURNING *`,
     [
       input.taskId ?? null,
@@ -81,6 +86,8 @@ export async function enqueueRun(input: {
       input.accountableUser,
       input.priority ?? 0,
       input.maxAttempts ?? 3,
+      input.prompt ?? null,
+      input.pageId ?? null,
     ],
   )
   return rowToRun(res.rows[0])
@@ -173,10 +180,10 @@ export async function settleRun(
     let retry: Run | null = null
     if (outcome === 'failed' && opts.retryable && run.attempt < run.maxAttempts) {
       const created = await client.query<RunRow>(
-        `INSERT INTO runs (task_id, agent_id, status, attempt, max_attempts, retry_of, priority, originator_user, accountable_user)
-         VALUES ($1, $2, 'queued', $3, $4, $5, $6, $7, $8)
+        `INSERT INTO runs (task_id, agent_id, status, attempt, max_attempts, retry_of, priority, originator_user, accountable_user, prompt, page_id)
+         VALUES ($1, $2, 'queued', $3, $4, $5, $6, $7, $8, $9, $10)
          RETURNING *`,
-        [run.taskId, run.agentId, run.attempt + 1, run.maxAttempts, run.id, run.priority, run.originatorUser, run.accountableUser],
+        [run.taskId, run.agentId, run.attempt + 1, run.maxAttempts, run.id, run.priority, run.originatorUser, run.accountableUser, run.prompt, run.pageId],
       )
       retry = rowToRun(created.rows[0])
     }

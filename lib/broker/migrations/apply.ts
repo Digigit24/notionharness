@@ -13,6 +13,7 @@ async function main() {
   const sql = [
     fs.readFileSync(path.join(import.meta.dirname, '0001_runs_run_messages_run_usage.sql'), 'utf8'),
     fs.readFileSync(path.join(import.meta.dirname, '0002_run_page_context.sql'), 'utf8'),
+    fs.readFileSync(path.join(import.meta.dirname, '0003_run_prompt.sql'), 'utf8'),
   ].join('\n')
 
   const pool = new Pool({ connectionString: process.env.DATABASE_URI || '', max: 1 })

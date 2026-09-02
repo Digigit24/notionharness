@@ -19,6 +19,8 @@ export interface Run {
   externalSessionId: string | null
   pageId: number | null
   pageSubtreeBlockId: string | null
+  /** Serialized prompt for page-scoped runs (taskId is null). */
+  prompt: string | null
   nextSeq: number
   leaseExpiresAt: string | null
   startedAt: string | null
