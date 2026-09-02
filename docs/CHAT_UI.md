@@ -98,11 +98,10 @@ Run the adapter test:
 npm run test:runEvent-adapter
 ```
 
-Visit demo page:
-```bash
-npm run dev
-# Open http://localhost:3000/chat-ui-demo
-```
+The `/chat-ui-demo` route (mock-data smoke test of `<Thread/>`) was removed as an
+orphaned demo route — the real chromes (`ThreadFullPage`, `ThreadLaneView`,
+`ThreadDrawerTab`) already exercise the same `Thread` + `adaptRunEventsToThread`
+pipeline against live data in the workspace routes; see `docs/THREAD_CHROMES.md`.
 
 ## Integration Points
 

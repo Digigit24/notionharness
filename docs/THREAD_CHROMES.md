@@ -25,7 +25,7 @@ Shows all runs for a task in the drawer sidebar. Latest run displayed full-heigh
 
 ### 2. ThreadFullPage (Full-Page View)
 
-**Location:** `/thread-full-page` (demo route, integrate as workspace route)  
+**Location:** `/workspace/[workspaceSlug]/tasks/[taskId]/session` (live workspace route)  
 **Component:** `ThreadFullPage`  
 **Layout:** Split screen — session list rail (left) + thread view (right)
 
@@ -42,7 +42,7 @@ Dedicated full-page view with a sidebar listing all runs. Click a run to view it
 
 ### 3. ThreadLaneView (Multi-Agent/Team Lane)
 
-**Location:** `/thread-lane-demo` (demo route, integrate into team/multi-agent board)  
+**Location:** `/workspace/[workspaceSlug]/active-runs` (live workspace route)  
 **Component:** `ThreadLaneView`  
 **Layout:** Constrained height card, part of a grid/row of lanes
 
@@ -80,14 +80,11 @@ All three use the same data pipeline:
 ### Replace Sessions Tab (Done)
 Task drawer's SessionsTab now uses `ThreadDrawerTab` instead of raw event JSON display.
 
-### Add Full-Page Route (TODO)
-Mount `ThreadFullPage` as a route in the workspace:
-```
-/workspace/[workspaceSlug]/task/[taskId]/thread
-```
+### Full-Page Route (Done)
+`ThreadFullPage` is mounted at `/workspace/[workspaceSlug]/tasks/[taskId]/session`.
 
-### Add to Team View (TODO)
-Integrate `ThreadLaneView` into team/multi-agent board view as one lane per task.
+### Active Runs View (Done)
+`ThreadLaneView` is mounted at `/workspace/[workspaceSlug]/active-runs`, one lane per active run.
 
 ## Extension Points
 
@@ -110,8 +107,8 @@ By using the same component in three contexts, we prevent:
 
 If a UI tweak is needed, it's one change in `Thread`, not three.
 
-## Demo Routes
+## Live Routes
 
-- `/thread-full-page` — ThreadFullPage with first task
-- `/thread-lane-demo` — ThreadLaneView grid with first 4 tasks
+- `/workspace/[workspaceSlug]/tasks/[taskId]/session` — ThreadFullPage (live)
+- `/workspace/[workspaceSlug]/active-runs` — ThreadLaneView grid (live)
 - Task drawer's Sessions tab — ThreadDrawerTab (live)
