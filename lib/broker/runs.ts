@@ -325,6 +325,28 @@ export async function getActiveRunForAgent(agentId: number): Promise<Run | null>
   return res.rows[0] ? rowToRun(res.rows[0]) : null
 }
 
+/** ROADMAP B-4 "Work" (agent columns' "Live" pulse) — task-scoped counterpart
+ * to `getActiveRunForAgent`: is *this task* (regardless of which agent)
+ * mid-run right now. Same non-terminal status set every other "is something
+ * active" read in this file uses. `listActiveRunsForWorkspace` already
+ * covers a whole board's worth of tasks in one query and is what the task
+ * board itself uses for its presence dot — this single-task variant exists
+ * for a consumer (a task detail page, a list/table row rendered outside a
+ * board fetch) that only has one task id in hand and shouldn't have to pull
+ * every active run in the workspace just to answer one boolean. */
+export async function hasActiveRunForTask(taskId: number): Promise<boolean> {
+  const pool = getBrokerPool()
+  const res = await pool.query<{ exists: boolean }>(
+    `SELECT EXISTS(
+       SELECT 1 FROM runs
+       WHERE task_id = $1
+         AND status IN ('queued', 'dispatched', 'running', 'waiting_directory')
+     ) AS exists`,
+    [taskId],
+  )
+  return res.rows[0]?.exists ?? false
+}
+
 export async function getRunPageContext(runId: number): Promise<{ pageId: number; subtreeBlockId: string } | null> {
   const pool = getBrokerPool()
   const res = await pool.query<{ page_id: string | number | null; page_subtree_block_id: string | null }>(

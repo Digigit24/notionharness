@@ -19,6 +19,7 @@ export {
   listFailedRuns,
   listReviewReadyRuns,
   getActiveRunForAgent,
+  hasActiveRunForTask,
   listPendingSuggestionRunsForPage,
   setSuggestionStatus,
 } from './runs'
