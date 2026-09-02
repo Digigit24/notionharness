@@ -6,7 +6,8 @@ import { getPayloadClient } from '@/lib/payload'
 import { getCurrentPayloadUser } from '@/lib/current-user'
 import { descendantIds } from '@/lib/tree'
 import { applyDocSync } from '@/lib/blocksuite-doc'
-import { enqueueRun } from '@/lib/broker'
+import { enqueueRun, getRun, listRunEvents } from '@/lib/broker'
+import type { Run, RunMessageRow } from '@/lib/broker/types'
 import type { Page, TaskStatus } from '@/payload-types'
 
 function parentIdOf(page: Page): number | null {
@@ -220,6 +221,18 @@ export async function enqueuePageRun(prompt: string, pageId: number): Promise<{ 
     accountableUser: user.id,
   })
   return { runId: run.id }
+}
+
+/**
+ * ROADMAP 6.2 — a single-run equivalent of `getTaskRuns`/`getRunMessages`
+ * (tasks/actions.ts) for the block-anchored thread popover, which has no
+ * task to scope by. One round trip instead of two separate polls.
+ */
+export async function getRunSnapshot(runId: number): Promise<{ run: Run; events: RunMessageRow[] } | null> {
+  const run = await getRun(runId)
+  if (!run) return null
+  const events = await listRunEvents(runId)
+  return { run, events }
 }
 
 async function subtreeIds(
