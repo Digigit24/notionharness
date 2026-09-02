@@ -115,16 +115,27 @@ class KeyboardRegistry {
   private bindings = new Map<string, ShortcutBinding>()
   private scopeCounts = new Map<ShortcutScope, number>([['global', 1]])
   private listeners = new Set<RegistryListener>()
+  // `useSyncExternalStore`'s getSnapshot (client AND server) must return a
+  // referentially-stable value between calls when nothing has changed — a
+  // fresh `[...map.values()]` array every call makes React think the store
+  // changed on every render, which is exactly React's own "getServerSnapshot
+  // should be cached to avoid an infinite loop" warning. Cache the snapshot
+  // and only rebuild it when a mutation actually invalidates it.
+  private bindingsSnapshot: ShortcutBinding[] = []
 
   /** Registers a binding and returns an unregister function (call it on unmount). */
   register = (binding: ShortcutBinding): (() => void) => {
     this.bindings.set(binding.id, binding)
+    this.refreshBindingsSnapshot()
     this.emit()
     return () => this.unregister(binding.id)
   }
 
   unregister = (id: string) => {
-    if (this.bindings.delete(id)) this.emit()
+    if (this.bindings.delete(id)) {
+      this.refreshBindingsSnapshot()
+      this.emit()
+    }
   }
 
   /** Ref-counted: N activations require N deactivations before the scope goes inert. */
@@ -161,14 +172,18 @@ class KeyboardRegistry {
     return true
   }
 
-  /** Every currently-registered binding, regardless of whether its scope is active — this is what the cheat sheet lists. */
+  /** Every currently-registered binding, regardless of whether its scope is active — this is what the cheat sheet lists. Referentially stable across calls until the next mutation (register/unregister/activateScope/deactivateScope) — required by `useSyncExternalStore`. */
   getAllBindings = (): ShortcutBinding[] => {
-    return [...this.bindings.values()]
+    return this.bindingsSnapshot
   }
 
   subscribe = (listener: RegistryListener): (() => void) => {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
+  }
+
+  private refreshBindingsSnapshot() {
+    this.bindingsSnapshot = [...this.bindings.values()]
   }
 
   private emit() {

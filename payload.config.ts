@@ -72,6 +72,15 @@ export default buildConfig({
   db: postgresAdapter({
     pool: {
       connectionString: process.env.DATABASE_URI || '',
+      // Left unset, node-postgres's own `Pool` defaults `max` to 10 — this
+      // process ALSO opens `lib/broker/db.ts`'s separate raw-pg pool
+      // (currently `max: 6`) for the runs/run_messages/run_usage tables
+      // (D5), so an unset max here means up to 16 connections from this one
+      // process alone against a shared Supabase instance whose session-mode
+      // cap is ~15 (confirmed live: "max clients reached in session mode").
+      // 8 here + 6 there = 14, leaving headroom for a one-off script or a
+      // second teammate's dev server without immediately exhausting the pool.
+      max: 8,
     },
     // Migrations are the source of truth for this project (see `migrations/`).
     // Without this, Payload's dev-mode schema-drift auto-push kicks in on every
