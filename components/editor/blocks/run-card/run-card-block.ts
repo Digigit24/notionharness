@@ -51,14 +51,22 @@ function formatElapsed(startedAt: string | null, completedAt: string | null): st
  * ROADMAP 6.3 — a lightweight, read-only, non-editable reference embed (no
  * child content, no DataView) that polls `GET /api/runs/{id}` for a run's
  * live status/cost/step-count while it's non-terminal, and stops polling
- * once it settles (a finished run's status never changes again). No slash-
- * menu entry yet, deliberately: there's no "assign work to an agent" flow
- * in this app to produce a real run id to reference (that's Pillar 3.5/5.x),
- * so hand-typing a raw id via slash-menu wouldn't be a real user flow — this
- * scaffolds the block type/schema/renderer so 6.1 ("agents write into the
- * page") or 6.2 (block-anchored threads) can insert one programmatically
- * once they exist, per the task's own "get the block types/schema right so
- * it's ready" framing.
+ * once it settles (a finished run's status never changes again). Originally
+ * had no slash-menu entry (there was no "assign work to an agent" flow to
+ * produce a real run id to hand-type) — B3.5's `/run` and `/summarise`
+ * items (`components/editor/slash-commands/page-commands.ts`) and P6.2's
+ * "Ask agent" (`agent-thread/block-anchored-thread.tsx`) now all insert one
+ * programmatically after `enqueuePageRun` returns a real id.
+ *
+ * B3.4 — click-through to the trace: when the block sits inside an editor
+ * whose container carries `data-workspace-slug` (set by `BlockSuiteEditor.tsx`
+ * whenever a caller passes `workspaceSlug` — some embedding contexts, like
+ * the record-detail drawer, don't), the whole card becomes a real link to
+ * `/workspace/{slug}/runs/{id}/review`, the DetailLayout-based review page
+ * (`app/(app)/workspace/[workspaceSlug]/runs/[runId]/review/page.tsx`).
+ * Without a slug, it stays a plain non-interactive summary, same
+ * "no-op when it isn't set" convention `native-database-block.ts`'s own
+ * `_workspaceSlug` getter already established.
  */
 export class RunCardBlockComponent extends BlockComponent<RunCardBlockModel> {
   static override styles = css`
@@ -87,11 +95,26 @@ export class RunCardBlockComponent extends BlockComponent<RunCardBlockModel> {
     .run-card .sep {
       color: var(--affine-text-disable-color, #ccc);
     }
+    .run-card.clickable {
+      cursor: pointer;
+      text-decoration: none;
+      color: inherit;
+    }
+    .run-card.clickable:hover {
+      background: var(--affine-hover-color, rgba(0, 0, 0, 0.06));
+    }
   `
 
   private _data: RunCardData | null = null
   private _error: string | null = null
   private _pollTimer: ReturnType<typeof setTimeout> | null = null
+
+  /** Same `data-workspace-slug` lookup `native-database-block.ts`'s own
+   * `_workspaceSlug` getter uses — set on the editor's container in
+   * `BlockSuiteEditor.tsx` only when a caller passes `workspaceSlug`. */
+  private get _workspaceSlug(): string | null {
+    return this.closest('[data-workspace-slug]')?.getAttribute('data-workspace-slug') ?? null
+  }
 
   override connectedCallback() {
     super.connectedCallback()
@@ -135,22 +158,25 @@ export class RunCardBlockComponent extends BlockComponent<RunCardBlockModel> {
     }
     const d = this._data
     const elapsed = formatElapsed(d.startedAt, d.completedAt)
+    const body = html`
+      <span class="dot" style="background:${STATUS_COLOR[d.status] ?? '#999'}"></span>
+      <span>Run #${d.id}</span>
+      <span class="sep">·</span>
+      <span>${STATUS_LABEL[d.status] ?? d.status}</span>
+      ${elapsed ? html`<span class="sep">·</span><span>${elapsed}</span>` : null}
+      <span class="sep">·</span>
+      <span>${d.stepCount} step${d.stepCount === 1 ? '' : 's'}</span>
+      <span class="sep">·</span>
+      <span>${d.chips.files}</span>
+      <span class="sep">·</span>
+      <span>${d.chips.commands}</span>
+      <span class="sep">·</span>
+      <span>${d.chips.cost}</span>
+    `
+    const slug = this._workspaceSlug
+    if (!slug) return html`<div class="run-card">${body}</div>`
     return html`
-      <div class="run-card">
-        <span class="dot" style="background:${STATUS_COLOR[d.status] ?? '#999'}"></span>
-        <span>Run #${d.id}</span>
-        <span class="sep">·</span>
-        <span>${STATUS_LABEL[d.status] ?? d.status}</span>
-        ${elapsed ? html`<span class="sep">·</span><span>${elapsed}</span>` : null}
-        <span class="sep">·</span>
-        <span>${d.stepCount} step${d.stepCount === 1 ? '' : 's'}</span>
-        <span class="sep">·</span>
-        <span>${d.chips.files}</span>
-        <span class="sep">·</span>
-        <span>${d.chips.commands}</span>
-        <span class="sep">·</span>
-        <span>${d.chips.cost}</span>
-      </div>
+      <a class="run-card clickable" href="/workspace/${slug}/runs/${d.id}/review" title="Open trace">${body}</a>
     `
   }
 }

@@ -122,6 +122,53 @@ export async function updateTaskFields({
   return task
 }
 
+/**
+ * ROADMAP B3.4/B3.5 — the `/task` slash-menu item's one action: "creates a
+ * new real task row ... AND inserts this block referencing it, in one
+ * action." Resolves `statusId`/`createdById` server-side (the workspace's
+ * first status by position, and the logged-in user via
+ * `getCurrentPayloadUser()`) rather than asking the caller to supply them —
+ * unlike the task board or command bar, the BlockSuite editor has no
+ * already-resolved `currentUserId`/status-column context threaded down to
+ * it, and plumbing that through `BlockSuiteEditor.tsx`'s whole prop chain
+ * for one slash item isn't worth it when this action can resolve both
+ * itself, the same way `enqueuePageRun`/`startTaskRun` already resolve the
+ * user server-side. Delegates to `createTask` (this file) for the actual
+ * write — one source of truth for task creation, not a second path.
+ */
+export async function createQuickTask({
+  workspaceId,
+  workspaceSlug,
+  title,
+}: {
+  workspaceId: number
+  workspaceSlug: string
+  title: string
+}): Promise<Task> {
+  const [user, payload] = await Promise.all([getCurrentPayloadUser(), getPayloadClient()])
+  if (!user) throw new Error('You must be logged in to create a task.')
+
+  const statuses = await payload.find({
+    collection: 'task-statuses',
+    where: { workspace: { equals: workspaceId } },
+    sort: 'position',
+    limit: 1,
+    overrideAccess: true,
+  })
+  const statusId = statuses.docs[0]?.id
+  if (!statusId) throw new Error('This workspace has no task statuses configured yet.')
+
+  return createTask({ workspaceId, workspaceSlug, statusId, title, createdById: user.id })
+}
+
+/** Task block's live fetch (`components/editor/blocks/task/task-block-view.tsx`)
+ * — `depth: 1` so `status`/`assignee` come back populated for display, not
+ * just raw relationship ids. */
+export async function getTask(taskId: number): Promise<Task | null> {
+  const payload = await getPayloadClient()
+  return payload.findByID({ collection: 'tasks', id: taskId, depth: 1, overrideAccess: true, disableErrors: true }).catch(() => null)
+}
+
 export async function getTaskRuns(taskId: number) {
   return listRunsForTask(taskId)
 }

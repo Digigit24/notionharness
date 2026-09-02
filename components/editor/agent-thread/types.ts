@@ -16,3 +16,7 @@ export interface AskAgentSelection {
 }
 
 export type AskAgentHandler = (selection: AskAgentSelection) => void | Promise<void>
+
+// A whole-page (no-selection) "ask" seam also exists, for the `/ask` slash
+// item — see `registry.ts`'s `PagePanelOpener` doc comment for why it's a
+// plain `(excerpt: string) => void` rather than a second typed context here.

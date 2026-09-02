@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getPayloadClient } from '@/lib/payload'
+import { getCurrentPayloadUser } from '@/lib/current-user'
 import { isAllowedCollection, PAYLOAD_DATASOURCE_COLLECTIONS, type PayloadPropertyDef } from '../_lib'
 
 /** Returns the allowlisted property schema plus every doc in a workspace,
@@ -50,9 +51,16 @@ export async function POST(req: Request, { params }: { params: Promise<{ collect
   }
 
   const payload = await getPayloadClient()
+  const user = await getCurrentPayloadUser()
+  let data: Record<string, unknown>
+  try {
+    data = await schema.defaultCreateData({ workspaceId, payload, userId: user?.id ?? null })
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : 'Failed to create row.' }, { status: 400 })
+  }
   const doc = await payload.create({
     collection: collection as 'pages',
-    data: schema.defaultCreateData(workspaceId) as never,
+    data: data as never,
     overrideAccess: true,
   })
 

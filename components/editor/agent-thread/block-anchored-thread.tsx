@@ -1,8 +1,9 @@
 'use client'
 
 import { registerAskAgentHandler, getPagePanelOpener } from './registry'
+import { pageIdFromDoc } from './page-context'
 import type { AskAgentSelection, AskAgentHandler } from './types'
-import type { BlockModel, Doc } from '@/lib/blocksuite-store'
+import type { BlockModel } from '@/lib/blocksuite-store'
 
 /**
  * ROADMAP B-3 "Surface" — this used to be the whole "Ask agent" flow: create
@@ -38,18 +39,6 @@ function serializeSelectedBlocks(blocks: BlockModel[]): string {
     })
     .filter(Boolean)
     .join('\n\n')
-}
-
-/** Client-side docs are created as `page-${pageId}` (see BlockSuiteEditor.tsx
- * and lib/blocksuite-doc.ts's `loadDoc`) — parsing this back out avoids
- * needing a second way to thread the page id through the selection context.
- * Kept even though the handler below no longer needs a page id itself
- * (`getPagePanelOpener` routes to whichever page is mounted) — still used to
- * fail fast with a clear error if a selection somehow comes from a doc that
- * isn't a real page doc. */
-function pageIdFromDoc(doc: Doc): number | null {
-  const match = /^page-(\d+)$/.exec(doc.id)
-  return match ? Number(match[1]) : null
 }
 
 const handleAskAgent: AskAgentHandler = (selection: AskAgentSelection) => {
