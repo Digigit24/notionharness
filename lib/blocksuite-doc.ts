@@ -2,6 +2,7 @@ import { DocCollection, Schema, Text, type Doc } from '@/lib/blocksuite-store'
 import { AffineSchemas } from '@/lib/blocksuite-blocks'
 import { NativeDatabaseBlockSchema } from '@/components/editor/blocks/native-database/schema'
 import { RunCardBlockSchema } from '@/components/editor/blocks/run-card/schema'
+import { MENTION_NODE } from '@/components/editor/mentions/insert-mention'
 import type { Payload } from 'payload'
 
 // Server-side (Node) mirror of the headless doc setup in `BlockSuiteEditor.tsx`,
@@ -565,7 +566,57 @@ function parseFrontmatter(markdown: string): { title: string | null; body: strin
   }
 }
 
-/** Parses raw Markdown into a fresh headless doc's block tree (paragraphs, headings, quotes, lists, todos, code, dividers). */
+/**
+ * Builds a `Text` for one markdown line, reconstructing `@name` runs as real
+ * mention deltas (see components/editor/mentions/schema.ts) instead of
+ * literal `@name` text — the inverse of `textToString`'s mention-flattening
+ * above. Falls straight through to `new Text(raw)` (unchanged) when the line
+ * has no `@` at all, so this is a no-op for every line that isn't a mention.
+ *
+ * Deliberately narrow, by necessity rather than convenience: a mention name
+ * is taken as a single non-whitespace token with trailing punctuation
+ * stripped (`@alice,` -> name "alice"). `docToMarkdown` degrades a mention
+ * to plain `@name` text with no id and no word-count hint, so a multi-word
+ * display name ("Jane Doe") is textually indistinguishable from "@Jane"
+ * followed by the separate word "Doe" — reconstructing anything wider than
+ * one token would be guessing at a name boundary, not parsing one, so
+ * multi-word display names fall back to plain, non-mention text on import
+ * (a further, acknowledged degrade beyond the id loss below).
+ *
+ * `userId` is left `''` (unresolvable from markdown text alone — nothing at
+ * `markdownToDoc`'s current call sites has a name -> user/agent id lookup
+ * wired in yet, and building one means cross-referencing the Better Auth
+ * `user` table with the workspace-scoped `agents` collection and choosing a
+ * winner on a name collision, which is a real feature, not a clean lookup)
+ * and `kind` is left unset. Per `MentionAttribute`'s own comment ("mentions
+ * persisted before agent mentions existed" get no `kind`), an unset `kind`
+ * is an existing, handled shape, not a new one — so this reconstructs a
+ * *best-effort* mention: a real, correctly-shaped delta that renders and
+ * round-trips through markdown by name, just not yet resolvable back to the
+ * account/agent it named.
+ */
+function buildInlineText(raw: string): Text {
+  const pattern = /@([^\s@]+)/g
+  if (!pattern.test(raw)) return new Text(raw)
+
+  const delta: { insert: string; attributes?: Record<string, unknown> }[] = []
+  let last = 0
+  let match: RegExpExecArray | null
+  pattern.lastIndex = 0
+  while ((match = pattern.exec(raw))) {
+    const trailingPunct = match[1].match(/[.,!?;:)\]}]+$/)?.[0] ?? ''
+    const name = trailingPunct ? match[1].slice(0, -trailingPunct.length) : match[1]
+    if (!name) continue // bare "@" or "@," etc — leave as plain text, nothing to mention
+    if (match.index > last) delta.push({ insert: raw.slice(last, match.index) })
+    delta.push({ insert: MENTION_NODE, attributes: { mention: { userId: '', name } } })
+    if (trailingPunct) delta.push({ insert: trailingPunct })
+    last = match.index + match[0].length
+  }
+  if (last < raw.length) delta.push({ insert: raw.slice(last) })
+  return delta.length ? new Text(delta) : new Text(raw)
+}
+
+/** Parses raw Markdown into a fresh headless doc's block tree (paragraphs, headings, quotes, lists, todos, code, dividers, run cards, best-effort mentions). */
 export function markdownToDoc(
   pageId: number,
   markdown: string,
@@ -615,10 +666,23 @@ export function markdownToDoc(
         continue
       }
 
+      // ROADMAP B-2 — inverse of the `affine:embed-run-card` export case
+      // above (`[Run #<id>]`, whole-line, no children). Matches that exact
+      // shape; the unresolvable placeholder `[Run #?]` has no digits to
+      // parse and correctly falls through to a plain paragraph below, same
+      // as before — there's no id to reconstruct a run card from.
+      const runCard = line.match(/^\[Run #(\d+)\]$/)
+      if (runCard) {
+        doc.addBlock('affine:embed-run-card', { runId: Number(runCard[1]) }, noteId)
+        addedAny = true
+        i++
+        continue
+      }
+
       const heading = line.match(/^(#{1,6})\s+(.*)$/)
       if (heading) {
         const headingType = `h${heading[1].length}` as 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6'
-        doc.addBlock('affine:paragraph', { type: headingType, text: new Text(heading[2]) }, noteId)
+        doc.addBlock('affine:paragraph', { type: headingType, text: buildInlineText(heading[2]) }, noteId)
         addedAny = true
         i++
         continue
@@ -626,7 +690,7 @@ export function markdownToDoc(
 
       const quote = line.match(/^>\s?(.*)$/)
       if (quote) {
-        doc.addBlock('affine:paragraph', { type: 'quote', text: new Text(quote[1]) }, noteId)
+        doc.addBlock('affine:paragraph', { type: 'quote', text: buildInlineText(quote[1]) }, noteId)
         addedAny = true
         i++
         continue
@@ -634,7 +698,7 @@ export function markdownToDoc(
 
       const todo = line.match(/^[-*]\s+\[([ xX])\]\s+(.*)$/)
       if (todo) {
-        doc.addBlock('affine:list', { type: 'todo', checked: /x/i.test(todo[1]), text: new Text(todo[2]) }, noteId)
+        doc.addBlock('affine:list', { type: 'todo', checked: /x/i.test(todo[1]), text: buildInlineText(todo[2]) }, noteId)
         addedAny = true
         i++
         continue
@@ -642,7 +706,7 @@ export function markdownToDoc(
 
       const numbered = line.match(/^\d+\.\s+(.*)$/)
       if (numbered) {
-        doc.addBlock('affine:list', { type: 'numbered', text: new Text(numbered[1]) }, noteId)
+        doc.addBlock('affine:list', { type: 'numbered', text: buildInlineText(numbered[1]) }, noteId)
         addedAny = true
         i++
         continue
@@ -650,13 +714,13 @@ export function markdownToDoc(
 
       const bulleted = line.match(/^[-*]\s+(.*)$/)
       if (bulleted) {
-        doc.addBlock('affine:list', { type: 'bulleted', text: new Text(bulleted[1]) }, noteId)
+        doc.addBlock('affine:list', { type: 'bulleted', text: buildInlineText(bulleted[1]) }, noteId)
         addedAny = true
         i++
         continue
       }
 
-      doc.addBlock('affine:paragraph', { type: 'text', text: new Text(line) }, noteId)
+      doc.addBlock('affine:paragraph', { type: 'text', text: buildInlineText(line) }, noteId)
       addedAny = true
       i++
     }
