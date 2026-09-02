@@ -6,7 +6,7 @@ import { getPayloadClient } from '@/lib/payload'
 import { getCurrentPayloadUser } from '@/lib/current-user'
 import { descendantIds } from '@/lib/tree'
 import { applyDocSync } from '@/lib/blocksuite-doc'
-import { enqueueRun, getRun, listPendingSuggestionRunsForPage, listRunEvents } from '@/lib/broker'
+import { enqueueRun, getRun, listPendingSuggestionRunsForPage, listRunEvents, listRunsForPage } from '@/lib/broker'
 import type { Run, RunMessageRow } from '@/lib/broker/types'
 import { acceptRunSuggestions, rejectRunSuggestions } from '@/lib/agent-suggestions'
 import type { Page, TaskStatus } from '@/payload-types'
@@ -242,6 +242,27 @@ export async function getRunSnapshot(runId: number): Promise<{ run: Run; events:
   if (!run) return null
   const events = await listRunEvents(runId)
   return { run, events }
+}
+
+/**
+ * ROADMAP B-3 "Surface" — the `getTaskRuns`-shaped loader for the docked page
+ * panel (`components/editor/agent-thread/page-docked-panel.tsx`), which uses
+ * the same `useThreadData(id, observed, loader)` hook the task chromes
+ * (`ThreadDrawerTab`/`ThreadLaneView`/`ThreadFullPage`) already use, just
+ * scoped by `pageId` instead of `taskId` — `listRunsForPage` already existed
+ * in `lib/broker/runs.ts` for the suggestions-bar read path, this is its
+ * first use for a full conversation history rather than a pending-only
+ * filter. Access-checked the same way every other page-scoped action here is
+ * (`assertPageAccess`) since a page's run history can reveal prompts a
+ * non-member must not see.
+ */
+export async function getPageRunSnapshots(pageId: number): Promise<{ run: Run; events: RunMessageRow[] }[]> {
+  if (!Number.isSafeInteger(pageId) || pageId < 1) throw new Error('A valid page id is required.')
+  const [user, payload] = await Promise.all([getCurrentPayloadUser(), getPayloadClient()])
+  if (!user) throw new Error('You must be logged in.')
+  await assertPageAccess(payload, pageId, user.id)
+  const runs = await listRunsForPage(pageId)
+  return Promise.all(runs.map(async (run) => ({ run, events: await listRunEvents(run.id) })))
 }
 
 async function subtreeIds(
