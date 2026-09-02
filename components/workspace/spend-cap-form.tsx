@@ -3,26 +3,50 @@
 import { useState } from 'react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import { updateSpendCap } from '@/app/(app)/workspace/[workspaceSlug]/settings/actions'
+import { toast } from '@/hooks/use-toast'
 
-// ROADMAP B7.2 (Batch B-6 "Finish") — a real form skeleton for the spend
-// cap, deliberately shipped DISABLED rather than wired to a Server Action
-// that pretends to save. Two real gaps, both stated here instead of hidden
-// behind a form that looks functional:
-//   1. No `spendCapCents` field exists on `collections/Workspaces.ts` yet —
-//      only the migration is written (migrations/20260902_150000_spend_caps.ts,
-//      NOT applied). Adding the field before that migration runs would break
-//      every workspace read in the app (`workspaces` is on the hot path —
-//      `getWorkspaceBySlug` runs on nearly every page load), per this
-//      session's established schema-drift discipline (see AGENTS.md and
-//      migrations/20260902_100000_pages_project.ts for the identical
-//      reasoning applied to `pages.project_id`).
-//   2. Even once the field exists, nothing in `lib/dispatcher/`
-//      (`app/api/dispatcher/tick/route.ts`, `lib/dispatcher/worker.ts`)
-//      checks it before claiming/executing a run — "fail-closed" enforcement
-//      is unbuilt, not just unwired. Both are flagged, not silently implied
-//      to already work.
-export function SpendCapForm({ workspaceName }: { workspaceName: string }) {
-  const [value, setValue] = useState('')
+// ROADMAP B7.2 (Batch B-6 "Finish") — real save path now that
+// `spendCapCents` exists on `collections/Workspaces.ts` (paired with
+// migrations/20260902_150000_spend_caps.ts, both applied together — see
+// each file's own comment). One gap remains, stated here rather than
+// implied to work: nothing in `lib/dispatcher/` (`app/api/dispatcher/tick/
+// route.ts`, `lib/dispatcher/worker.ts`) checks this value before claiming/
+// executing a run — "fail-closed" enforcement is unbuilt, saving the cap
+// does not yet stop spend from exceeding it.
+export function SpendCapForm({
+  workspaceId,
+  workspaceSlug,
+  workspaceName,
+  initialSpendCapCents,
+}: {
+  workspaceId: number
+  workspaceSlug: string
+  workspaceName: string
+  initialSpendCapCents: number | null
+}) {
+  const [value, setValue] = useState(initialSpendCapCents != null ? (initialSpendCapCents / 100).toFixed(2) : '')
+  const [saving, setSaving] = useState(false)
+
+  async function save() {
+    setSaving(true)
+    const trimmed = value.trim()
+    const cents = trimmed === '' ? null : Math.round(Number(trimmed) * 100)
+    if (cents !== null && (!Number.isFinite(cents) || cents < 0)) {
+      toast({ title: 'Enter a valid amount', variant: 'destructive' })
+      setSaving(false)
+      return
+    }
+    try {
+      const result = await updateSpendCap({ workspaceId, workspaceSlug, spendCapCents: cents })
+      setValue(result.spendCapCents != null ? (result.spendCapCents / 100).toFixed(2) : '')
+      toast({ title: result.spendCapCents != null ? `Spend cap set to $${(result.spendCapCents / 100).toFixed(2)}/mo` : 'Spend cap removed — uncapped' })
+    } catch (error) {
+      toast({ title: 'Could not save spend cap', description: error instanceof Error ? error.message : undefined, variant: 'destructive' })
+    } finally {
+      setSaving(false)
+    }
+  }
 
   return (
     <div>
@@ -35,19 +59,18 @@ export function SpendCapForm({ workspaceName }: { workspaceName: string }) {
           placeholder="Uncapped"
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          disabled
+          disabled={saving}
           className="w-32"
         />
         <span className="text-xs text-black/50 dark:text-white/50">/ month for {workspaceName}</span>
-        <Button type="button" size="sm" variant="outline" disabled>
-          Save
+        <Button type="button" size="sm" variant="outline" disabled={saving} onClick={() => void save()}>
+          {saving ? 'Saving…' : 'Save'}
         </Button>
       </div>
       <p className="mt-2 text-[11px] text-black/45 dark:text-white/45">
-        Not wired yet. Saving requires the field to be added to <code>collections/Workspaces.ts</code> together with
-        applying <code>migrations/20260902_150000_spend_caps.ts</code> (schema-drift discipline — see AGENTS.md), and
-        the dispatcher (<code>lib/dispatcher/worker.ts</code>) still needs to actually check the cap and refuse a new
-        run once it&apos;s exceeded. This form is the intended shape, not a working switch.
+        Saved, but not yet enforced: the dispatcher (<code>lib/dispatcher/worker.ts</code>) doesn&apos;t check this
+        value before claiming or executing a run yet, so spend can still exceed the cap. Fail-closed enforcement is a
+        real, separate gap — this only records the number for now.
       </p>
     </div>
   )

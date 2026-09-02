@@ -8,13 +8,10 @@ import { SpendCapForm } from '@/components/workspace/spend-cap-form'
 // ROADMAP B7.2 (Batch B-6 "Finish") — the first workspace-level settings
 // route in this app (previously only `/settings/notifications` existed, and
 // that's deliberately global/per-user, not workspace-scoped — see that
-// page's own header comment). Scoped down per this batch's own
-// effort-budget allowance: schema field written as a migration (NOT
-// applied — migrations/20260902_150000_spend_caps.ts) + this settings UI to
-// set it, with the actual save path and dispatcher-side enforcement both
-// left as explicit, visible gaps rather than a form that quietly pretends
-// to work. See SpendCapForm for why the input is disabled, not just
-// decorative copy.
+// page's own header comment). `spendCapCents` (collections/Workspaces.ts)
+// and its migration landed together, and SpendCapForm now really saves the
+// value — dispatcher-side fail-closed enforcement remains a real, separate,
+// unbuilt gap (see that component's own comment).
 export default async function WorkspaceSettingsPage({
   params,
 }: {
@@ -45,7 +42,12 @@ export default async function WorkspaceSettingsPage({
           once the cap is hit rather than silently keep spending.
         </p>
         <div className="mt-3">
-          <SpendCapForm workspaceName={workspace.name} />
+          <SpendCapForm
+            workspaceId={workspace.id}
+            workspaceSlug={workspace.slug}
+            workspaceName={workspace.name}
+            initialSpendCapCents={workspace.spendCapCents ?? null}
+          />
         </div>
       </section>
 

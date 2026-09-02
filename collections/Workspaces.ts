@@ -53,6 +53,21 @@ export const Workspaces: CollectionConfig = {
         description: 'Last-issued sequence number for this workspace\'s human-readable task IDs — increment and read atomically when actually wiring ENG-142-style IDs.',
       },
     },
+    {
+      // ROADMAP B7.2 (Batch B-6 "Finish") — paired with
+      // migrations/20260902_150000_spend_caps.ts's spend_cap_cents column;
+      // both land together, never as two separate steps (see that
+      // migration's own header comment for why — `workspaces` is read on
+      // nearly every page load). NULL/unset = uncapped. Dispatcher-side
+      // fail-closed enforcement is a separate, still-unbuilt gap — see
+      // components/workspace/spend-cap-form.tsx's own caveat.
+      name: 'spendCapCents',
+      type: 'number',
+      min: 0,
+      admin: {
+        description: 'Monthly spend cap in cents for this workspace, or empty for uncapped. Not yet enforced by the dispatcher (see AGENTS.md B-6 entry).',
+      },
+    },
   ],
 }
 

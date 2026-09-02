@@ -72,6 +72,20 @@ export const Pages: CollectionConfig = {
       },
     },
     {
+      // ROADMAP B-1 (project detail, Pages tab) — paired with
+      // migrations/20260902_100000_pages_project.ts's project_id column;
+      // both land together, never as two separate steps (see that
+      // migration's own header comment for why).
+      name: 'project',
+      type: 'relationship',
+      relationTo: 'projects',
+      hasMany: false,
+      index: true,
+      admin: {
+        description: 'Project this page belongs to, if any — scopes it into the project detail page\'s Pages tab.',
+      },
+    },
+    {
       name: 'position',
       type: 'number',
       defaultValue: 0,

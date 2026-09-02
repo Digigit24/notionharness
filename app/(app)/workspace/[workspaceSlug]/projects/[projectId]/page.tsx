@@ -93,7 +93,7 @@ export default async function ProjectDetailPage({
     assignableUsers.push(...resolved.docs)
   }
 
-  const [activeRuns, usageRollup, initialRuns, lastActiveTask] = await Promise.all([
+  const [activeRuns, usageRollup, initialRuns, lastActiveTask, projectPages] = await Promise.all([
     listActiveRunsForProject(project.id),
     getProjectUsageRollup(project.id, 30),
     getProjectRuns({ projectId: project.id }),
@@ -102,6 +102,17 @@ export default async function ProjectDetailPage({
       where: { project: { equals: project.id } },
       sort: '-lastActivityAt',
       limit: 1,
+      depth: 0,
+      overrideAccess: true,
+    }),
+    // ROADMAP B-1 (project detail, Pages tab) — now real: the `project`
+    // field/migration landed together (see collections/Pages.ts and
+    // migrations/20260902_100000_pages_project.ts's paired comments).
+    payload.find({
+      collection: 'pages',
+      where: { project: { equals: project.id }, isArchived: { equals: false } },
+      sort: 'title',
+      limit: 100,
       depth: 0,
       overrideAccess: true,
     }),
@@ -123,6 +134,7 @@ export default async function ProjectDetailPage({
       lastActivityAt={lastActiveTask.docs[0]?.lastActivityAt ?? null}
       initialRuns={initialRuns}
       defaultStatusId={statuses.docs[0]?.id ?? null}
+      projectPages={projectPages.docs}
     />
   )
 }

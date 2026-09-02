@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import Link from 'next/link'
 import { FileText, FolderOpen } from 'lucide-react'
 import { DetailLayout, type DetailLayoutTab } from '@/components/layout/detail-layout'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -10,7 +11,7 @@ import { ProjectOverviewTab, type ProjectStatusCount } from './project-overview-
 import { ProjectRunsTab } from './project-runs-tab'
 import { ProjectSettingsTab } from './project-settings-tab'
 import type { ProjectRunRow } from '@/app/(app)/workspace/[workspaceSlug]/projects/[projectId]/actions'
-import type { Agent, Project, User, Workspace } from '@/payload-types'
+import type { Agent, Page, Project, User, Workspace } from '@/payload-types'
 
 // ROADMAP B-1 — the project detail page's own DetailLayout wiring. Header
 // and right rail persist across tabs (DetailLayout's own contract); tab
@@ -33,6 +34,7 @@ export function ProjectDetailView({
   lastActivityAt,
   initialRuns,
   defaultStatusId,
+  projectPages,
 }: {
   workspace: Workspace
   project: Project
@@ -48,6 +50,7 @@ export function ProjectDetailView({
   lastActivityAt: string | null
   initialRuns: ProjectRunRow[]
   defaultStatusId: number | null
+  projectPages: Page[]
 }) {
   const [currentProject, setCurrentProject] = useState(project)
   const totalTasks = columns.reduce((sum, c) => sum + c.totalDocs, 0)
@@ -88,21 +91,37 @@ export function ProjectDetailView({
     {
       key: 'pages',
       label: 'Pages',
+      count: projectPages.length,
       content: (
         <div className="p-6">
-          {/* ROADMAP B-1 — `collections/Pages.ts` has no `project`
-              relationship (only `parentPage`); confirmed again this batch,
-              same finding B-0's navigation investigation already made. A
-              migration exists (migrations/20260902_100000_pages_project.ts)
-              but is NOT applied — see this batch's final report. Until a
-              human applies it and adds the field, there is no real
-              project-scoped page tree to show; this is an honest placeholder,
-              not a faked one. */}
-          <EmptyState
-            icon={<FileText />}
-            title="Pages aren't linked to projects yet"
-            description="There's no way to scope a page to a project in the current schema — only a page's parent page. A migration is written and waiting for a human to apply it."
-          />
+          {/* ROADMAP B-1 — `collections/Pages.ts`'s `project` relationship
+              (migrations/20260902_100000_pages_project.ts) is now applied
+              and wired: this renders a real, workspace-scoped page list.
+              No page-creation flow sets `project` yet (NewPageButton always
+              creates a top-level, unscoped page), so the empty state is
+              honest about that rather than offering a "create" action that
+              wouldn't actually land in this project. */}
+          {projectPages.length === 0 ? (
+            <EmptyState
+              icon={<FileText />}
+              title="No pages linked to this project yet"
+              description="Open a page and set its project from the page's own settings, or link one from the sidebar's page tree."
+            />
+          ) : (
+            <ul className="divide-y divide-black/5 dark:divide-white/10">
+              {projectPages.map((page) => (
+                <li key={page.id}>
+                  <Link
+                    href={`/workspace/${workspace.slug}/p/${page.id}`}
+                    className="flex items-center gap-2 rounded-md px-2 py-2.5 text-sm hover:bg-black/[.03] dark:hover:bg-white/[.04]"
+                  >
+                    <FileText className="h-4 w-4 shrink-0 text-black/40 dark:text-white/40" />
+                    <span className="truncate">{page.title || 'Untitled'}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       ),
     },
