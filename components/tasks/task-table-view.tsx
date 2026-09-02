@@ -9,15 +9,17 @@
 // bar's "Sort by" control uses, so "sorted by X" means the same thing here
 // as it does in List (the plan's explicit requirement that a filter/sort
 // set mean the same thing across all three views).
-import { useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState, type RefObject } from 'react'
 import {
   flexRender,
   getCoreRowModel,
   useReactTable,
   type ColumnDef,
   type ColumnPinningState,
+  type Row,
+  type Table as ReactTableInstance,
 } from '@tanstack/react-table'
-import { useVirtualizer } from '@tanstack/react-virtual'
+import { useVirtualizer, type VirtualItem } from '@tanstack/react-virtual'
 import { Pin, PinOff } from 'lucide-react'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { statusColorClasses } from '@/lib/status-colors'
@@ -156,7 +158,69 @@ export function TaskTableView({
   }
 
   return (
-    <div ref={parentRef} className="min-h-0 flex-1 overflow-auto p-4">
+    <>
+      {/* ROADMAP B8.1 (Batch B-6 "Finish") — responsive floor (1280px,
+          Tailwind's `xl` breakpoint, matching this codebase's `lg:`/`xl:`
+          convention). A dense pinned/resizable table has no honest way to
+          fit a narrower viewport, so below the floor this renders a
+          card-per-row layout instead of squeezing the table — reusing the
+          exact same `tasks`/`statuses`/`runMetrics`/`activeTaskIds` data
+          this component already receives from the shared `useTaskViewData`
+          layer, not a second fetch. Column pinning/resizing (table-only
+          concepts) are dropped in the card layout; sort stays live via the
+          same `onSortChange` the table's own headers call. */}
+      <div className="hidden min-h-0 flex-1 xl:block">
+        <TaskTable
+          parentRef={parentRef}
+          table={table}
+          columnDefs={columnDefs}
+          virtualItems={virtualItems}
+          paddingTop={paddingTop}
+          paddingBottom={paddingBottom}
+          sort={sort}
+          onSortChange={onSortChange}
+          onOpenTask={onOpenTask}
+        />
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto xl:hidden">
+        <TaskCardList
+          rows={rows}
+          statusById={statusById}
+          runMetrics={runMetrics}
+          activeTaskIds={activeTaskIds}
+          sort={sort}
+          onSortChange={onSortChange}
+          onOpenTask={onOpenTask}
+        />
+      </div>
+    </>
+  )
+}
+
+function TaskTable({
+  parentRef,
+  table,
+  columnDefs,
+  virtualItems,
+  paddingTop,
+  paddingBottom,
+  sort,
+  onSortChange,
+  onOpenTask,
+}: {
+  parentRef: RefObject<HTMLDivElement | null>
+  table: ReactTableInstance<Task>
+  columnDefs: ColumnDef<Task>[]
+  virtualItems: VirtualItem[]
+  paddingTop: number
+  paddingBottom: number
+  sort: TaskSort
+  onSortChange: (sort: TaskSort) => void
+  onOpenTask: (taskId: number) => void
+}) {
+  const rows = table.getRowModel().rows
+  return (
+    <div ref={parentRef} className="h-full min-h-0 flex-1 overflow-auto p-4">
       <Table style={{ width: table.getTotalSize(), tableLayout: 'fixed' }}>
         <TableHeader className="sticky top-0 z-10 bg-white dark:bg-[#191919]">
           {table.getHeaderGroups().map((headerGroup) => (
@@ -236,6 +300,93 @@ export function TaskTableView({
           )}
         </TableBody>
       </Table>
+    </div>
+  )
+}
+
+/**
+ * ROADMAP B8.1 — the below-floor (<1280px) replacement for `<TaskTable>`.
+ * One card per task, reading the exact same rows TanStack Table already
+ * built (`table.getRowModel().rows`, via the `rows` prop) — no second data
+ * pass. Sort stays live (tap a field to sort by it, tap again to flip
+ * direction) using the identical `TaskSort` shared model the table's column
+ * headers write into; column pinning/resizing have no card-layout analogue
+ * and are intentionally dropped, not faked.
+ */
+const CARD_SORT_FIELDS: Array<{ field: TaskSortField; label: string }> = [
+  { field: 'title', label: 'Title' },
+  { field: 'updatedAt', label: 'Updated' },
+  { field: 'position', label: 'Position' },
+]
+
+function TaskCardList({
+  rows,
+  statusById,
+  runMetrics,
+  activeTaskIds,
+  sort,
+  onSortChange,
+  onOpenTask,
+}: {
+  rows: Row<Task>[]
+  statusById: Map<number, TaskStatus>
+  runMetrics: Record<number, TaskRunMetrics>
+  activeTaskIds: Set<number>
+  sort: TaskSort
+  onSortChange: (sort: TaskSort) => void
+  onOpenTask: (taskId: number) => void
+}) {
+  return (
+    <div className="flex flex-col gap-2 p-3">
+      <div className="flex items-center gap-1 px-1 text-xs text-black/40 dark:text-white/40">
+        <span>Sort:</span>
+        {CARD_SORT_FIELDS.map(({ field, label }) => (
+          <button
+            key={field}
+            type="button"
+            onClick={() => onSortChange({ field, direction: sort.field === field && sort.direction === 'asc' ? 'desc' : 'asc' })}
+            className={`rounded px-1.5 py-0.5 ${sort.field === field ? 'bg-black/[.06] text-foreground dark:bg-white/[.08]' : 'hover:bg-black/[.04] dark:hover:bg-white/[.06]'}`}
+          >
+            {label}
+            {sort.field === field ? (sort.direction === 'asc' ? ' ↑' : ' ↓') : ''}
+          </button>
+        ))}
+      </div>
+
+      {rows.map((row) => {
+        const task = row.original
+        const statusId = typeof task.status === 'number' ? task.status : task.status?.id
+        const status = statusId != null ? statusById.get(statusId) : undefined
+        const assignee = typeof task.assignee === 'object' ? task.assignee?.name || task.assignee?.email : null
+        const project = typeof task.project === 'object' ? task.project?.name : null
+
+        return (
+          <button
+            key={row.id}
+            type="button"
+            onClick={() => onOpenTask(task.id)}
+            className="flex flex-col gap-1.5 rounded-lg border border-black/10 bg-white p-3 text-left dark:border-white/10 dark:bg-[#1f1f1f]"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <span className="min-w-0 flex-1 truncate text-sm font-medium">{task.title || 'Untitled'}</span>
+              {status && (
+                <span className={`shrink-0 truncate rounded px-1.5 py-0.5 text-xs font-medium ${statusColorClasses(status.color)}`}>
+                  {status.name}
+                </span>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-black/50 dark:text-white/50">
+              {assignee && <span className="truncate">{assignee}</span>}
+              {project && <span className="truncate">{project}</span>}
+              {task.updatedAt && <span className="shrink-0">{new Date(task.updatedAt).toLocaleString()}</span>}
+            </div>
+            <div className="flex items-center gap-2">
+              <AgentPresence active={activeTaskIds.has(task.id)} />
+              <RunMetrics metrics={runMetrics[task.id]} />
+            </div>
+          </button>
+        )
+      })}
     </div>
   )
 }

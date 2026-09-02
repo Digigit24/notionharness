@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useSyncExternalStore } from 'react'
 
 /**
  * Minimal shared state for sidebar collapse, so `<KeyboardProvider>`'s
@@ -57,4 +57,35 @@ export function useSidebarCollapsed() {
   )
   const setCollapsed = useCallback((value: boolean) => sidebarCollapseStore.set(value), [])
   return { collapsed, setCollapsed, toggle: sidebarCollapseStore.toggle }
+}
+
+/**
+ * ROADMAP B8.1 (Batch B-6 "Finish") — responsive floor. This app's chosen
+ * floor is 1280px (Tailwind's `xl` breakpoint, matching the convention
+ * already used throughout this codebase and the plan's own casual mention
+ * of that width). Below it, the sidebar should default to collapsed rather
+ * than eating ~256px of an already-tight viewport.
+ *
+ * One-directional by design: crossing DOWN into the narrow band forces a
+ * collapse; crossing back UP does *not* force an expand. A one-way rule
+ * avoids fighting a user who deliberately expanded the sidebar on a narrow
+ * screen (e.g. a resized browser window, not just a phone) — auto-expanding
+ * out from under them on every resize would be more surprising than useful.
+ * `Sidebar` still owns persistence (see its own header comment); this only
+ * ever *pushes* `collapsed` to `true`, never reads it back.
+ */
+const SIDEBAR_AUTO_COLLAPSE_MEDIA_QUERY = '(max-width: 1279px)'
+
+export function useSidebarAutoCollapse(): void {
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
+    const mql = window.matchMedia(SIDEBAR_AUTO_COLLAPSE_MEDIA_QUERY)
+    const applyIfNarrow = (matches: boolean) => {
+      if (matches) sidebarCollapseStore.set(true)
+    }
+    applyIfNarrow(mql.matches)
+    const listener = (e: MediaQueryListEvent) => applyIfNarrow(e.matches)
+    mql.addEventListener('change', listener)
+    return () => mql.removeEventListener('change', listener)
+  }, [])
 }

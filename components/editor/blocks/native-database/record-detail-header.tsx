@@ -105,7 +105,8 @@ export function RecordDetailHeader({
         </button>
       </div>
       <input
-        className="mt-2 w-full border-none bg-transparent text-2xl font-bold outline-none placeholder:text-black/20 dark:placeholder:text-white/20"
+        className="mt-2 w-full rounded-sm border-none bg-transparent text-2xl font-bold outline-none placeholder:text-black/20 focus-visible:ring-2 focus-visible:ring-ring/40 dark:placeholder:text-white/20"
+        aria-label="Record title"
         value={title}
         placeholder="Untitled"
         onChange={(e) => setTitle(e.target.value)}

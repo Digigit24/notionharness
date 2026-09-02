@@ -546,7 +546,8 @@ export class NativeDatabaseBlockComponent extends BlockComponent<NativeDatabaseB
         <div class="flex items-center gap-2">
           <span class="shrink-0 text-lg">🗄️</span>
           <input
-            class="min-w-0 flex-1 border-none bg-transparent text-xl font-bold outline-none"
+            class="min-w-0 flex-1 rounded-sm border-none bg-transparent text-xl font-bold outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+            aria-label="Database table name"
             .value=${this._tableName}
             @input=${(e: Event) => {
               this._tableName = (e.target as HTMLInputElement).value
@@ -627,8 +628,9 @@ export class NativeDatabaseBlockComponent extends BlockComponent<NativeDatabaseB
           : html`<div class="px-2 py-1 text-xs text-black/40 dark:text-white/40">No user databases in this workspace yet.</div>`}
         <div class="mt-2 flex items-center gap-1.5">
           <input
-            class="min-w-0 flex-1 rounded border border-black/10 bg-transparent px-2 py-1 text-sm outline-none dark:border-white/10"
+            class="min-w-0 flex-1 rounded border border-black/10 bg-transparent px-2 py-1 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50 dark:border-white/10"
             placeholder="New database name…"
+            aria-label="New database name"
             .value=${this._newUserDatabaseName}
             @input=${(e: Event) => {
               this._newUserDatabaseName = (e.target as HTMLInputElement).value
@@ -716,7 +718,8 @@ export class NativeDatabaseBlockComponent extends BlockComponent<NativeDatabaseB
       <div>
         <div class="mb-1 flex items-center gap-1.5 px-1">
           <input
-            class="min-w-0 flex-1 border-none bg-transparent text-xl font-bold outline-none"
+            class="min-w-0 flex-1 rounded-sm border-none bg-transparent text-xl font-bold outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+            aria-label="Database table name"
             .value=${this._tableName}
             @input=${(e: Event) => {
               this._tableName = (e.target as HTMLInputElement).value

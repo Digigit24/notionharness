@@ -30,7 +30,7 @@ import { NotificationsBell } from '@/components/notifications/notifications-bell
 import { AmbientStatus } from '@/components/shell/ambient-status'
 import type { AmbientStatus as AmbientStatusData } from '@/app/(app)/workspace/[workspaceSlug]/actions'
 import { ModeSwitcher } from './mode-switcher'
-import { useSidebarCollapsed } from '@/lib/keyboard/sidebar-collapse-store'
+import { useSidebarAutoCollapse, useSidebarCollapsed } from '@/lib/keyboard/sidebar-collapse-store'
 import { createPage, deletePageForever, restorePage } from '@/app/(app)/actions'
 import type { Page, Workspace } from '@/payload-types'
 import { WORK_MODE_SUBROUTES, type WorkSubRoute } from '@/lib/entity-links'
@@ -165,6 +165,14 @@ export function Sidebar({
     // included here to satisfy exhaustive-deps; it never changes identity
     // so this doesn't change when the effect actually re-runs.
   }, [storageKey, setCollapsed])
+
+  // ROADMAP B8.1 — responsive floor (1280px). Declared AFTER the
+  // localStorage-restore effect above so it runs after it on mount: a
+  // persisted "expanded" preference is applied first, then this can still
+  // force a collapse if the viewport is already narrower than the floor.
+  // See lib/keyboard/sidebar-collapse-store.ts's own comment for why this
+  // is one-directional (auto-collapse on narrow, never auto-expand back).
+  useSidebarAutoCollapse()
 
   useEffect(() => {
     if (!ready) return

@@ -45,7 +45,8 @@ export function EmojiPicker({
               value={custom}
               onChange={(e) => setCustom(e.target.value)}
               placeholder="Paste any emoji..."
-              className="min-w-0 flex-1 rounded border border-black/10 bg-transparent px-2 py-1 text-sm outline-none dark:border-white/10"
+              aria-label="Paste any emoji"
+              className="min-w-0 flex-1 rounded border border-black/10 bg-transparent px-2 py-1 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50 dark:border-white/10"
             />
             <button
               type="button"

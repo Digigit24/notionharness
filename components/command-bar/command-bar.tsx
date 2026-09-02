@@ -625,6 +625,7 @@ export function CommandBar({
                 type="button"
                 onClick={goBack}
                 title="Back"
+                aria-label="Back"
                 className="shrink-0 text-black/40 hover:text-black/70 dark:text-white/40 dark:hover:text-white/70"
               >
                 <ArrowLeft size={15} />
@@ -652,6 +653,7 @@ export function CommandBar({
                   setNavFilter(null)
                   setActiveIndex(0)
                 }}
+                aria-pressed={navFilter === null}
                 className={cn(
                   'rounded-full px-2 py-0.5 text-xs',
                   navFilter === null
@@ -669,6 +671,7 @@ export function CommandBar({
                     setNavFilter((current) => (current === provider.key ? null : provider.key))
                     setActiveIndex(0)
                   }}
+                  aria-pressed={navFilter === provider.key}
                   className={cn(
                     'rounded-full px-2 py-0.5 text-xs',
                     navFilter === provider.key

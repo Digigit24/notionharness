@@ -142,7 +142,14 @@ function DetailLayoutShell({
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1">
+      {/* ROADMAP B8.1 (Batch B-6 "Finish") — responsive floor. This app's
+          chosen floor is 1280px (Tailwind's `xl` breakpoint, matching the
+          `lg:`/`xl:` convention already used throughout this codebase).
+          Below it the right rail stacks under the tab content instead of
+          sitting at a fixed 320px regardless of viewport width; at `xl:`
+          and above it returns to the original fixed-width side-by-side
+          layout. */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto xl:flex-row xl:overflow-visible">
         <Tabs value={activeTab} onValueChange={onTabChange} className="min-h-0 min-w-0 flex-1 gap-0">
           <TabsList className="mx-6 mt-3 h-auto w-fit gap-0.5 p-1">
             {tabs.map((tab) => (
@@ -157,14 +164,14 @@ function DetailLayoutShell({
             ))}
           </TabsList>
           {tabs.map((tab) => (
-            <TabsContent key={tab.key} value={tab.key} className="mt-0 flex min-h-0 flex-1 flex-col overflow-auto">
+            <TabsContent key={tab.key} value={tab.key} className="mt-0 flex min-h-0 flex-1 flex-col xl:overflow-auto">
               {tab.content}
             </TabsContent>
           ))}
         </Tabs>
 
         {rightRail && (
-          <aside className="w-80 shrink-0 overflow-y-auto border-l border-black/10 p-4 dark:border-white/10">
+          <aside className="w-full shrink-0 border-t border-black/10 p-4 dark:border-white/10 xl:w-80 xl:overflow-y-auto xl:border-t-0 xl:border-l">
             {rightRail}
           </aside>
         )}

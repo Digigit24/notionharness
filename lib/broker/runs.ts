@@ -349,6 +349,25 @@ export async function hasActiveRunForTask(taskId: number): Promise<boolean> {
   return res.rows[0]?.exists ?? false
 }
 
+/** ROADMAP B8.5 (Batch B-6 "Finish") — the first-run checklist's "run a
+ * task" step. Any status counts (including still-`queued`) — the checklist
+ * is marking "you've done the thing," not "it already finished." Same
+ * workspace-scoping join shape `getWorkspaceUsageRollup` (`./usage.ts`)
+ * uses, one level down (existence, not an aggregate). */
+export async function hasAnyRunForWorkspace(workspaceId: number): Promise<boolean> {
+  const pool = getBrokerPool()
+  const res = await pool.query<{ exists: boolean }>(
+    `SELECT EXISTS(
+       SELECT 1 FROM runs r
+       LEFT JOIN tasks t ON t.id = r.task_id
+       LEFT JOIN pages p ON p.id = r.page_id
+       WHERE t.workspace_id = $1 OR p.workspace_id = $1
+     ) AS exists`,
+    [workspaceId],
+  )
+  return res.rows[0]?.exists ?? false
+}
+
 /** ROADMAP B5.1 (home surface, "what I was doing") — one row per distinct
  * page with a page-scoped run (`task_id IS NULL`, i.e. an Ask thread rather
  * than a task run), most-recently-active page first. Same "join through the

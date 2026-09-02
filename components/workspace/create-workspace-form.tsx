@@ -23,7 +23,8 @@ export function CreateWorkspaceForm() {
         value={name}
         onChange={(e) => setName(e.target.value)}
         placeholder="New workspace name"
-        className="min-w-0 flex-1 rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-[#202020]"
+        aria-label="New workspace name"
+        className="min-w-0 flex-1 rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50 dark:border-white/10 dark:bg-[#202020]"
       />
       <button
         type="submit"
