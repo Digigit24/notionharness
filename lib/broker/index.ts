@@ -11,6 +11,8 @@ export {
   getRun,
   listRunsForTask,
   listActiveRunsForWorkspace,
+  listRunsForProject,
+  listActiveRunsForProject,
   getRunPageContext,
   setRunPageContext,
   listFailedRuns,
@@ -19,5 +21,5 @@ export {
 } from './runs'
 export type { SettleOutcome } from './runs'
 export { appendRunEvent, listRunEvents, listRunEventsSince } from './messages'
-export { recordUsage, getRunUsageTotals, getTaskUsageTotals } from './usage'
+export { recordUsage, getRunUsageTotals, getTaskUsageTotals, getRunUsageTotalsForRuns, getProjectUsageRollup } from './usage'
 export type { UsageInput, RunUsageTotals, TaskUsageTotals } from './usage'

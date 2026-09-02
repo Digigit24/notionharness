@@ -105,6 +105,7 @@ export function TaskDrawer({
               statuses={statuses}
               assignableUsers={assignableUsers}
               agents={agents}
+              workspaceSlug={workspace.slug}
               onPatch={patch}
             />
           )}
@@ -122,6 +123,7 @@ function OverviewTab({
   statuses,
   assignableUsers,
   agents,
+  workspaceSlug,
   onPatch,
 }: {
   task: Task
@@ -129,6 +131,7 @@ function OverviewTab({
   statuses: TaskStatus[]
   assignableUsers: User[]
   agents: Agent[]
+  workspaceSlug: string
   onPatch: (data: Partial<Pick<Task, 'title' | 'status' | 'assignee' | 'agent' | 'project'>>) => Promise<void>
 }) {
   const [title, setTitle] = useState(task.title || '')
@@ -182,18 +185,31 @@ function OverviewTab({
         </select>
       </Field>
       <Field label="Project">
-        <select
-          value={projectId ?? ''}
-          onChange={(e) => void onPatch({ project: e.target.value ? Number(e.target.value) : null })}
-          className="w-full rounded-md border border-black/10 bg-transparent px-2.5 py-1.5 text-sm dark:border-white/10"
-        >
-          <option value="">No project</option>
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
+        <div className="flex items-center gap-2">
+          <select
+            value={projectId ?? ''}
+            onChange={(e) => void onPatch({ project: e.target.value ? Number(e.target.value) : null })}
+            className="w-full rounded-md border border-black/10 bg-transparent px-2.5 py-1.5 text-sm dark:border-white/10"
+          >
+            <option value="">No project</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          {/* ROADMAP B-1 — the project detail route now exists; this is the
+              "small change" this batch's brief asked for so the task board's
+              project picker can link out to it. */}
+          {projectId != null && (
+            <a
+              href={`/workspace/${workspaceSlug}/projects/${projectId}`}
+              className="shrink-0 whitespace-nowrap text-xs text-black/50 hover:text-black hover:underline dark:text-white/50 dark:hover:text-white"
+            >
+              Open →
+            </a>
+          )}
+        </div>
       </Field>
     </div>
   )
