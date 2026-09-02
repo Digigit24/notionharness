@@ -5,7 +5,7 @@ import { Bot, PanelRightClose, Send, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Thread, useThreadData } from '@/components/hermes'
+import { ConnectionStatusBanner, Thread, useThreadData } from '@/components/hermes'
 import { enqueuePageRun, getPageRunSnapshots } from '@/app/(app)/actions'
 import { registerPagePanelOpener } from './registry'
 
@@ -135,7 +135,7 @@ export function PageDockedPanel({
   // for work nobody can see" rule `useRunEventStream`'s own `observed` flag
   // exists for elsewhere in this hierarchy.
   const loader = useCallback((id: number) => getPageRunSnapshots(id), [])
-  const threads = useThreadData(pageId, !state.collapsed, loader)
+  const { threads, connectionStatus, retry } = useThreadData(pageId, !state.collapsed, loader)
 
   const selected = useMemo(() => {
     if (state.activeRunId != null) {
@@ -224,6 +224,8 @@ export function PageDockedPanel({
           </button>
         </div>
       </div>
+
+      <ConnectionStatusBanner status={connectionStatus} onRetry={retry} />
 
       <div className="min-h-0 flex-1 overflow-hidden">
         {selected ? (

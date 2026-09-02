@@ -3,8 +3,10 @@
 import { useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { Bot } from 'lucide-react'
 import { AgentSettingsForm, type AgentProfile } from '@/components/agents/agent-settings-form'
 import { Button } from '@/components/ui/button'
+import { EmptyState } from '@/components/ui/empty-state'
 
 // ROADMAP B-1 (Detail) — this used to be a list + full inline editor (an
 // Overview/Capabilities toggle built entirely as client-side state on this
@@ -57,9 +59,12 @@ export function AgentEditor({
         </Button>
 
         {sortedAgents.length === 0 ? (
-          <p className="rounded-lg border border-black/10 p-4 text-sm text-black/50 dark:border-white/10 dark:text-white/50">
-            No agents configured yet.
-          </p>
+          <EmptyState
+            icon={<Bot />}
+            title="No agents configured yet"
+            description="Agents are what runs work in this workspace — create one to get started."
+            action={{ label: 'New agent', onClick: () => setCreating(true) }}
+          />
         ) : (
           sortedAgents.map((agent) => (
             <Link

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Run, RunMessageRow } from '@/lib/broker/types'
 import type { RunEvent } from '@/lib/run-events'
 
@@ -10,6 +10,20 @@ export interface RunEventSnapshot {
 }
 
 export type RunEventLoader = (taskId: number) => Promise<RunEventSnapshot[]>
+
+/**
+ * ROADMAP B-6 "Finish" (state-craft sweep) — the "offline/disconnected"
+ * standard: "a quiet banner when the event stream ... drops, with
+ * automatic reconnect and a manual retry. Never silent." Before this,
+ * `source.onerror` below did nothing observable — the browser's own
+ * `EventSource` retried silently and callers had no way to know a
+ * connection had dropped at all. `'reconnecting'` means at least one of
+ * this hook's open SSE connections is currently in its own error/retry
+ * state; `'connected'` means every connection this hook has opened is
+ * currently open (or none have been opened yet — nothing to be
+ * disconnected from).
+ */
+export type RunStreamConnectionStatus = 'connected' | 'reconnecting'
 
 /** Merge by the daemon-assigned sequence number, never arrival time/order. */
 export function mergeRunEvents(current: RunMessageRow[], incoming: RunMessageRow[]): RunMessageRow[] {
@@ -42,19 +56,34 @@ const RUN_DISCOVERY_INTERVAL_MS = 8000
 /** Polls only while mounted/observed, and coalesces updates into ~50ms flushes. */
 export function useRunEventStream(taskId: number, observed: boolean, load: RunEventLoader) {
   const [snapshots, setSnapshots] = useState<RunEventSnapshot[]>([])
+  const [connectionStatus, setConnectionStatus] = useState<RunStreamConnectionStatus>('connected')
   const loadRef = useRef(load)
   loadRef.current = load
+  // Bumped by `retry()` to force the effect below to tear down and rebuild
+  // every SSE connection from scratch — a real, user-triggered reconnect
+  // rather than waiting on the browser's own backoff timer.
+  const [retryToken, setRetryToken] = useState(0)
+  const retry = useCallback(() => setRetryToken((t) => t + 1), [])
 
   useEffect(() => {
     if (!observed) return
     let active = true
+    setConnectionStatus('connected')
 
     // Per-run bookkeeping, local to this mount/id — reset whenever `taskId`
     // or `observed` changes since the effect below tears everything down.
     const runMeta = new Map<number, Run>()
     const sources = new Map<number, EventSource>()
     const pending = new Map<number, RunMessageRow[]>()
+    // Which runs currently have a connection in an error/retrying state —
+    // drives the aggregate `connectionStatus` this hook returns.
+    const erroredRunIds = new Set<number>()
     let flushTimer: ReturnType<typeof setTimeout> | null = null
+
+    const syncConnectionStatus = () => {
+      if (!active) return
+      setConnectionStatus(erroredRunIds.size > 0 ? 'reconnecting' : 'connected')
+    }
 
     const flush = () => {
       flushTimer = null
@@ -80,6 +109,7 @@ export function useRunEventStream(taskId: number, observed: boolean, load: RunEv
     const closeSource = (runId: number) => {
       sources.get(runId)?.close()
       sources.delete(runId)
+      if (erroredRunIds.delete(runId)) syncConnectionStatus()
     }
 
     /** Opens one SSE connection for a run this hook hasn't seen before.
@@ -94,6 +124,9 @@ export function useRunEventStream(taskId: number, observed: boolean, load: RunEv
       const source = new EventSource(`/api/runs/${runId}/events/stream?since=${lastSeq}`)
       sources.set(runId, source)
 
+      source.onopen = () => {
+        if (erroredRunIds.delete(runId)) syncConnectionStatus()
+      }
       source.onmessage = (ev) => {
         if (!active) return
         let frame: RunEventFrame
@@ -114,9 +147,15 @@ export function useRunEventStream(taskId: number, observed: boolean, load: RunEv
       }
       source.onerror = () => {
         // Network drop or a transient server error: EventSource's built-in
-        // reconnect (with Last-Event-ID) handles resuming. A run that's
-        // already terminal gets closed by the `done` handler above instead
-        // of ever reaching here.
+        // reconnect (with Last-Event-ID) handles resuming — this hook still
+        // needs to surface that a reconnect is in progress rather than stay
+        // silent about it (ROADMAP B-6 "offline/disconnected" standard). A
+        // run that's already terminal gets closed by the `done` handler
+        // above instead of ever reaching here.
+        if (!erroredRunIds.has(runId)) {
+          erroredRunIds.add(runId)
+          syncConnectionStatus()
+        }
       }
     }
 
@@ -161,7 +200,12 @@ export function useRunEventStream(taskId: number, observed: boolean, load: RunEv
       sources.clear()
       pending.clear()
     }
-  }, [taskId, observed])
+    // `retryToken` deliberately participates here: bumping it re-runs this
+    // whole effect, whose cleanup above already closes every open
+    // EventSource — so a manual retry is a full, real reconnect (a fresh
+    // `discoverRuns()` call reopening every source from scratch) rather
+    // than waiting on the browser's own backoff timer.
+  }, [taskId, observed, retryToken])
 
-  return snapshots
+  return { snapshots, connectionStatus, retry }
 }

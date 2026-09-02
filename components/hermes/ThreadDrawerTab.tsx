@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useRef } from 'react'
 import { Maximize2 } from 'lucide-react'
 import { Thread } from '@/components/hermes'
+import { ConnectionStatusBanner } from './connection-status-banner'
 import { useThreadData } from './use-thread-data'
 import type { Agent } from '@/payload-types'
 import type { Run, RunMessageRow } from '@/lib/broker/types'
@@ -23,7 +24,7 @@ export interface ThreadDrawerTabProps {
 
 export function ThreadDrawerTab({ taskId, agents: _agents, loader, expandHref }: ThreadDrawerTabProps) {
   const observed = true
-  const threads = useThreadData(taskId, observed, loader)
+  const { threads, connectionStatus, retry } = useThreadData(taskId, observed, loader)
   const parentRef = useRef<HTMLDivElement>(null)
 
   if (threads.length === 0) {
@@ -37,6 +38,7 @@ export function ThreadDrawerTab({ taskId, agents: _agents, loader, expandHref }:
 
   return (
     <div ref={parentRef} className="flex flex-col gap-4 max-h-[70vh] overflow-auto pb-4">
+      <ConnectionStatusBanner status={connectionStatus} onRetry={retry} />
       {/* Most recent thread */}
       {mostRecent && (
         <div className="border rounded-lg overflow-hidden">

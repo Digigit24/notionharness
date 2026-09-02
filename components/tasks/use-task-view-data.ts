@@ -23,6 +23,7 @@
  * views never shows stale data.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { toast } from '@/hooks/use-toast'
 import {
   createTask,
   getTasksForView,
@@ -186,7 +187,15 @@ export function useTaskViewData({
 
     moveTaskToStatus({ taskId, workspaceId: workspace.id, workspaceSlug: workspace.slug, statusId: targetStatusId }).catch(
       (err) => {
-        setError(err instanceof Error ? err.message : 'Failed to move task.')
+        const message = err instanceof Error ? err.message : 'Failed to move task.'
+        setError(message)
+        // ROADMAP B-6 "Finish" (state-craft sweep) — the plan's optimistic
+        // standard: "roll back visibly on failure with a toast that says
+        // what failed." The board cache reset below is the visible
+        // rollback (the card snaps back to its prior column); this is the
+        // toast half of that pair, for the app's flagship optimistic
+        // interaction (drag-and-drop).
+        toast({ title: 'Couldn’t move task', description: message, variant: 'destructive' })
         setTasksByStatus(Object.fromEntries(columns.map((c) => [c.status.id, c.tasks])))
       },
     )

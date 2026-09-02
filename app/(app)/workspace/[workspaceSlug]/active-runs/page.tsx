@@ -1,6 +1,8 @@
+import { Activity } from 'lucide-react'
 import { ThreadLaneView } from '@/components/hermes'
 import { getRunMessages, getTaskRuns, getActiveRunsForWorkspace } from '@/app/(app)/workspace/[workspaceSlug]/tasks/actions'
 import { getPayloadClient } from '@/lib/payload'
+import { EmptyState } from '@/components/ui/empty-state'
 
 export const metadata = {
   title: 'Active Runs | NotionForge',
@@ -47,11 +49,13 @@ export default async function ActiveRunsPage({ params }: PageProps) {
 
   if (taskRuns.length === 0) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="text-center">
-          <p className="text-lg text-gray-500">No active runs at the moment.</p>
-          <p className="text-sm text-gray-400 mt-2">Run some agents to see active threads here.</p>
-        </div>
+      <div className="flex min-h-0 flex-1 items-center justify-center p-8">
+        <EmptyState
+          icon={<Activity />}
+          title="No active runs right now."
+          description="Start a run from a task and it'll show up here while it works."
+          action={{ label: 'Go to Tasks', href: `/workspace/${workspaceSlug}/tasks` }}
+        />
       </div>
     )
   }
