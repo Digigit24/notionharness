@@ -22,6 +22,7 @@ import { Artifacts } from './collections/Artifacts'
 import { RuntimeProfiles } from './collections/RuntimeProfiles'
 import { Runtimes } from './collections/Runtimes'
 import { Agents } from './collections/Agents'
+import { Approvals } from './collections/Approvals'
 
 const filename = fileURLToPath(import.meta.url)
 const dirname = path.dirname(filename)
@@ -51,6 +52,7 @@ export default buildConfig({
     RuntimeProfiles,
     Runtimes,
     Agents,
+    Approvals,
   ],
   editor: lexicalEditor(),
   secret: process.env.PAYLOAD_SECRET || '',

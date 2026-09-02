@@ -1,0 +1,154 @@
+import { getPayloadClient } from '@/lib/payload'
+import type { ApprovalOption, ApprovalStatus } from '@/collections/Approvals'
+
+const pendingApprovalWaiters = new Map<
+  string,
+  {
+    resolve: (outcome: ApprovalOutcome) => void
+    reject: (err: Error) => void
+  }
+>()
+
+export interface ApprovalOutcome {
+  outcome: 'selected' | 'cancelled'
+  optionId?: string
+  reason?: string
+}
+
+export interface CreateApprovalParams {
+  runId: number
+  externalId: string
+  requestedUserId: number
+  title: string
+  detail: string
+  options: ApprovalOption[]
+}
+
+export async function createPendingApproval(
+  params: CreateApprovalParams
+): Promise<number> {
+  const payload = await getPayloadClient()
+  const doc = await payload.create({
+    collection: 'approvals',
+    data: {
+      runId: params.runId,
+      externalId: params.externalId,
+      requestedUser: params.requestedUserId,
+      title: params.title,
+      detail: params.detail,
+      options: params.options,
+      status: 'pending',
+    },
+    overrideAccess: true,
+  })
+  return doc.id as number
+}
+
+export async function waitForApproval(
+  externalId: string,
+  timeoutMs: number
+): Promise<ApprovalOutcome> {
+  const deferred = pendingApprovalWaiters.get(externalId)
+  if (deferred) {
+    throw new Error(`Approval waiter for ${externalId} already exists`)
+  }
+
+  let timeoutHandle: ReturnType<typeof setTimeout>
+  const timeoutPromise = new Promise<ApprovalOutcome>((resolve) => {
+    timeoutHandle = setTimeout(() => {
+      resolve({ outcome: 'cancelled', reason: 'timeout' })
+    }, timeoutMs)
+  })
+
+  const waiterPromise = new Promise<ApprovalOutcome>((resolve, reject) => {
+    pendingApprovalWaiters.set(externalId, { resolve, reject })
+  })
+
+  try {
+    const outcome = await Promise.race([waiterPromise, timeoutPromise])
+    return outcome
+  } finally {
+    clearTimeout(timeoutHandle!)
+    pendingApprovalWaiters.delete(externalId)
+  }
+}
+
+export async function resolveApproval(
+  approvalId: number,
+  decision: { approved: boolean; selectedOptionId?: string; reason?: string }
+): Promise<void> {
+  const payload = await getPayloadClient()
+
+  const [approval] = await payload.find({
+    collection: 'approvals',
+    where: { id: { equals: approvalId } },
+    limit: 1,
+    overrideAccess: true,
+  })
+
+  if (!approval) throw new Error(`Approval ${approvalId} not found`)
+
+  const externalId = (approval as { externalId?: string }).externalId ?? ''
+  const status: ApprovalStatus = decision.approved ? 'approved' : 'denied'
+
+  await payload.update({
+    collection: 'approvals',
+    id: approvalId,
+    data: {
+      status,
+      selectedOptionId: decision.selectedOptionId ?? null,
+    },
+    overrideAccess: true,
+  })
+
+  const waiter = pendingApprovalWaiters.get(externalId)
+  if (waiter) {
+    if (decision.approved && decision.selectedOptionId) {
+      waiter.resolve({ outcome: 'selected', optionId: decision.selectedOptionId })
+    } else {
+      waiter.resolve({ outcome: 'cancelled', reason: decision.reason ?? 'denied' })
+    }
+  }
+}
+
+export async function listPendingApprovalsForUser(userId: number) {
+  const payload = await getPayloadClient()
+  const result = await payload.find({
+    collection: 'approvals',
+    where: {
+      requestedUser: { equals: userId },
+      status: { equals: 'pending' },
+    },
+    limit: 100,
+    overrideAccess: true,
+  })
+  return result.docs as ApprovalDoc[]
+}
+
+export interface ApprovalDoc {
+  id: number
+  runId: number | null
+  externalId: string
+  requestedUser: number
+  title: string
+  detail: string
+  options: ApprovalOption[]
+  status: ApprovalStatus
+  selectedOptionId: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export async function getApproval(id: number) {
+  const payload = await getPayloadClient()
+  try {
+    const doc = await payload.findByID({
+      collection: 'approvals',
+      id,
+      overrideAccess: true,
+    })
+    return doc as ApprovalDoc | null
+  } catch {
+    return null
+  }
+}
