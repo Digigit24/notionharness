@@ -13,6 +13,7 @@ export {
   listActiveRunsForWorkspace,
   listRunsForProject,
   listActiveRunsForProject,
+  listRunsForPage,
   getRunPageContext,
   setRunPageContext,
   listFailedRuns,

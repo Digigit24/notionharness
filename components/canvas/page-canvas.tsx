@@ -20,16 +20,28 @@ import {
 } from '@/app/(app)/actions'
 import type { Page, Workspace } from '@/payload-types'
 import { RowProperties } from '@/components/database/row-properties'
+import type { PageProvenanceMap } from '@/lib/provenance'
+import { PageProvenanceStrip, type ProvenanceTimeFilter } from '@/components/canvas/page-provenance-strip'
+
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000
 
 export function PageCanvas({
   workspace,
   page,
   breadcrumbChain,
+  provenance,
 }: {
   workspace: Workspace
   page: Page
   breadcrumbChain: Page[]
+  // ROADMAP B-2 — resolved server-side (`lib/provenance.ts`) once per page
+  // load and threaded down to both the "written by" strip and the
+  // hover-chip/time-filter machinery inside `BlockSuiteEditor`, so there is
+  // exactly one provenance read per page view, not one per feature.
+  provenance: PageProvenanceMap
 }) {
+  const [timeFilter, setTimeFilter] = useState<ProvenanceTimeFilter>('all')
+  const staleBeforeMs = timeFilter === 'week' ? Date.now() - WEEK_MS : null
   const router = useRouter()
   const [title, setTitle] = useState(page.title)
   const [rowFields, setRowFields] = useState<Record<string, unknown> | null>(null)
@@ -208,6 +220,13 @@ export function PageCanvas({
 
         {rowFields && <RowProperties fields={rowFields} />}
 
+        <PageProvenanceStrip
+          provenance={provenance}
+          workspaceSlug={workspace.slug}
+          timeFilter={timeFilter}
+          onTimeFilterChange={setTimeFilter}
+        />
+
         <div className="mt-8">
           <BlockSuiteEditor
             key={page.id}
@@ -215,6 +234,8 @@ export function PageCanvas({
             workspaceId={workspace.id}
             workspaceSlug={workspace.slug}
             initialTitle={page.title || 'Untitled'}
+            provenance={provenance}
+            staleBeforeMs={staleBeforeMs}
             initialDocState={page.docState}
             locked={locked}
           />

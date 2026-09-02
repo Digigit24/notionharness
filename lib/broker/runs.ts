@@ -342,6 +342,22 @@ export async function setRunPageContext(runId: number, pageId: number, subtreeBl
   )
 }
 
+/** ROADMAP B-2 (Moat/provenance) — every run that has ever written to a
+ * page, newest first. `page_id` is the right join key regardless of how the
+ * run started: a page-scoped "ask agent" run (`enqueuePageRun`) sets it at
+ * enqueue time, and a task-scoped run sets it lazily on its *first* block
+ * write via `setRunPageContext` (see `app/api/daemon/page-writes/route.ts`)
+ * — so this single column already unifies both origins, no extra join
+ * needed. A run that was claimed/started but never actually wrote a block
+ * (e.g. it's still queued, or it failed before its first write) has
+ * `page_id IS NULL` and is correctly excluded — `lib/provenance.ts` only
+ * cares about runs that actually produced committed `page_write` events. */
+export async function listRunsForPage(pageId: number): Promise<Run[]> {
+  const pool = getBrokerPool()
+  const res = await pool.query<RunRow>(`SELECT * FROM runs WHERE page_id = $1 ORDER BY created_at DESC`, [pageId])
+  return res.rows.map(rowToRun)
+}
+
 // ---------------------------------------------------------------------------
 // P5.5 inbox reads — read-only queries backing the Inbox home screen's
 // categorized sections. Deliberately user-scoped (accountable or originator),

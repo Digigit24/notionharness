@@ -17,9 +17,16 @@ import type { AffineEditorContainer } from '@/lib/blocksuite-presets'
 import type { Doc } from '@/lib/blocksuite-store'
 import { ensureBlockSuiteEffects as loadBlockSuiteEffects } from '@/lib/blocksuite-effects'
 import { loadBlockSuiteRuntime } from '@/lib/blocksuite-runtime'
+import type { PageProvenanceMap } from '@/lib/provenance'
+import { useBlockProvenanceHover, BlockProvenanceChip } from '@/components/editor/provenance/use-block-provenance-hover'
+import { useProvenanceGreying } from '@/components/editor/provenance/use-provenance-greying'
 
 const AUTOSAVE_DELAY_MS = 500
 const LIVE_STATE_POLL_MS = 3000
+// Module-level constant, not `{}` inline at the call site — a fresh object
+// literal every render would change identity on every render and defeat
+// `useProvenanceGreying`/`useBlockProvenanceHover`'s dependency arrays.
+const EMPTY_PROVENANCE: PageProvenanceMap = {}
 
 let blockSuiteEffectsReady: Promise<void> | null = null
 
@@ -60,6 +67,8 @@ export function BlockSuiteEditor({
   initialTitle,
   initialDocState,
   locked,
+  provenance,
+  staleBeforeMs,
 }: {
   pageId: number
   workspaceId: number
@@ -71,10 +80,24 @@ export function BlockSuiteEditor({
   initialTitle: string
   initialDocState: unknown
   locked: boolean
+  // ROADMAP B-2 — per-block provenance (which run/agent wrote a block, and
+  // when), keyed by BlockSuite block id. `undefined` (the default, for
+  // embedding contexts that don't pass it) means "no provenance data
+  // available," not "this page has none" — callers that care fetch it via
+  // `lib/provenance.ts` server-side and pass the resolved map down.
+  provenance?: PageProvenanceMap
+  // Epoch ms cutoff for the time filter's greying — `null`/`undefined` means
+  // "All time" (nothing greyed). See `useProvenanceGreying`'s doc comment
+  // for the exact semantics of "older."
+  staleBeforeMs?: number | null
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [mountError, setMountError] = useState<string | null>(null)
   const [retryToken, setRetryToken] = useState(0)
+
+  const resolvedProvenance = provenance ?? EMPTY_PROVENANCE
+  const { hoverInfo, hoverRect, keepOpen, requestClose } = useBlockProvenanceHover(containerRef, resolvedProvenance)
+  useProvenanceGreying(containerRef, resolvedProvenance, staleBeforeMs ?? null)
 
   useEffect(() => {
     let cancelled = false
@@ -224,6 +247,15 @@ export function BlockSuiteEditor({
   return (
     <div>
       <div ref={containerRef} className="blocksuite-editor-root min-h-[200px] w-full" />
+      {hoverInfo && hoverRect && (
+        <BlockProvenanceChip
+          rect={hoverRect}
+          info={hoverInfo}
+          workspaceSlug={workspaceSlug}
+          onMouseEnter={keepOpen}
+          onMouseLeave={requestClose}
+        />
+      )}
       {mountError && (
         <div className="flex flex-col items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-400">
           <span>Failed to load the editor: {mountError}</span>
