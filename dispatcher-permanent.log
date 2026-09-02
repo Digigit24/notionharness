@@ -1,0 +1,109 @@
+
+> notionforge@0.1.0 dispatcher:loop
+> tsx scripts/run-dispatcher-loop.ts
+
+[dispatcher] polling http://localhost:3000/api/dispatcher/tick every 3000ms
+[dispatcher] loop error fetch failed
+[dispatcher] loop error tick returned 404
+[dispatcher] loop error tick returned 404
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] run 61 -> failed: EEXIST: file already exists, link 'C:\Users\hrith\AppData\Local\hermes\.codex_gpt55_autoraise_notice' -> 'C:\Users\hrith\AppData\Local\Temp\notionforge-hermes-runs\61\.codex_gpt55_autoraise_notice'
+[dispatcher] requeued 1 expired run lease(s)
+[dispatcher] loop error fetch failed
+[dispatcher] loop error tick returned 404
+[dispatcher] loop error tick returned 404
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] loop error fetch failed
+[dispatcher] run 62 -> failed: EEXIST: file already exists, link 'C:\Users\hrith\AppData\Local\hermes\.codex_gpt55_autoraise_notice' -> 'C:\Users\hrith\AppData\Local\Temp\notionforge-hermes-runs\62\.codex_gpt55_autoraise_notice'
+[dispatcher] requeued 1 expired run lease(s)
