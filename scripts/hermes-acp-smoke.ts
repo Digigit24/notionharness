@@ -10,9 +10,13 @@
 //   npx tsx scripts/hermes-acp-smoke.ts
 //   npx tsx scripts/hermes-acp-smoke.ts "Reply with exactly: pong"
 //
-// Env overrides (rarely needed; defaults match the verified machine state):
-//   HERMES_ACP_BIN    path to the hermes-acp binary (default: the one
-//                     confirmed on this host)
+// Env overrides:
+//   HERMES_ACP_BIN    path to the hermes-acp binary (default: derived from
+//                     HERMES_HOME_BASE — see below; no hardcoded machine
+//                     path here anymore, Phase C's C1.0 removed the one
+//                     that used to be here after confirming it named a
+//                     different developer's machine, not whichever one
+//                     this script actually runs on)
 //   HERMES_ACP_CWD    cwd to pass the agent (default: a temp dir)
 
 import { randomUUID } from 'node:crypto'
@@ -23,13 +27,18 @@ import { join } from 'node:path'
 import { sendTurn } from '../lib/hermes/acp-client'
 import type { RunEvent, RunEventEnvelope } from '@/lib/run-events'
 
-const DEFAULT_BINARY =
-  'C:\\Users\\hrith\\AppData\\Local\\hermes\\hermes-agent\\venv\\Scripts\\hermes-acp.exe'
+function defaultAcpBinary(): string | undefined {
+  if (!process.env.HERMES_HOME_BASE) return undefined
+  return join(process.env.HERMES_HOME_BASE, 'hermes-agent', 'venv', 'Scripts', 'hermes-acp.exe')
+}
 
 async function main() {
   const prompt =
     process.argv[2] ?? 'Reply with exactly the word "pong" and nothing else.'
-  const binaryPath = process.env.HERMES_ACP_BIN ?? DEFAULT_BINARY
+  const binaryPath = process.env.HERMES_ACP_BIN ?? defaultAcpBinary()
+  if (!binaryPath) {
+    throw new Error('Set HERMES_ACP_BIN or HERMES_HOME_BASE so this script can find the hermes-acp binary.')
+  }
   const cwd = process.env.HERMES_ACP_CWD ?? mkdtempSync(join(tmpdir(), 'hermes-acp-smoke-'))
   const runId = randomUUID()
 

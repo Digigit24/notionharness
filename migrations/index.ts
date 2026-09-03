@@ -15,6 +15,8 @@ import * as migration_20260902_120000_saved_views from './20260902_120000_saved_
 import * as migration_20260902_130000_tasks_archived from './20260902_130000_tasks_archived';
 import * as migration_20260902_140000_push_notifications from './20260902_140000_push_notifications';
 import * as migration_20260902_150000_spend_caps from './20260902_150000_spend_caps';
+import * as migration_20260903_130000_hermes_config from './20260903_130000_hermes_config';
+import * as migration_20260903_140000_project_resources from './20260903_140000_project_resources';
 
 export const migrations = [
   {
@@ -101,5 +103,15 @@ export const migrations = [
     up: migration_20260902_150000_spend_caps.up,
     down: migration_20260902_150000_spend_caps.down,
     name: '20260902_150000_spend_caps'
+  },
+  {
+    up: migration_20260903_130000_hermes_config.up,
+    down: migration_20260903_130000_hermes_config.down,
+    name: '20260903_130000_hermes_config'
+  },
+  {
+    up: migration_20260903_140000_project_resources.up,
+    down: migration_20260903_140000_project_resources.down,
+    name: '20260903_140000_project_resources'
   },
 ];

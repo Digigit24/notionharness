@@ -58,7 +58,12 @@ export async function sendTurnWithIdentity(opts: SendTurnWithIdentityOptions): P
       mcpServers: opts.mcpServers,
       turnTimeoutMs: opts.turnTimeoutMs,
       onEvent: opts.onEvent,
-      env: { ...process.env, ...opts.env, HERMES_HOME: overlay.homeDir },
+      // Not `{ ...process.env, ...opts.env }` — `spawnBinary` (via
+      // `buildSpawnEnv`) is the one place that decides what of the
+      // server's own environment a spawned process inherits; passing a
+      // raw `process.env` spread here would silently defeat that filter
+      // by handing it to `spawnBinary` as an "explicit override" instead.
+      env: { ...opts.env, HERMES_HOME: overlay.homeDir },
     })
     return { ...result, missingSkills: overlay.missingSkills, hardlinkFallbackFor: overlay.hardlinkFallbackFor }
   } finally {

@@ -1,8 +1,10 @@
 import type { ReactNode } from 'react'
 import { notFound } from 'next/navigation'
-import { Activity, Clock, Gauge, CircleDollarSign, ListChecks } from 'lucide-react'
+import { Activity, Clock, Gauge, CircleDollarSign, ListChecks, Server } from 'lucide-react'
 import { getWorkspaceBySlug } from '@/lib/pages-cache'
 import { getWorkspaceHealthMetrics, getWorkspaceUsageRollup } from '@/lib/broker'
+import { getPayloadClient } from '@/lib/payload'
+import { formatRelativeTime } from '@/lib/relative-time'
 import { Card, CardContent } from '@/components/ui/card'
 
 export const metadata = {
@@ -14,13 +16,15 @@ export const metadata = {
 // rate." Every number below is real, derived from the `runs`/`run_usage`
 // tables via `lib/broker/health.ts` and `getWorkspaceUsageRollup`.
 //
-// "Runtimes up" is deliberately NOT shown here — same honest-omission call
-// `components/shell/ambient-status.tsx` already made for this exact metric
-// (see its own header comment): `collections/Runtimes.ts` exists with a
-// `status`/`lastCheckedAt` field pair, but nothing in this codebase — no
-// daemon, no health-check route — ever writes to them, so any indicator
-// drawn from that collection would be fabricated, not observed. This page
-// follows that same precedent rather than re-deciding it differently.
+// "Runtimes up" WAS deliberately omitted here (same honest-omission call
+// `components/shell/ambient-status.tsx` made for this exact metric):
+// `collections/Runtimes.ts` had a `status`/`lastCheckedAt` field pair but
+// nothing in this codebase ever wrote to them, so any indicator drawn from
+// it would have been fabricated, not observed. Phase C's C1.3
+// (`lib/hermes/runtime-health.ts`) is the first real writer — a live HTTP
+// round trip to Hermes per enabled runtime profile — so the tile below is
+// now honest: it reads whatever was true as of the last check, and says so
+// explicitly ("as of the last check") rather than implying live status.
 const WINDOW_DAYS = 7
 
 export default async function WorkspaceHealthPage({
@@ -32,12 +36,26 @@ export default async function WorkspaceHealthPage({
   const workspace = await getWorkspaceBySlug(workspaceSlug)
   if (!workspace) notFound()
 
-  const [health, usage] = await Promise.all([
+  const payload = await getPayloadClient()
+  const [health, usage, runtimes] = await Promise.all([
     getWorkspaceHealthMetrics(workspace.id, WINDOW_DAYS),
     getWorkspaceUsageRollup(workspace.id, WINDOW_DAYS),
+    payload.find({
+      collection: 'runtimes',
+      where: { workspace: { equals: workspace.id } },
+      limit: 200,
+      depth: 0,
+      overrideAccess: true,
+    }),
   ])
 
   const spendPerDay = usage.totalCostTicks / 100 / WINDOW_DAYS
+  const upCount = runtimes.docs.filter((r) => r.status === 'up').length
+  const mostRecentCheck = runtimes.docs
+    .map((r) => r.lastCheckedAt)
+    .filter((d): d is string => Boolean(d))
+    .sort()
+    .at(-1)
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
@@ -51,6 +69,18 @@ export default async function WorkspaceHealthPage({
         </header>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <HealthTile
+            icon={<Server size={16} />}
+            label="Runtimes up"
+            value={runtimes.docs.length === 0 ? 'No profiles' : `${upCount} / ${runtimes.docs.length}`}
+            detail={
+              runtimes.docs.length === 0
+                ? 'No runtime profiles configured for this workspace yet.'
+                : mostRecentCheck
+                  ? `As of the last check, ${formatRelativeTime(mostRecentCheck)}. See the Runtimes page for per-profile detail.`
+                  : 'Never checked yet — visit the Runtimes page and hit Refresh.'
+            }
+          />
           <HealthTile
             icon={<Activity size={16} />}
             label="Active runs"

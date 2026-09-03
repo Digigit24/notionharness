@@ -52,7 +52,10 @@ dev-detached.log
 dev-detached*.log
 dispatcher-loop.log
 .dispatcher-loop.pid
+runtime-health-loop.log
+.runtime-health-loop.pid
 dev-permanent.log
+dispatcher-permanent.log
 build-output.log
 server-output.log
 server-error.log

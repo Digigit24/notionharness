@@ -5,8 +5,27 @@ import { getSession } from '@/lib/session'
 // skills API directly for the command bar's explicit "Skills" filter —
 // see that file's own comment for why skills search is a filter-triggered,
 // out-of-band query rather than part of the hot-path full-text search.
-export const HERMES_BASE_URL = process.env.HERMES_API_BASE_URL || 'https://digitech.tail7572d2.ts.net/v1'
+//
+// No hardcoded fallback (Phase C's C1.0 removed one — a specific
+// developer's own Tailscale hostname baked into source, which meant nobody
+// else could point this app at their own Hermes without editing checked-in
+// code). `HERMES_API_BASE_URL` is required; see `assertHermesConfigured`.
+export const HERMES_BASE_URL = process.env.HERMES_API_BASE_URL || ''
 export const HERMES_API_KEY = process.env.HERMES_API_KEY || ''
+
+/**
+ * Every Hermes-proxying route should call this before doing anything else,
+ * so an unconfigured installation gets one clear, actionable error instead
+ * of a confusing downstream failure (an empty-string URL reaching `fetch`,
+ * or a request silently going nowhere).
+ */
+export function assertHermesConfigured(): void {
+  if (!HERMES_BASE_URL) {
+    throw new Error(
+      'Hermes is not configured: set HERMES_API_BASE_URL (and HERMES_API_KEY if your Hermes requires one).',
+    )
+  }
+}
 
 export interface HermesProxyOptions extends RequestInit {
   hermesPath: string
@@ -17,6 +36,12 @@ export async function proxyToHermes(options: HermesProxyOptions) {
   const session = await getSession()
   if (!session) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+  if (!HERMES_BASE_URL) {
+    return NextResponse.json(
+      { error: 'Hermes is not configured. Set HERMES_API_BASE_URL (and HERMES_API_KEY if required).' },
+      { status: 503 },
+    )
   }
 
   const { hermesPath, searchParams, ...fetchOptions } = options

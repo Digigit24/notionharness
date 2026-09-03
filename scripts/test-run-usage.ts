@@ -20,6 +20,7 @@
 // Run: npx tsx scripts/test-run-usage.ts
 // Cleans up the scratch run it creates before exiting.
 import nextEnv from '@next/env'
+import { join } from 'node:path'
 import { Pool } from 'pg'
 import { enqueueRun, claimNextRun, settleRun, appendRunEvent, recordUsage, closeBrokerPool } from '../lib/broker'
 import { getRunUsageTotals } from '../lib/broker/usage'
@@ -28,8 +29,17 @@ import type { RunEventEnvelope } from '../lib/run-events'
 
 nextEnv.loadEnvConfig(process.cwd())
 
+// Phase C, C1.0 — no hardcoded machine path here anymore (there was one —
+// a different developer's own hermes-acp path — until it was confirmed to
+// name a machine other than whichever one actually runs this script);
+// derived from the required `HERMES_HOME_BASE` instead.
 const HERMES_ACP_BIN =
-  process.env.HERMES_ACP_BIN ?? 'C:\\Users\\hrith\\AppData\\Local\\hermes\\hermes-agent\\venv\\Scripts\\hermes-acp.exe'
+  process.env.HERMES_ACP_BIN ??
+  (process.env.HERMES_HOME_BASE
+    ? join(process.env.HERMES_HOME_BASE, 'hermes-agent', 'venv', 'Scripts', 'hermes-acp.exe')
+    : (() => {
+        throw new Error('Set HERMES_ACP_BIN or HERMES_HOME_BASE so this script can find the hermes-acp binary.')
+      })())
 
 function assert(cond: unknown, message: string): asserts cond {
   if (!cond) throw new Error(`ASSERTION FAILED: ${message}`)

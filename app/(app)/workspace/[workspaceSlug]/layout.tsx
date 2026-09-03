@@ -8,6 +8,8 @@ import { getUnreadNotificationCount } from '@/app/(app)/notifications/actions'
 import { getAmbientStatus } from '@/app/(app)/workspace/[workspaceSlug]/actions'
 import { Sidebar } from '@/components/sidebar/sidebar'
 import { KeyboardProvider } from '@/components/keyboard/keyboard-provider'
+import { HermesNotConfiguredBanner } from '@/components/hermes/hermes-not-configured-banner'
+import { HERMES_BASE_URL } from '@/lib/hermes-api'
 
 export default async function WorkspaceLayout({
   children,
@@ -66,7 +68,10 @@ export default async function WorkspaceLayout({
           unreadNotificationCount={unreadNotificationCount}
           ambientStatus={ambientStatus}
         />
-        <div className="flex min-w-0 flex-1 flex-col">{children}</div>
+        <div className="flex min-w-0 flex-1 flex-col">
+          {!HERMES_BASE_URL && <HermesNotConfiguredBanner />}
+          {children}
+        </div>
       </div>
     </KeyboardProvider>
   )

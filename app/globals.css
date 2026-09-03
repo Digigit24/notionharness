@@ -46,6 +46,75 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+
+  /* Phase C, C5 — "one ease, three durations... most of what 'snappy'
+     means." Named per Tailwind v4's `--ease-*`/`--duration-*` theme
+     namespaces, so they generate real `ease-standard`/`duration-fast`/
+     `duration-base`/`duration-slow` utility classes automatically —
+     nothing to wire up beyond this block. Existing hand-rolled
+     `transition-*`/`duration-*` usages across the app are left as they are
+     for now (adopting these where a component is touched next, not a
+     blind repo-wide find-replace) — same "flagged, not blind-fixed"
+     discipline as this file's other partially-adopted tokens below. */
+  --ease-standard: cubic-bezier(0.23, 1, 0.32, 1);
+  --duration-fast: 100ms;
+  --duration-base: 150ms;
+  --duration-slow: 200ms;
+
+  /* Phase C, C5 — "a --faint token instead of alpha-on-muted." This
+     codebase's actual secondary-text pattern, confirmed by grep, is the
+     repeated pair `text-black/50 dark:text-white/50` (with occasional
+     /40/45/60 variants) rather than Tailwind's own `muted-foreground`
+     token — `--faint` is the single semantic replacement for that most-
+     common pairing, built on `--foreground` (which already flips between
+     near-black and near-white per theme) so it needs no separate `.dark`
+     override of its own. Generates `text-faint`/`bg-faint`/`border-faint`
+     via Tailwind v4's `--color-*` namespace. NOT retroactively applied
+     across existing files in this pass — B-6 already flagged this exact
+     raw-alpha pattern (~25 files) as a real, separate follow-up rather
+     than blind-fixing it, and that reasoning still holds: adopt it where a
+     component is touched next, not as an unreviewed mass find-replace. */
+  --color-faint: color-mix(in oklch, var(--foreground), transparent 50%);
+
+  /* Phase C, C5 — "type scale named by role, ten tokens each carrying its
+     own line-height. You have no type scale at all." Ten roles, but not
+     ten invented sizes: a repo-wide grep of every `text-*` font-size
+     utility in use (`text-xs`/`text-sm`/`text-[11px]`/etc., excluding
+     color/weight/etc. classes that happen to start the same way) turned up
+     exactly ten distinct sizes already organically in use, from 280
+     `text-xs` call sites down to a single `text-[9px]` one — this scale
+     formalizes what this codebase already converged on by hand, rather
+     than replacing it with an unrelated new set of numbers. Tailwind v4's
+     `--text-<name>`/`--text-<name>--line-height` pair generates a real
+     `text-<name>` utility that sets both together in one class; line-
+     heights below match Tailwind's own default scale where a size
+     coincides with one of its defaults (xs/sm/base/lg/2xl/3xl), and
+     `display`'s `line-height: 1` matches this file's own pre-existing
+     `.page-canvas-title` override for the same 3rem size, just formalized
+     as a token instead of a one-off `!important` rule. NOT retroactively
+     applied repo-wide in this pass — same discipline as `--color-faint`
+     above: adopt where a component is touched next, not an unreviewed
+     mass find-replace across ~500 call sites. */
+  --text-display: 3rem;
+  --text-display--line-height: 1;
+  --text-title: 1.875rem;
+  --text-title--line-height: 2.25rem;
+  --text-heading: 1.5rem;
+  --text-heading--line-height: 2rem;
+  --text-subheading: 1.125rem;
+  --text-subheading--line-height: 1.75rem;
+  --text-body: 1rem;
+  --text-body--line-height: 1.5rem;
+  --text-label: 0.875rem;
+  --text-label--line-height: 1.25rem;
+  --text-caption: 0.75rem;
+  --text-caption--line-height: 1rem;
+  --text-micro: 0.6875rem;
+  --text-micro--line-height: 0.875rem;
+  --text-nano: 0.625rem;
+  --text-nano--line-height: 0.875rem;
+  --text-pico: 0.5625rem;
+  --text-pico--line-height: 0.75rem;
 }
 
 .dark {

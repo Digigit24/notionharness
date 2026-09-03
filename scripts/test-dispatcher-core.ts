@@ -33,8 +33,17 @@ function check(label: string, condition: boolean) {
   if (!condition) failures += 1
 }
 
+// Phase C, C1.0 — no hardcoded machine path here anymore (there was one —
+// a different developer's own hermes-acp path — until it was confirmed to
+// name a machine other than whichever one actually runs this script);
+// derived from the required `HERMES_HOME_BASE` instead.
 const HERMES_ACP_BIN =
-  process.env.HERMES_ACP_BIN ?? 'C:\\Users\\hrith\\AppData\\Local\\hermes\\hermes-agent\\venv\\Scripts\\hermes-acp.exe'
+  process.env.HERMES_ACP_BIN ??
+  (process.env.HERMES_HOME_BASE
+    ? join(process.env.HERMES_HOME_BASE, 'hermes-agent', 'venv', 'Scripts', 'hermes-acp.exe')
+    : (() => {
+        throw new Error('Set HERMES_ACP_BIN or HERMES_HOME_BASE so this script can find the hermes-acp binary.')
+      })())
 
 async function main() {
   const source = await mkdtemp(join(tmpdir(), 'dispatcher-core-source-'))

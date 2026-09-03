@@ -26,6 +26,7 @@ import { useState } from 'react'
 import { DndContext, PointerSensor, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { Plus } from 'lucide-react'
 import { statusColorClasses } from '@/lib/status-colors'
+import { StatusIcon } from '@/components/ui/status-icon'
 import { AgentPresence, RunMetrics, type TaskRunMetrics } from './run-metrics'
 import { AgentColumn, LastRunOutcomeColumn, LiveDot, RunsColumn, SpendColumn } from './columns/task-agent-columns'
 import type { BoardColumnData } from './use-task-view-data'
@@ -162,8 +163,9 @@ function TaskColumn({
       } bg-black/[.015] dark:bg-white/[.02]`}
     >
       <div className="flex items-center justify-between gap-2 px-2 py-2">
-        <span className={`truncate rounded px-1.5 py-0.5 text-xs font-medium ${statusColorClasses(status.color)}`}>
-          {status.name}
+        <span className={`flex min-w-0 items-center gap-1.5 truncate rounded px-1.5 py-0.5 text-xs font-medium ${statusColorClasses(status.color)}`}>
+          <StatusIcon category={status.category} color={status.color} />
+          <span className="truncate">{status.name}</span>
         </span>
         <span className="shrink-0 text-xs text-black/30 dark:text-white/30">{totalDocs}</span>
       </div>

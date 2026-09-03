@@ -65,6 +65,7 @@ import * as pty from 'node-pty'
 // it up at merge time, same as for the daemon-ws and broker consumers.
 import type { RunEvent, RunEventEnvelope } from '@/lib/run-events'
 import { TerminalBuffer } from './terminal-buffer'
+import { buildSpawnEnv } from './spawn-env'
 
 // ---------------------------------------------------------------------------
 // Public options.
@@ -89,13 +90,14 @@ export interface SendTurnOptions {
    */
   runId: string
   /**
-   * Extra environment merged into the child process environment
-   * (`{...process.env, ...opts.env}` — see `spawnBinary`/`sendTurnWithIdentity`).
-   * Typed as a plain string record, not `NodeJS.ProcessEnv` itself: that
-   * interface requires `NODE_ENV` to be present, which an arbitrary partial
-   * override (an agent's own `customEnv` JSON field, for instance) has no
-   * reason to carry — this is only ever a partial overlay on top of the
-   * real `process.env`, never trusted to be complete on its own.
+   * Extra environment overlaid onto the spawned child's environment via
+   * `buildSpawnEnv` (see `./spawn-env.ts`) — see `spawnBinary`/
+   * `sendTurnWithIdentity`. The child does NOT inherit the full server
+   * `process.env`; it gets `spawn-env.ts`'s allowlisted safe subset plus
+   * whatever is explicitly set here. Typed as a plain string record, not
+   * `NodeJS.ProcessEnv` itself: that interface requires `NODE_ENV` to be
+   * present, which an arbitrary partial override (an agent's own
+   * `customEnv` JSON field, for instance) has no reason to carry.
    */
   env?: Record<string, string | undefined>
   /** Extra args passed to the binary. */
@@ -182,7 +184,12 @@ function spawnBinary(opts: SendTurnOptions): {
 } {
   const child = spawn(opts.binaryPath, opts.args ?? [], {
     cwd: opts.cwd,
-    env: { ...process.env, ...opts.env },
+    // `node:child_process`'s `SpawnOptions.env` is typed as `NodeJS.
+    // ProcessEnv`, which (unlike our own `Record<string, string>`) requires
+    // `NODE_ENV` to statically be present — `buildSpawnEnv` filters that key
+    // through when it's actually set on the real `process.env`, so this cast
+    // reflects an always-true runtime shape, not an unchecked assumption.
+    env: buildSpawnEnv(opts.env) as NodeJS.ProcessEnv,
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
   }) as ChildProcessWithoutNullStreams
@@ -322,11 +329,10 @@ function createTerminalRegistry(options: {
       sessions.set(id, session)
 
       try {
-        const env: Record<string, string> = {}
-        for (const [key, value] of Object.entries({ ...process.env, ...options.defaultEnv })) {
-          if (value !== undefined) env[key] = value
-        }
-        for (const entry of params.env ?? []) env[entry.name] = entry.value
+        const env = buildSpawnEnv({
+          ...options.defaultEnv,
+          ...Object.fromEntries((params.env ?? []).map((entry) => [entry.name, entry.value])),
+        })
 
         const term = pty.spawn(params.command, params.args ?? [], {
           name: 'xterm-256color',

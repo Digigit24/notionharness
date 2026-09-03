@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from 'react'
 import Link from 'next/link'
-import { CircleDollarSign, PlayCircle, ShieldAlert } from 'lucide-react'
+import { CircleDollarSign, PlayCircle, ShieldAlert, Server } from 'lucide-react'
 import { getAmbientStatus, type AmbientStatus } from '@/app/(app)/workspace/[workspaceSlug]/actions'
 
 const POLL_INTERVAL_MS = 12_000
@@ -14,12 +14,13 @@ const POLL_INTERVAL_MS = 12_000
  * user/logout footer row — the one spot that doesn't compete with the
  * Section nav or the page tree for space.
  *
- * Deliberately NOT showing a "runtimes online" stat: the `runtimes`
- * collection (collections/Runtimes.ts) exists but nothing in this codebase
- * writes to its `status`/`lastCheckedAt` fields yet — there is no heartbeat
- * producer, so any dot drawn from it would be fabricated, not observed. Once
- * a real registration/heartbeat mechanism lands this is the natural place to
- * add it.
+ * Shows a "runtimes up" stat once a workspace has at least one runtime
+ * profile — Phase C's C1.3 (`lib/hermes/runtime-health.ts`) is the real
+ * registration/heartbeat mechanism this comment used to say was still
+ * missing; `getAmbientStatus` now derives it from real `runtimes` rows, not
+ * a fabricated dot. Hidden entirely (not shown as "0/0") when the workspace
+ * has no runtime profiles configured — see `AmbientStatus.runtimesUp`'s own
+ * null-vs-zero distinction in `actions.ts`.
  *
  * Polls a Server Action on a plain interval — this session's B-2 SSE work
  * only streams a single run's events (`/api/runs/[id]/events/stream`), there
@@ -80,6 +81,15 @@ export function AmbientStatus({
         value={`$${(status.spendTicks24h / 100).toFixed(2)}`}
         title="Spend, last 24 hours"
       />
+      {status.runtimesUp && (
+        <StatusStat
+          href={`/workspace/${workspaceSlug}/runtimes`}
+          icon={<Server size={12} />}
+          value={`${status.runtimesUp.up}/${status.runtimesUp.total}`}
+          title={`${status.runtimesUp.up} of ${status.runtimesUp.total} runtime(s) up, as of the last check`}
+          emphasize={status.runtimesUp.up < status.runtimesUp.total}
+        />
+      )}
     </div>
   )
 }

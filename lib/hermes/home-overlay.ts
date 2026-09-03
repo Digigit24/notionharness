@@ -79,10 +79,17 @@ export interface HermesHomeOverlay {
   cleanup: () => Promise<void>
 }
 
-// Rarely needs overriding — matches this project's own precedent in
-// `scripts/hermes-acp-smoke.ts` (a hardcoded default reflecting verified
-// machine state, overridable via env for other hosts/CI).
-const DEFAULT_BASE_HERMES_HOME = 'C:\\Users\\hrith\\AppData\\Local\\hermes'
+// There is deliberately no hardcoded default here (there was one — a
+// specific developer's own `C:\Users\...\AppData\Local\hermes` — until
+// Phase C's C1.0 removed it): unlike `defaultAgentMemoryRoot`/
+// `defaultConversationStateRoot`/`defaultTaskRoot` below, which point at
+// directories THIS app creates and owns (so a `homedir()`-based guess is
+// always correct), a real Hermes install's location is genuinely
+// per-machine and impossible to guess. Silently falling back to one
+// person's path meant the app looked broken — "HERMES_HOME base directory
+// not found" naming a path that was never going to exist on anyone else's
+// machine — instead of clearly saying what to configure. `HERMES_HOME_BASE`
+// (or `opts.baseHermesHome`) is required; see `requireBaseHermesHome` below.
 
 const IDENTITY_SCOPED_ENTRIES = new Set(['skills', 'memories', 'state.db'])
 
@@ -133,8 +140,20 @@ async function linkFile(target: string, dest: string, hardlinkFallbackFor: strin
   }
 }
 
+/** Throws a clear, actionable error rather than silently guessing a path that only exists on one machine. */
+function requireBaseHermesHome(explicit?: string): string {
+  const value = explicit ?? process.env.HERMES_HOME_BASE
+  if (!value) {
+    throw new Error(
+      'No Hermes install configured: set HERMES_HOME_BASE to the real Hermes install directory on this machine ' +
+        '(e.g. "%LOCALAPPDATA%\\hermes" on Windows) — this app has no way to guess it.',
+    )
+  }
+  return value
+}
+
 export async function buildHermesHomeOverlay(opts: BuildHermesHomeOverlayOptions): Promise<HermesHomeOverlay> {
-  const baseHermesHome = resolve(opts.baseHermesHome ?? process.env.HERMES_HOME_BASE ?? DEFAULT_BASE_HERMES_HOME)
+  const baseHermesHome = resolve(requireBaseHermesHome(opts.baseHermesHome))
   const agentMemoryRoot = resolve(opts.agentMemoryRoot ?? defaultAgentMemoryRoot())
   const conversationStateRoot = resolve(opts.conversationStateRoot ?? defaultConversationStateRoot())
   const taskRoot = resolve(opts.taskRoot ?? defaultTaskRoot())

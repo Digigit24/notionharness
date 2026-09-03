@@ -15,6 +15,7 @@ import type { Server } from 'node:http'
 import process from 'node:process'
 import * as pty from 'node-pty'
 import { WebSocket, WebSocketServer } from 'ws'
+import { buildSpawnEnv } from '@/lib/hermes/spawn-env'
 
 export interface PtyServerOptions {
   server: Server
@@ -68,7 +69,7 @@ export function createPtyWebSocketServer(options: PtyServerOptions): WebSocketSe
   wss.on('connection', (socket: WebSocket) => {
     sockets.add(socket)
     const cwd = options.cwd
-    const env = { ...process.env, ...options.env, TERM: options.env?.TERM ?? 'xterm-256color' } as Record<string, string>
+    const env = buildSpawnEnv({ ...options.env, TERM: options.env?.TERM ?? 'xterm-256color' })
     const terminal = pty.spawn(options.shell ?? defaults.shell, options.shellArgs ?? defaults.args, {
       name: 'xterm-256color',
       cols: options.cols ?? DEFAULT_COLS,
