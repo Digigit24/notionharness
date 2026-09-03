@@ -1,11 +1,29 @@
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { getPayloadClient } from '@/lib/payload'
+import { getCurrentPayloadUser } from '@/lib/current-user'
 import { CreateWorkspaceForm } from '@/components/workspace/create-workspace-form'
 
 export default async function Home() {
   const payload = await getPayloadClient()
-  const workspaces = await payload.find({ collection: 'workspaces', limit: 100, sort: 'name', overrideAccess: true })
+  const user = await getCurrentPayloadUser()
+  // Scoped to workspaces this user actually owns or belongs to — this used
+  // to fetch every workspace in the database unconditionally (`overrideAccess:
+  // true`, no `where`), which combined with the workspace layout never
+  // checking membership either meant any signed-in account could browse into
+  // any other account's workspace by slug. Real fix, not a superficial one:
+  // this query is the one place both the auto-redirect-if-only-one-workspace
+  // shortcut below and the full picker draw their list from.
+  const workspaces =
+    user != null
+      ? await payload.find({
+          collection: 'workspaces',
+          where: { or: [{ owner: { equals: user.id } }, { members: { contains: user.id } }] },
+          limit: 100,
+          sort: 'name',
+          overrideAccess: true,
+        })
+      : { docs: [] }
 
   if (workspaces.docs.length === 1) {
     redirect(`/workspace/${workspaces.docs[0].slug}`)

@@ -1,0 +1,157 @@
+
+> notionforge@0.1.0 dev
+> next dev
+
+   ▲ Next.js 15.4.11
+   - Local:        http://localhost:3000
+   - Network:      http://100.83.58.39:3000
+   - Environments: .env
+
+ ✓ Starting...
+ ✓ Compiled /instrumentation in 102ms (22 modules)
+[instrumentation] registered
+ ✓ Ready in 2.2s
+ ○ Compiling /workspace/[workspaceSlug]/p/[pageId] ...
+ ✓ Compiled /workspace/[workspaceSlug]/audit in 49.7s (11595 modules)
+ GET /workspace/demo/p/8 200 in 57609ms
+ GET /workspace/demo/p/12 200 in 57611ms
+ GET /workspace/demo/p/15 200 in 57612ms
+[22:19:33] [33mWARN[39m: [36mNo email adapter provided. Email will be written to console. More info at https://payloadcms.com/docs/email/overview.[39m
+ GET /workspace/demo/p/1 200 in 57416ms
+ POST /workspace/demo/inbox 200 in 60058ms
+ POST /workspace/demo/audit 200 in 32305ms
+ GET /workspace/demo/p/1 200 in 57621ms
+ POST /workspace/demo/p/1 200 in 2560ms
+ POST /workspace/demo/p/1 200 in 812ms
+ POST /workspace/demo/p/1 200 in 819ms
+ POST /workspace/demo/p/1 200 in 808ms
+ POST /workspace/demo/p/1 200 in 813ms
+Lit is in dev mode. Not recommended for production! See https://lit.dev/msg/dev-mode for more information.
+ GET /workspace/demo/p/1 404 in 2222ms
+ ○ Compiling /_not-found ...
+ ✓ Compiled /_not-found in 1471ms (11586 modules)
+ GET /_next/static/chunks/app/(app)/workspace/%5BworkspaceSlug%5D/p/%5BpageId%5D/page.js 404 in 1658ms
+ GET /login 200 in 237ms
+ ⨯ Failed to generate static paths for /workspace/[workspaceSlug]/audit:
+[Error: Cannot find module './vendor-chunks/@blocksuite.js'
+Require stack:
+- E:\Digitech\softwares\notionharness\.next\server\webpack-runtime.js
+- E:\Digitech\softwares\notionharness\.next\server\app\(app)\workspace\[workspaceSlug]\audit\page.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\server\require.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\server\load-components.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\build\utils.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\server\dev\static-paths-worker.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\compiled\jest-worker\processChild.js] {
+  type: 'Error',
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [Array]
+}
+ ⨯ Failed to generate static paths for /workspace/[workspaceSlug]/audit:
+[Error: Cannot find module './vendor-chunks/@blocksuite.js'
+Require stack:
+- E:\Digitech\softwares\notionharness\.next\server\webpack-runtime.js
+- E:\Digitech\softwares\notionharness\.next\server\app\(app)\workspace\[workspaceSlug]\audit\page.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\server\require.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\server\load-components.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\build\utils.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\server\dev\static-paths-worker.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\compiled\jest-worker\processChild.js] {
+  type: 'Error',
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [Array]
+}
+ POST /workspace/demo/audit 200 in 2350ms
+ GET /login 200 in 38ms
+ GET /login 200 in 35ms
+ GET /_next/static/css/app/layout.css?v=1788367805820 404 in 31ms
+ GET /_next/static/chunks/main-app.js?v=1788367805820 404 in 96ms
+ GET /_next/static/chunks/app-pages-internals.js 404 in 96ms
+ GET /_next/static/chunks/app/layout.js 404 in 96ms
+ GET /_next/static/chunks/app/(auth)/login/page.js 404 in 95ms
+ GET /login? 200 in 39ms
+ GET /_next/static/css/app/layout.css?v=1788367806071 404 in 27ms
+ GET /_next/static/chunks/main-app.js?v=1788367806071 404 in 92ms
+ GET /_next/static/chunks/app/(auth)/login/page.js 404 in 92ms
+ GET /_next/static/chunks/app-pages-internals.js 404 in 91ms
+ GET /_next/static/chunks/app/layout.js 404 in 92ms
+ ○ Compiling /workspace/[workspaceSlug] ...
+ ✓ Compiled /workspace/[workspaceSlug] in 1386ms (11612 modules)
+ ⨯ [Error: Cannot find module './vendor-chunks/@blocksuite.js'
+Require stack:
+- E:\Digitech\softwares\notionharness\.next\server\webpack-runtime.js
+- E:\Digitech\softwares\notionharness\.next\server\app\(app)\workspace\[workspaceSlug]\page.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\server\require.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\server\load-components.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\build\utils.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\server\dev\static-paths-worker.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\compiled\jest-worker\processChild.js] {
+  type: 'Error',
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [Array],
+  page: '/workspace/demo'
+}
+ ○ Compiling /_error ...
+ ✓ Compiled /_error in 2s (11940 modules)
+ ⨯ Failed to generate static paths for /workspace/[workspaceSlug]/p/[pageId]:
+[Error: Cannot find module './vendor-chunks/@blocksuite.js'
+Require stack:
+- E:\Digitech\softwares\notionharness\.next\server\webpack-runtime.js
+- E:\Digitech\softwares\notionharness\.next\server\app\(app)\workspace\[workspaceSlug]\p\[pageId]\page.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\server\require.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\server\load-components.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\build\utils.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\server\dev\static-paths-worker.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\compiled\jest-worker\processChild.js] {
+  type: 'Error',
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [Array]
+}
+ ⨯ Failed to generate static paths for /workspace/[workspaceSlug]/p/[pageId]:
+[Error: Cannot find module './vendor-chunks/@blocksuite.js'
+Require stack:
+- E:\Digitech\softwares\notionharness\.next\server\webpack-runtime.js
+- E:\Digitech\softwares\notionharness\.next\server\app\(app)\workspace\[workspaceSlug]\p\[pageId]\page.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\server\require.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\server\load-components.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\build\utils.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\server\dev\static-paths-worker.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\compiled\jest-worker\processChild.js] {
+  type: 'Error',
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [Array]
+}
+ ⨯ Failed to generate static paths for /workspace/[workspaceSlug]/p/[pageId]:
+[Error: Cannot find module './vendor-chunks/@blocksuite.js'
+Require stack:
+- E:\Digitech\softwares\notionharness\.next\server\webpack-runtime.js
+- E:\Digitech\softwares\notionharness\.next\server\app\(app)\workspace\[workspaceSlug]\p\[pageId]\page.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\server\require.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\server\load-components.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\build\utils.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\server\dev\static-paths-worker.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\compiled\jest-worker\processChild.js] {
+  type: 'Error',
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [Array]
+}
+ ⨯ Failed to generate static paths for /workspace/[workspaceSlug]/p/[pageId]:
+[Error: Cannot find module './vendor-chunks/@blocksuite.js'
+Require stack:
+- E:\Digitech\softwares\notionharness\.next\server\webpack-runtime.js
+- E:\Digitech\softwares\notionharness\.next\server\app\(app)\workspace\[workspaceSlug]\p\[pageId]\page.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\server\require.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\server\load-components.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\build\utils.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\server\dev\static-paths-worker.js
+- E:\Digitech\softwares\notionharness\node_modules\next\dist\compiled\jest-worker\processChild.js] {
+  type: 'Error',
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [Array]
+}
+ GET /workspace/demo 500 in 5566ms
+ GET /_next/static/css/app/layout.css?v=1788367813579 404 in 223ms
+ GET /workspace/demo/p/1 200 in 4279ms
+ GET /workspace/demo/p/1 200 in 1760ms
+ POST /workspace/demo/audit 404 in 26ms
+ POST /workspace/demo/audit 404 in 352ms
+ POST /workspace/demo/audit 404 in 247ms

@@ -43,6 +43,11 @@ export const auth =
     trustedOrigins: [
       'http://localhost:3000',
       'http://digitech.tail7572d2.ts.net:3000',
+      // Playwright's dev server falls back to 3001 whenever 3000 is already
+      // held by a manually-run `npm start`/`npm run dev` (see e2e/ — this
+      // repo's DB is shared, so E2E runs alongside manual testing rather
+      // than replacing it).
+      'http://localhost:3001',
     ],
     emailAndPassword: {
       enabled: true,

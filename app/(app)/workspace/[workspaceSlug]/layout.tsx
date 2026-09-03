@@ -19,11 +19,9 @@ export default async function WorkspaceLayout({
   const { workspaceSlug } = await params
   const payload = await getPayloadClient()
 
-  const [workspace, session, workspaces, unreadNotificationCount, currentUser] = await Promise.all([
+  const [workspace, session, currentUser] = await Promise.all([
     getWorkspaceBySlug(workspaceSlug),
     getSession(),
-    payload.find({ collection: 'workspaces', limit: 100, sort: 'name', overrideAccess: true }),
-    getUnreadNotificationCount(),
     // Command bar's "Create task" act-mode step needs the Payload user id
     // (Tasks.createdBy has no req.user to fall back on — see collections/
     // Tasks.ts's class comment) — resolved once here rather than inside
@@ -32,9 +30,28 @@ export default async function WorkspaceLayout({
   ])
   if (!workspace) notFound()
 
-  const [pages, ambientStatus] = await Promise.all([
+  // Ownership/membership check — this used to be entirely absent, so any
+  // signed-in account could open any other account's workspace just by
+  // knowing (or guessing) its slug. `notFound()` rather than a 403 page,
+  // matching this same function's existing not-found handling for a
+  // nonexistent slug: neither case should confirm to an unauthorized caller
+  // that the slug does or doesn't exist.
+  if (!currentUser) notFound()
+  const ownerId = typeof workspace.owner === 'number' ? workspace.owner : workspace.owner?.id
+  const memberIds = (workspace.members ?? []).map((m) => (typeof m === 'number' ? m : m.id))
+  if (ownerId !== currentUser.id && !memberIds.includes(currentUser.id)) notFound()
+
+  const [workspaces, pages, ambientStatus, unreadNotificationCount] = await Promise.all([
+    payload.find({
+      collection: 'workspaces',
+      where: { or: [{ owner: { equals: currentUser.id } }, { members: { contains: currentUser.id } }] },
+      limit: 100,
+      sort: 'name',
+      overrideAccess: true,
+    }),
     getWorkspacePages(workspace.id),
     getAmbientStatus(workspace.id),
+    getUnreadNotificationCount(),
   ])
 
   return (

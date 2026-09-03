@@ -1,7 +1,41 @@
-import type { CollectionConfig } from 'payload'
+import type { Access, CollectionConfig, Where } from 'payload'
+
+// This collection previously had no `access` at all, which Payload defaults
+// to fully open (`() => true`) for every operation on the public REST/
+// GraphQL API (`app/(payload)/api/[...slug]/route.ts`) — an unauthenticated
+// internet request could read, create, update, or delete any workspace
+// document. The app's own server actions/pages never rely on this (they all
+// call the Payload Local API with `overrideAccess: true`, e.g. lib/pages-
+// cache.ts's getWorkspaceBySlug), so this only closes that public-API
+// surface; it does not replace the ownership check that now lives in
+// app/(app)/page.tsx and app/(app)/workspace/[workspaceSlug]/layout.tsx —
+// those guard the app's own queries, this guards Payload's own API/admin
+// panel.
+const isAdmin = (user: { role?: string | null } | null | undefined) => user?.role === 'admin'
+
+const canReadOrUpdate: Access = ({ req }) => {
+  if (!req.user) return false
+  if (isAdmin(req.user)) return true
+  const where: Where = {
+    or: [{ owner: { equals: req.user.id } }, { members: { contains: req.user.id } }],
+  }
+  return where
+}
+
+const isOwnerOrAdmin: Access = ({ req }) => {
+  if (!req.user) return false
+  if (isAdmin(req.user)) return true
+  return { owner: { equals: req.user.id } }
+}
 
 export const Workspaces: CollectionConfig = {
   slug: 'workspaces',
+  access: {
+    read: canReadOrUpdate,
+    update: canReadOrUpdate,
+    delete: isOwnerOrAdmin,
+    create: ({ req }) => Boolean(req.user),
+  },
   admin: {
     useAsTitle: 'name',
   },

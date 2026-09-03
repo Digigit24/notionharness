@@ -20,7 +20,10 @@
     "test:runEvent-adapter": "tsx scripts/test-runEvent-adapter.ts",
     "dispatcher:loop": "tsx scripts/run-dispatcher-loop.ts",
     "test:transcript": "tsx scripts/test-transcript-pipeline.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:report": "playwright show-report"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.4.0",
@@ -62,6 +65,7 @@
   },
   "devDependencies": {
     "@better-auth/cli": "^1.4.22",
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4",
     "@types/dockerode": "^4.0.1",
     "@types/node": "^20",

@@ -211,6 +211,10 @@ export interface Workspace {
    * Last-issued sequence number for this workspace's human-readable task IDs — increment and read atomically when actually wiring ENG-142-style IDs.
    */
   taskCounter?: number | null;
+  /**
+   * Monthly spend cap in cents for this workspace, or empty for uncapped. Not yet enforced by the dispatcher (see AGENTS.md B-6 entry).
+   */
+  spendCapCents?: number | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -247,6 +251,10 @@ export interface Page {
    */
   parentPage?: (number | null) | Page;
   /**
+   * Project this page belongs to, if any — scopes it into the project detail page's Pages tab.
+   */
+  project?: (number | null) | Project;
+  /**
    * Manual drag-and-drop ordering within the sidebar
    */
   position?: number | null;
@@ -270,6 +278,22 @@ export interface Page {
   isArchived?: boolean | null;
   isFullWidth?: boolean | null;
   isLocked?: boolean | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "projects".
+ */
+export interface Project {
+  id: number;
+  name: string;
+  workspace: number | Workspace;
+  /**
+   * Emoji or icon identifier
+   */
+  icon?: string | null;
+  description?: string | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -319,22 +343,6 @@ export interface DatabaseRow {
    * Fractional manual ordering within the database (cheap now, per the roadmap's own 2.1 guidance on `position float`)
    */
   position?: number | null;
-  updatedAt: string;
-  createdAt: string;
-}
-/**
- * This interface was referenced by `Config`'s JSON-Schema
- * via the `definition` "projects".
- */
-export interface Project {
-  id: number;
-  name: string;
-  workspace: number | Workspace;
-  /**
-   * Emoji or icon identifier
-   */
-  icon?: string | null;
-  description?: string | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -916,6 +924,7 @@ export interface WorkspacesSelect<T extends boolean = true> {
   members?: T;
   taskPrefix?: T;
   taskCounter?: T;
+  spendCapCents?: T;
   updatedAt?: T;
   createdAt?: T;
 }
@@ -932,6 +941,7 @@ export interface PagesSelect<T extends boolean = true> {
   linkedSourceId?: T;
   linkedRecordId?: T;
   parentPage?: T;
+  project?: T;
   position?: T;
   docState?: T;
   plainTextContent?: T;
