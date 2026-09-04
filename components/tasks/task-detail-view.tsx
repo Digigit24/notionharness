@@ -59,6 +59,7 @@ export function TaskDetailView({
   activity,
   page,
   changes,
+  threadTeamId,
 }: {
   workspace: Workspace
   task: Task
@@ -74,6 +75,11 @@ export function TaskDetailView({
   activity: Activity[]
   page: Page | null
   changes: ChangeSummary[]
+  /** R14-P0.8.2 — the broker channel `task.channelThreadRootId` belongs to,
+   * resolved server-side (see `[taskId]/page.tsx`'s own comment). Null when
+   * the task has no thread — the "View thread" link below simply does not
+   * render, and nothing else about this view changes. */
+  threadTeamId: number | null
 }) {
   const [task, setTask] = useState(initialTask)
   const [subtasks, setSubtasks] = useState(initialSubtasks)
@@ -208,6 +214,17 @@ export function TaskDetailView({
           </select>
         )}
       </Field>
+
+      {task.channelThreadRootId != null && threadTeamId != null && (
+        <Field label="Thread">
+          <Link
+            href={`/workspace/${workspace.slug}/teams/${threadTeamId}?view=channel&thread=${task.channelThreadRootId}`}
+            className="mt-0.5 block truncate text-sm font-medium hover:underline"
+          >
+            View thread
+          </Link>
+        </Field>
+      )}
 
       <div className="border-t border-black/10 pt-3 dark:border-white/10">
         <h2 className="text-xs font-semibold uppercase tracking-wide text-black/40 dark:text-white/40">

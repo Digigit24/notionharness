@@ -19,6 +19,9 @@ import { MessageComposer, type SlashCommandRunner } from './message-composer'
 import { TypingIndicatorRow } from './typing-indicator-row'
 import { MessageRow } from './message-row'
 import { PendingReplyRow } from './pending-reply-row'
+import { NewTaskPopup, type TaskProjectOption } from './new-task-popup'
+import { ProjectTaskChip } from './project-task-chip'
+import type { ProjectTaskChipData } from '@/app/(app)/workspace/[workspaceSlug]/teams/task-thread-actions'
 import {
   applyReactionToggle,
   dayKeyOf,
@@ -34,6 +37,7 @@ import {
   type PendingReply,
   type RoomFeedMessage,
   type SkippedMention,
+  type TeamAgentOption,
   type TeamSlotView,
 } from './shared'
 
@@ -89,6 +93,10 @@ export function ChannelView({
   onSeen,
   onJoin,
   joining,
+  projects,
+  agents,
+  projectTaskChips,
+  onCreateTask,
 }: {
   workspaceId: number
   workspaceSlug: string
@@ -175,6 +183,14 @@ export function ChannelView({
   onSeen: (messageId: number) => void
   onJoin: () => void
   joining: boolean
+  /** R14-P0.8.1 — the "New task" popup's project/agent pickers. */
+  projects: TaskProjectOption[]
+  agents: TeamAgentOption[]
+  /** R14-P0.8 — project-task threads, keyed by root message id. See
+   * `team-room.tsx`'s own comment on why this is fetched separately from
+   * `feed` rather than joined onto it. */
+  projectTaskChips: Record<number, ProjectTaskChipData>
+  onCreateTask: (input: { title: string; projectId: number; agentId: number | null }) => Promise<void>
 }) {
   const [cap, setCap] = useState(WINDOW_SIZE)
   const scrollerRef = useRef<HTMLDivElement>(null)
@@ -708,6 +724,17 @@ export function ChannelView({
                   busy={false}
                 />
 
+                {/* R14-P0.8.1 — a thread root this button opened as a task
+                    carries the same live chip P0.8.2 shows atop the thread
+                    itself. Only a ROOT message can carry one: a reply's
+                    `threadRootId` is non-null, and `projectTaskChips` is
+                    keyed by root id. */}
+                {message.threadRootId == null && projectTaskChips[message.id] && (
+                  <li className="ml-11 mb-1 px-2">
+                    <ProjectTaskChip chip={projectTaskChips[message.id]} />
+                  </li>
+                )}
+
                 {/* A mention that woke nobody, said out loud. This is the
                     other half of the silence bug: the server already knew
                     "Bob is a person, not an agent" and nothing printed it. */}
@@ -808,6 +835,20 @@ export function ChannelView({
             </Button>
           </div>
         )}
+        {/* R14-P0.8.1 — beside the composer, not inside it: `MessageComposer`
+            is one self-contained bordered box (its own `px-3 pb-3`), so a
+            sibling toolbar row above it is the smallest addition rather than
+            reaching into that component's own layout. */}
+        <div className="flex justify-end px-3 pb-1.5">
+          <NewTaskPopup
+            mode="task"
+            projects={projects}
+            agents={agents}
+            onCreate={(input) =>
+              onCreateTask({ title: input.title, projectId: input.projectId as number, agentId: input.agentId })
+            }
+          />
+        </div>
         <MessageComposer
           workspaceId={workspaceId}
           slots={slots}

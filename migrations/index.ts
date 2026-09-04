@@ -1,5 +1,6 @@
 import * as migration_20260905_010000_media from './20260905_010000_media';
 import * as migration_20260904_215000_activity_access_entity_types from './20260904_215000_activity_access_entity_types';
+import * as migration_20260905_020000_tasks_channel_thread_root_id from './20260905_020000_tasks_channel_thread_root_id';
 import * as migration_20260904_200000_access_and_connectors from './20260904_200000_access_and_connectors';
 import * as migration_20260904_210000_activity_workspace_entity_type from './20260904_210000_activity_workspace_entity_type';
 import * as migration_20260904_190000_runtime_default_session_config from './20260904_190000_runtime_default_session_config';
@@ -155,5 +156,10 @@ export const migrations = [
     up: migration_20260905_010000_media.up,
     down: migration_20260905_010000_media.down,
     name: '20260905_010000_media'
+  },
+  {
+    up: migration_20260905_020000_tasks_channel_thread_root_id.up,
+    down: migration_20260905_020000_tasks_channel_thread_root_id.down,
+    name: '20260905_020000_tasks_channel_thread_root_id'
   },
 ];

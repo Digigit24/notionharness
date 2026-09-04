@@ -19,6 +19,7 @@ import {
   type ChannelRunLink,
   type PendingReply,
   type RoomFeedMessage,
+  type TeamAgentOption,
   type TeamSlotView,
 } from './shared'
 import { PaneDivider, useResizablePane } from '@/components/ui/resizable-pane'
@@ -29,6 +30,9 @@ import { MessageRow } from './message-row'
 import { MessageComposer } from './message-composer'
 import { TypingIndicatorRow } from './typing-indicator-row'
 import { PendingReplyRow } from './pending-reply-row'
+import { NewTaskPopup, type TaskProjectOption } from './new-task-popup'
+import { ProjectTaskChip } from './project-task-chip'
+import type { ProjectTaskChipData } from '@/app/(app)/workspace/[workspaceSlug]/teams/task-thread-actions'
 
 /**
  * A thread, BESIDE the feed.
@@ -67,6 +71,11 @@ export function ThreadPane({
   onDismissPending,
   onOpenTask,
   onOpenRun,
+  projects,
+  agents,
+  projectTaskChips,
+  onCreateTask,
+  onCreateSubtask,
 }: {
   workspaceId: number
   workspaceSlug: string
@@ -107,6 +116,16 @@ export function ThreadPane({
   onDismissPending: (runId: number) => void
   onOpenTask: (taskId: number) => void
   onOpenRun: (runId: number) => void
+  /** R14-P0.8 — same pickers and the same chip map `channel-view.tsx` gets
+   * from `team-room.tsx`; see that file's own comments. */
+  projects: TaskProjectOption[]
+  agents: TeamAgentOption[]
+  projectTaskChips: Record<number, ProjectTaskChipData>
+  onCreateTask: (input: { title: string; projectId: number; agentId: number | null }) => Promise<void>
+  /** R14-P0.8.3 — only reachable when this thread already carries a task
+   * (`projectTaskChips[rootId]` set); the button that calls it is hidden
+   * otherwise. */
+  onCreateSubtask: (input: { parentTaskId: number; title: string; agentId: number | null }) => Promise<void>
 }) {
   const scrollerRef = useRef<HTMLDivElement>(null)
   const root = messages[0] ?? null
@@ -263,6 +282,15 @@ export function ThreadPane({
           </Button>
         </header>
 
+        {/* R14-P0.8.2 — "opening a task shows its thread." The SAME chip
+            `channel-view.tsx` shows beside the root in the feed, at the top
+            of the thread it belongs to, with live status. */}
+        {projectTaskChips[rootId] && (
+          <div className="flex shrink-0 items-center border-b border-black/10 px-3 py-2 dark:border-white/10">
+            <ProjectTaskChip chip={projectTaskChips[rootId]} />
+          </div>
+        )}
+
         <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto px-1 py-2">
           {root == null ? (
             <p className="py-8 text-center text-xs text-black/40 dark:text-white/40">
@@ -367,19 +395,49 @@ export function ThreadPane({
         )}
 
         {root != null && (
-          <MessageComposer
-            workspaceId={workspaceId}
-            slots={slots}
-            placeholder="Reply…"
-            // A reply inherits the conversation's kind and audience: a per-reply
-            // "instruction to Reviewer" inside somebody else's thread is a
-            // distinction nobody asked for and a second way to say the same thing.
-            showKind={false}
-            showRecipient={false}
-            autoFocus
-            onSend={send}
-            onTyping={onTyping}
-          />
+          <>
+            {/* R14-P0.8.1 / R14-P0.8.3 — "New task" always; "Create subtask"
+                only once this thread already carries a task to attach one
+                to. Same popup component, two modes — see `new-task-popup.tsx`. */}
+            <div className="flex justify-end gap-2 px-3 pb-1.5">
+              {projectTaskChips[rootId] && (
+                <NewTaskPopup
+                  mode="subtask"
+                  lockedProjectName={projectTaskChips[rootId].projectName}
+                  projects={projects}
+                  agents={agents}
+                  onCreate={(input) =>
+                    onCreateSubtask({
+                      parentTaskId: projectTaskChips[rootId].taskId,
+                      title: input.title,
+                      agentId: input.agentId,
+                    })
+                  }
+                />
+              )}
+              <NewTaskPopup
+                mode="task"
+                projects={projects}
+                agents={agents}
+                onCreate={(input) =>
+                  onCreateTask({ title: input.title, projectId: input.projectId as number, agentId: input.agentId })
+                }
+              />
+            </div>
+            <MessageComposer
+              workspaceId={workspaceId}
+              slots={slots}
+              placeholder="Reply…"
+              // A reply inherits the conversation's kind and audience: a per-reply
+              // "instruction to Reviewer" inside somebody else's thread is a
+              // distinction nobody asked for and a second way to say the same thing.
+              showKind={false}
+              showRecipient={false}
+              autoFocus
+              onSend={send}
+              onTyping={onTyping}
+            />
+          </>
         )}
       </PaneBoundary>
       </aside>
