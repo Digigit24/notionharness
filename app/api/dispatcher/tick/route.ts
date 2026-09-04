@@ -3,10 +3,40 @@ import { dispatchNextRun } from '@/lib/dispatcher/worker'
 import { sweepExpiredLeases } from '@/lib/broker/runs'
 import { recordDispatcherTick } from '@/lib/broker/dispatcher-health'
 import { reclaimRunWorktrees } from '@/lib/run-worktrees/retention'
+import { reapOrphanedWorktrees, barePathFor } from '@/lib/run-worktrees/manager'
 import { resolveRunWorktreeConfig } from '@/lib/run-worktrees/config'
+import { getBrokerPool } from '@/lib/broker/db'
 import { bestEffort } from '@/lib/failures'
 import { logger } from '@/lib/logger'
 import { requireInternalCaller } from '../../internal-auth'
+
+// R12-P5.2 — an orphan reaper, run once per process lifetime rather than on
+// every tick: a worker can die between `RunWorktreeManager.create()` making a
+// run-scoped branch and the run ever settling, and nothing before this ever
+// cleaned that branch out of the shared bare clone. Once per boot is enough —
+// this is bookkeeping hygiene, not a correctness requirement of any single
+// tick, and running `git worktree prune` + a `for-each-ref` scan every 3s
+// would be exactly the kind of needless-recurring-work D0 forbids.
+let reaperRanThisProcess = false
+
+function maybeReapOrphanedWorktrees(): void {
+  if (reaperRanThisProcess) return
+  reaperRanThisProcess = true
+  void (async () => {
+    const { source, rootDir } = resolveRunWorktreeConfig()
+    const barePath = barePathFor(rootDir, source)
+    const pool = getBrokerPool()
+    const { rows } = await pool.query<{ id: number }>('SELECT id FROM runs')
+    const liveRunIds = new Set(rows.map((row) => String(row.id)))
+    const report = await reapOrphanedWorktrees(barePath, liveRunIds)
+    if (report.removedBranches.length === 0 && report.failures.length === 0) return
+    logger.info('dispatcher boot: reaped orphaned run-worktree branches', {
+      barePath,
+      removed: report.removedBranches,
+      failureCount: report.failures.length,
+    })
+  })().catch((err) => logger.warn('orphan worktree reaper failed on boot', { error: String(err) }))
+}
 
 // Every tick, not every tenth. `sweepExpiredLeases` is one indexed UPDATE
 // that normally matches nothing, so the cost is negligible — while the
@@ -35,6 +65,13 @@ let reclaimInFlight = false
 // a decision, not a default.
 const RECLAIM_ENABLED = process.env.RUN_WORKTREE_AUTO_RECLAIM === 'true'
 
+// R12-P5.2's disk budget, in MB — unset means "keepLast alone decides",
+// exactly as before this existed. A number here is on top of `keepLast`, not
+// instead of it: `keepLast` protects "the run I just watched finish" no
+// matter the disk situation, and the budget only starts evicting the OLDEST
+// of those once the total genuinely will not fit.
+const MAX_TOTAL_MB = process.env.RUN_WORKTREE_MAX_TOTAL_MB ? Number(process.env.RUN_WORKTREE_MAX_TOTAL_MB) : undefined
+
 function maybeReclaimWorktrees(): void {
   if (!RECLAIM_ENABLED) return
   ticksSinceReclaim += 1
@@ -42,7 +79,8 @@ function maybeReclaimWorktrees(): void {
   ticksSinceReclaim = 0
   reclaimInFlight = true
   const { source, rootDir } = resolveRunWorktreeConfig()
-  void reclaimRunWorktrees({ source, rootDir })
+  const maxTotalBytes = MAX_TOTAL_MB !== undefined && Number.isFinite(MAX_TOTAL_MB) ? MAX_TOTAL_MB * 1024 * 1024 : undefined
+  void reclaimRunWorktrees({ source, rootDir, maxTotalBytes })
     .then((report) => {
       // Reported rather than silent: space that disappears without explanation
       // is indistinguishable from a bug, and the kept-reasons are the part
@@ -51,8 +89,13 @@ function maybeReclaimWorktrees(): void {
         const mb = (report.reclaimedBytes / 1024 / 1024).toFixed(1)
         logger.info('reclaimed run checkouts', {
           removed: report.removed.length,
+          // Named separately (P5.6): "removed because old" and "removed
+          // because we were over the disk budget" are different facts about
+          // the same run and a reader should not have to guess which.
+          budgetEvicted: report.budgetEvicted,
           examined: report.examined,
           kept: report.kept.length,
+          keptMb: (report.keptBytes / 1024 / 1024).toFixed(1),
           reclaimedMb: mb,
         })
         for (const failure of report.failures) {
@@ -100,6 +143,7 @@ export async function POST(request: Request) {
     'a heartbeat write must never be the thing that stops dispatching',
     { workerId },
   )
+  maybeReapOrphanedWorktrees()
   maybeReclaimWorktrees()
   ticksSinceSweep += 1
   let recovered = 0

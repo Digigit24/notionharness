@@ -35,6 +35,16 @@ export interface ReclaimOptions {
   rootDir: string
   source: string
   keepLast?: number
+  /** R12-P5.2's disk budget. When the settled, review-closed checkouts this
+   * function is willing to touch at all still add up to more than this many
+   * bytes after `keepLast` has already been applied, the oldest of the ones
+   * `keepLast` would otherwise have spared are removed too — oldest first —
+   * until the total is back under budget. Never applied to `unfinished` or
+   * `open-review` checkouts: a disk budget is a reason to reclaim sooner, not
+   * a reason to delete the ground under a running agent or a review someone
+   * has not looked at yet. Unset (the default) means no budget — `keepLast`
+   * alone decides, exactly as before this option existed. */
+  maxTotalBytes?: number
   /** Report what would happen without touching anything. */
   dryRun?: boolean
 }
@@ -44,10 +54,17 @@ export interface ReclaimReport {
   examined: number
   /** Run ids whose checkout was removed. */
   removed: string[]
+  /** Of `removed`, the ones removed because `maxTotalBytes` was exceeded
+   * rather than because they fell outside `keepLast` — named separately so a
+   * log line (P5.6) can say WHY, not just how many. */
+  budgetEvicted: string[]
   /** Run ids kept, with the reason — a report nobody can act on is not a report. */
   kept: Array<{ runId: string; reason: 'unfinished' | 'open-review' | 'recent' | 'unknown-run' }>
   /** Approximate bytes freed, summed from the directories actually removed. */
   reclaimedBytes: number
+  /** Total bytes still held by every checkout this pass decided to KEEP —
+   * what a `maxTotalBytes` budget is actually being measured against. */
+  keptBytes: number
   failures: Array<{ runId: string; error: string }>
 }
 
@@ -82,7 +99,15 @@ export async function reclaimRunWorktrees(options: ReclaimOptions): Promise<Recl
   const keepLast = options.keepLast ?? DEFAULT_KEEP_LAST
   const runsDir = join(options.rootDir, 'runs')
 
-  const report: ReclaimReport = { examined: 0, removed: [], kept: [], reclaimedBytes: 0, failures: [] }
+  const report: ReclaimReport = {
+    examined: 0,
+    removed: [],
+    budgetEvicted: [],
+    kept: [],
+    reclaimedBytes: 0,
+    keptBytes: 0,
+    failures: [],
+  }
 
   let entries
   try {
@@ -116,21 +141,26 @@ export async function reclaimRunWorktrees(options: ReclaimOptions): Promise<Recl
 
   // Recency is decided by run id, which is monotonic — not by directory
   // mtime, which a review that merely READ the worktree could have bumped.
-  const recent = new Set(
-    [...numericIds]
-      .sort((a, b) => b - a)
-      .slice(0, keepLast)
-      .map(String),
-  )
+  const recentOrder = [...numericIds].sort((a, b) => b - a).map(String)
+  const recent = new Set(recentOrder.slice(0, keepLast))
 
   const manager = new RunWorktreeManager({ rootDir: options.rootDir })
 
+  // Phase 1 — classify every checkout, exactly as before `maxTotalBytes`
+  // existed: `unfinished` and `open-review` are never touched by ANYTHING in
+  // this function (not `keepLast`, not a budget); a `keepLast`-eligible
+  // "recent" checkout is provisionally kept but, unlike the first two
+  // reasons, is a candidate the budget phase below is allowed to evict.
+  const removable: string[] = []
+  const provisionallyRecent: string[] = []
   for (const runId of onDisk) {
     const run = byId.get(runId)
     if (!run) {
       // A checkout whose run row is gone. Left alone deliberately: this
       // function reclaims space, it does not adjudicate orphans it cannot
-      // explain, and a wrong deletion here is unrecoverable.
+      // explain, and a wrong deletion here is unrecoverable. (The orphan
+      // REAPER, `manager.ts`'s `reapOrphanedWorktrees`, is the one thing
+      // that does adjudicate this — for branches, not worktree directories.)
       report.kept.push({ runId, reason: 'unknown-run' })
       continue
     }
@@ -146,14 +176,61 @@ export async function reclaimRunWorktrees(options: ReclaimOptions): Promise<Recl
       continue
     }
     if (recent.has(runId)) {
-      report.kept.push({ runId, reason: 'recent' })
+      provisionallyRecent.push(runId)
       continue
     }
+    removable.push(runId)
+  }
 
+  // Phase 2 — the disk budget (P5.2). Only meaningful once every entry falling
+  // outside `keepLast` is already accounted for as `removable`: the budget
+  // asks "even after keepLast, are we still over?", oldest-of-the-kept first.
+  // `recentSizes` is kept around (not just the eviction set) so phase 3 can
+  // report `keptBytes` without walking these same directories a second time.
+  //
+  // `onDisk`'s own order is whatever `readdir` returned — filesystem order,
+  // not recency — so `provisionallyRecent` is re-sorted newest-first here
+  // before anything below relies on that order to find "oldest of the kept".
+  provisionallyRecent.sort((a, b) => Number(b) - Number(a))
+  const recentSizes = new Map<string, number>()
+  const budgetEvictions = new Set<string>()
+  if (provisionallyRecent.length > 0) {
+    for (const runId of provisionallyRecent) {
+      const worktree = describeRunWorktree(options.rootDir, options.source, runId)
+      recentSizes.set(runId, await directorySize(worktree.worktreePath))
+    }
+    if (options.maxTotalBytes !== undefined) {
+      let total = [...recentSizes.values()].reduce((sum, size) => sum + size, 0)
+      // `provisionallyRecent` was sorted newest-first above, so evicting
+      // from the END walks oldest-first — the checkouts someone is least
+      // likely to still be looking at.
+      for (let i = provisionallyRecent.length - 1; i >= 0 && total > options.maxTotalBytes; i -= 1) {
+        const runId = provisionallyRecent[i]
+        budgetEvictions.add(runId)
+        total -= recentSizes.get(runId) ?? 0
+      }
+    }
+  }
+
+  for (const runId of provisionallyRecent) {
+    if (budgetEvictions.has(runId)) {
+      removable.push(runId)
+    } else {
+      report.kept.push({ runId, reason: 'recent' })
+      report.keptBytes += recentSizes.get(runId) ?? 0
+    }
+  }
+
+  // Phase 3 — act. `keptBytes` is computed alongside removal so a caller can
+  // see, in the same report, what the budget is actually being measured
+  // against — a number that is otherwise invisible until the NEXT pass finds
+  // it still over budget.
+  for (const runId of removable) {
     const worktree = describeRunWorktree(options.rootDir, options.source, runId)
-    const size = await directorySize(worktree.worktreePath)
+    const size = recentSizes.has(runId) ? (recentSizes.get(runId) as number) : await directorySize(worktree.worktreePath)
     if (options.dryRun) {
       report.removed.push(runId)
+      if (budgetEvictions.has(runId)) report.budgetEvicted.push(runId)
       report.reclaimedBytes += size
       continue
     }
@@ -161,8 +238,11 @@ export async function reclaimRunWorktrees(options: ReclaimOptions): Promise<Recl
       // `discardChanges` because this run is settled and its review is
       // closed: whatever is uncommitted in there has already been accepted,
       // rejected or dismissed, and git will otherwise refuse to remove it.
+      // `manager.remove` itself logs what it discards with real content
+      // (P5.6) — this function does not need to repeat that here.
       await manager.remove(worktree, { discardChanges: true })
       report.removed.push(runId)
+      if (budgetEvictions.has(runId)) report.budgetEvicted.push(runId)
       report.reclaimedBytes += size
     } catch (err) {
       report.failures.push({ runId, error: err instanceof Error ? err.message : String(err) })
