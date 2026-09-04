@@ -126,7 +126,16 @@ function RuntimeRow({
   agents: Agent[]
 }) {
   const status = runtime?.status ?? 'unknown'
-  const info = (runtime?.connectionInfo ?? null) as { error?: string; profilesAvailable?: number } | null
+  const info = (runtime?.connectionInfo ?? null) as {
+    error?: string
+    profilesAvailable?: number
+    /** Present only for a runtime that HAS a dashboard. Reported separately
+     * from `status` on purpose: a runtime whose dashboard is unreachable can
+     * still run turns perfectly well, and folding the two together reported a
+     * working Hermes as "down" purely because a side service was returning
+     * 502. */
+    dashboard?: { reachable?: boolean; statusCode?: number; error?: string; url?: string }
+  } | null
 
   return (
     <Card>
@@ -170,8 +179,19 @@ function RuntimeRow({
           {info?.profilesAvailable != null && <span>{info.profilesAvailable} Hermes profile(s) available</span>}
         </div>
 
-        {status === 'down' && info?.error && (
-          <p className="text-xs text-destructive">{info.error}</p>
+        {status === 'down' && info?.error && <p className="text-xs text-destructive">{info.error}</p>}
+
+        {/* A specific, real state worth naming: the runtime runs, but the
+            Hermes-only settings screens (profiles, memories, MCP config) have
+            no server to talk to. Saying that is far more useful than either
+            hiding it or letting it turn the whole runtime red. */}
+        {info?.dashboard && info.dashboard.reachable === false && (
+          <p className="text-xs text-amber-600 dark:text-amber-400">
+            Runs fine, but its Hermes dashboard is unreachable
+            {info.dashboard.statusCode ? ` (${info.dashboard.statusCode})` : ''}
+            {info.dashboard.url ? ` at ${info.dashboard.url}` : ''} — profiles, memories and MCP settings will not
+            load until it is back.
+          </p>
         )}
 
         <div className="text-xs text-faint">

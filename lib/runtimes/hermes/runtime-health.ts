@@ -74,17 +74,99 @@ export async function checkHermesReachability(): Promise<RuntimeHealthResult> {
 }
 
 /**
- * Runs one real health check and upserts the `Runtimes` row for a single
- * runtime profile — finds the existing row for this (workspace,
- * runtimeProfile) pair if one exists, else creates it. `host` is currently
- * always the single configured `HERMES_BASE_URL` (this app talks to one
- * Hermes per installation as of C1 — see AGENTS.md's Phase C section for
- * why multi-runtime is explicitly deferred to Pillar 8), so it's derived
- * here rather than asked of the caller.
+ * How stale a stored probe may be before health re-runs it.
+ *
+ * The health loop ticks every 30 seconds; probing spawns the agent binary and
+ * takes seconds. Doing that per profile per tick would be a straight D0
+ * violation, so a recent probe is reused and re-run only when it ages out.
+ * The reported status carries its own timestamp either way, so "up" always
+ * means "up as of a stated moment" rather than an implied now.
+ */
+const PROBE_MAX_AGE_MS = 10 * 60_000
+
+function usesHermesHome(profile: RuntimeProfile): boolean {
+  return ((profile as { homeStrategy?: string | null }).homeStrategy ?? 'hermes') === 'hermes'
+}
+
+/**
+ * Health for a runtime that is not Hermes.
+ *
+ * The honest question for any ACP runtime is "does this binary start and
+ * complete a handshake", which is exactly what the probe answers. This used
+ * to call `checkHermesReachability()` for every profile regardless of family,
+ * so a perfectly healthy Claude Code runtime was reported as down with
+ * "Hermes responded 502" — a status about a completely unrelated service,
+ * shown against a runtime that has no Hermes in it at all.
+ *
+ * A stored probe is reused while it is fresh; see `PROBE_MAX_AGE_MS`.
+ */
+async function checkAcpRuntime(profile: RuntimeProfile): Promise<RuntimeHealthResult> {
+  const lastCode = (profile as { lastProbeCode?: string | null }).lastProbeCode
+  const lastAt = (profile as { lastProbedAt?: string | null }).lastProbedAt
+  const age = lastAt ? Date.now() - new Date(lastAt).getTime() : Number.POSITIVE_INFINITY
+
+  if (lastCode && age < PROBE_MAX_AGE_MS) {
+    return {
+      reachable: lastCode === 'ok',
+      error: lastCode === 'ok' ? undefined : (profile as { lastProbeDetail?: string | null }).lastProbeDetail ?? lastCode,
+      checkedAt: lastAt as string,
+    }
+  }
+
+  const { probeAcpRuntime } = await import('@/lib/runtimes/detect')
+  const args = Array.isArray(profile.fixedArgs)
+    ? profile.fixedArgs.filter((a): a is string => typeof a === 'string')
+    : []
+  const probe = await probeAcpRuntime(profile.commandName, args)
+  // Written back so the Runtimes page and this loop agree, rather than each
+  // keeping its own idea of when the runtime was last known good.
+  const payload = await getPayloadClient()
+  await payload
+    .update({
+      collection: 'runtime-profiles',
+      id: profile.id,
+      data: {
+        handshake: probe.handshake ?? null,
+        lastProbeCode: probe.code,
+        lastProbeDetail: probe.detail.slice(0, 500),
+        lastProbedAt: new Date().toISOString(),
+      } as never,
+      overrideAccess: true,
+    })
+    .catch(() => undefined)
+
+  return {
+    reachable: probe.ok,
+    error: probe.ok ? undefined : probe.detail,
+    checkedAt: new Date().toISOString(),
+  }
+}
+
+/**
+ * Runs one health check appropriate to the runtime and upserts its `Runtimes`
+ * row — finding the existing row for this (workspace, runtimeProfile) pair if
+ * one exists, else creating it.
+ *
+ * The check differs by runtime because the runtimes differ. Hermes has a
+ * dashboard server that is its real control plane, so reaching it is a
+ * meaningful signal. Everything else is checked at the protocol level, which
+ * is the only signal that means anything for a bare ACP binary.
  */
 export async function refreshRuntimeForProfile(profile: RuntimeProfile): Promise<void> {
   const payload = await getPayloadClient()
-  const result = await checkHermesReachability()
+  const hermes = usesHermesHome(profile)
+
+  // Status is always the protocol answer: can this runtime start and complete
+  // a handshake — which is to say, can it run a turn.
+  //
+  // Hermes's dashboard reachability is deliberately NOT the verdict, even for
+  // Hermes. That was the first version of this fix and it was still wrong in
+  // the same way: with the dashboard host returning 502, a Hermes runtime that
+  // demonstrably runs turns was reported "down". The dashboard powers the
+  // profile, memory and MCP screens, so its absence is worth reporting — as
+  // its own fact, alongside a status that means what it says.
+  const result = await checkAcpRuntime(profile)
+  const dashboard = hermes ? await checkHermesReachability() : null
 
   const workspaceId = typeof profile.workspace === 'object' ? profile.workspace.id : profile.workspace
   const existing = await payload.find({
@@ -100,11 +182,28 @@ export async function refreshRuntimeForProfile(profile: RuntimeProfile): Promise
     name: profile.name,
     workspace: workspaceId,
     runtimeProfile: profile.id,
-    host: HERMES_BASE_URL || 'unconfigured',
+    // What was actually checked, not a URL we never contacted.
+    host: profile.commandName,
     // Payload's `json` field type wants a plain index-signature-compatible
     // object; `RuntimeHealthResult` is a named interface, so a bare spread
     // (not a cast on the interface itself) satisfies it structurally.
-    connectionInfo: { ...result } as Record<string, unknown>,
+    connectionInfo: {
+      ...result,
+      checkKind: 'acp-handshake',
+      // Present only for a runtime that has a dashboard at all. A reachable
+      // runtime with an unreachable dashboard is a real and specific state:
+      // turns run, the Hermes-specific settings screens do not.
+      ...(dashboard
+        ? {
+            dashboard: {
+              reachable: dashboard.reachable,
+              statusCode: dashboard.statusCode,
+              error: dashboard.error,
+              url: HERMES_BASE_URL || 'unconfigured',
+            },
+          }
+        : {}),
+    } as Record<string, unknown>,
     status: (result.reachable ? 'up' : 'down') as 'up' | 'down',
     lastCheckedAt: result.checkedAt,
   }
