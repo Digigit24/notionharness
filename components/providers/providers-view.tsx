@@ -1,13 +1,13 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { CheckCircle2, XCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from '@/hooks/use-toast'
 import { clearProviderKey, switchActiveProvider, updateProviderKey } from '@/app/(app)/workspace/[workspaceSlug]/settings/providers/actions'
-import { unwrap } from '@/lib/failures'
+import { useOptimisticAction } from '@/lib/optimistic'
 import type { ActiveModelConfig, ProviderEnvSlot, ProviderKeyStatus, ProviderModelInfo } from '@/lib/runtimes/hermes/providers'
 import type { HermesProfileSummary } from '@/lib/runtimes/hermes/profiles'
 
@@ -33,34 +33,56 @@ export function ProvidersView({
   const router = useRouter()
   const [provider, setProvider] = useState(active?.provider ?? providers[0]?.provider ?? '')
   const [model, setModel] = useState(active?.model ?? '')
-  const [saving, setSaving] = useState(false)
+  // Mirrors `active` so "Currently active" updates the instant Switch is
+  // clicked instead of waiting on `router.refresh()`'s full round trip (D0).
+  // Resynced below on a profile change, since switching profiles navigates
+  // within this same component instance rather than remounting it.
+  const [activeState, setActiveState] = useState(active)
+  const [, startBackgroundRefresh] = useTransition()
+  const switchOptimistic = useOptimisticAction<void>()
   // `key` on the editing section (below) remounts these on a profile change,
   // so the form always reflects the profile actually being edited rather than
   // carrying the previous one's selection over.
   const profileLabel = selectedProfile || 'Install default'
 
+  useEffect(() => {
+    setActiveState(active)
+    setProvider(active?.provider ?? providers[0]?.provider ?? '')
+    setModel(active?.model ?? '')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProfile])
+
+  // Mirrors `envSlots` so a key row's checkmark flips the instant Save/Clear
+  // is clicked, same reasoning as `activeState` above.
+  const [slots, setSlots] = useState(envSlots)
+  useEffect(() => {
+    setSlots(envSlots)
+  }, [envSlots])
+
   const keyByProvider = useMemo(() => new Map(keyStatus.map((k) => [k.provider, k])), [keyStatus])
   const modelsForProvider = providers.find((p) => p.provider === provider)?.models ?? []
 
-  async function handleSwitch() {
+  function handleSwitch() {
     if (!provider.trim() || !model.trim()) return
-    setSaving(true)
-    try {
-      unwrap(await switchActiveProvider({ workspaceSlug, provider, model, profile: selectedProfile }))
-      toast({
-        title: `${profileLabel}: switched to ${provider} / ${model}`,
-        description: 'Backed up config.yaml before writing; every other line left untouched.',
-      })
-      router.refresh()
-    } catch (err) {
-      toast({
-        title: 'Could not switch provider',
-        description: err instanceof Error ? err.message : undefined,
-        variant: 'destructive',
-      })
-    } finally {
-      setSaving(false)
-    }
+    const previous = activeState
+    void switchOptimistic.run({
+      // Switching a provider/model never changes the base URL — that's a
+      // per-connection setting, not per-model — so it just carries over.
+      apply: () => setActiveState((current) => ({ baseUrl: current?.baseUrl ?? '', provider, model })),
+      rollback: () => setActiveState(previous),
+      work: () => switchActiveProvider({ workspaceSlug, provider, model, profile: selectedProfile }),
+      failureTitle: 'Could not switch provider',
+      onSettled: () => {
+        toast({
+          title: `${profileLabel}: switched to ${provider} / ${model}`,
+          description: 'Backed up config.yaml before writing; every other line left untouched.',
+        })
+        // Background only — the sentence above and `activeState` already say
+        // what changed; this just lets the rest of the page (e.g. an agent's
+        // own model display elsewhere) catch up.
+        startBackgroundRefresh(() => router.refresh())
+      },
+    })
   }
 
   return (
@@ -100,13 +122,13 @@ export function ProvidersView({
 
       <section className="rounded-lg border border-black/10 p-4 dark:border-white/10">
         <h2 className="text-sm font-medium">Currently active — {profileLabel}</h2>
-        {active ? (
+        {activeState ? (
           <div className="mt-2 text-sm">
             <p>
-              <span className="text-black/50 dark:text-white/50">Provider:</span> {active.provider}
+              <span className="text-black/50 dark:text-white/50">Provider:</span> {activeState.provider}
             </p>
             <p>
-              <span className="text-black/50 dark:text-white/50">Model:</span> {active.model}
+              <span className="text-black/50 dark:text-white/50">Model:</span> {activeState.model}
             </p>
           </div>
         ) : (
@@ -148,10 +170,19 @@ export function ProvidersView({
           key is never shown again, only whether one is present.
         </p>
         <div className="mt-3 max-h-80 space-y-2 overflow-y-auto pr-1">
-          {envSlots.map((slot) => (
-            <ProviderKeyRow key={slot.envKeyName} workspaceSlug={workspaceSlug} slot={slot} />
+          {slots.map((slot) => (
+            <ProviderKeyRow
+              key={slot.envKeyName}
+              workspaceSlug={workspaceSlug}
+              slot={slot}
+              onConfiguredChange={(configured) =>
+                setSlots((current) =>
+                  current.map((s) => (s.envKeyName === slot.envKeyName ? { ...s, configured } : s)),
+                )
+              }
+            />
           ))}
-          {envSlots.length === 0 && (
+          {slots.length === 0 && (
             <p className="text-sm text-black/40 dark:text-white/40">No provider key slots found in Hermes&apos;s .env.</p>
           )}
         </div>
@@ -201,10 +232,15 @@ export function ProvidersView({
           <Button
             type="button"
             size="sm"
-            disabled={saving || !provider || !model || (provider === active?.provider && model === active?.model)}
-            onClick={() => void handleSwitch()}
+            disabled={
+              switchOptimistic.pending ||
+              !provider ||
+              !model ||
+              (provider === activeState?.provider && model === activeState?.model)
+            }
+            onClick={handleSwitch}
           >
-            {saving ? 'Switching…' : 'Switch'}
+            {switchOptimistic.pending ? 'Switching…' : 'Switch'}
           </Button>
         </div>
       </section>
@@ -212,46 +248,50 @@ export function ProvidersView({
   )
 }
 
-function ProviderKeyRow({ workspaceSlug, slot }: { workspaceSlug: string; slot: ProviderEnvSlot }) {
-  const router = useRouter()
+function ProviderKeyRow({
+  workspaceSlug,
+  slot,
+  onConfiguredChange,
+}: {
+  workspaceSlug: string
+  slot: ProviderEnvSlot
+  /** Flips this row's OWN checkmark in the parent's `slots` mirror the
+   * instant Save/Clear is clicked — see providers-view.tsx's header for why
+   * that mirror exists instead of waiting on `router.refresh()`. */
+  onConfiguredChange: (configured: boolean) => void
+}) {
   const [value, setValue] = useState('')
-  const [busy, setBusy] = useState(false)
+  const { run, pending } = useOptimisticAction<void>()
 
-  async function save() {
+  function save() {
     if (!value.trim()) return
-    setBusy(true)
-    try {
-      unwrap(await updateProviderKey({ workspaceSlug, envKeyName: slot.envKeyName, value }))
-      toast({ title: `${slot.envKeyName} updated` })
-      setValue('')
-      router.refresh()
-    } catch (err) {
-      toast({
-        title: 'Could not save key',
-        description: err instanceof Error ? err.message : undefined,
-        variant: 'destructive',
-      })
-    } finally {
-      setBusy(false)
-    }
+    const submitted = value
+    void run({
+      apply: () => {
+        onConfiguredChange(true)
+        setValue('')
+      },
+      rollback: () => {
+        onConfiguredChange(slot.configured)
+        setValue(submitted)
+      },
+      work: () => updateProviderKey({ workspaceSlug, envKeyName: slot.envKeyName, value: submitted }),
+      failureTitle: 'Could not save key',
+      onSettled: () => toast({ title: `${slot.envKeyName} updated` }),
+    })
   }
 
-  async function clear() {
-    setBusy(true)
-    try {
-      unwrap(await clearProviderKey({ workspaceSlug, envKeyName: slot.envKeyName }))
-      toast({ title: `${slot.envKeyName} cleared` })
-      router.refresh()
-    } catch (err) {
-      toast({
-        title: 'Could not clear key',
-        description: err instanceof Error ? err.message : undefined,
-        variant: 'destructive',
-      })
-    } finally {
-      setBusy(false)
-    }
+  function clear() {
+    void run({
+      apply: () => onConfiguredChange(false),
+      rollback: () => onConfiguredChange(slot.configured),
+      work: () => clearProviderKey({ workspaceSlug, envKeyName: slot.envKeyName }),
+      failureTitle: 'Could not clear key',
+      onSettled: () => toast({ title: `${slot.envKeyName} cleared` }),
+    })
   }
+
+  const busy = pending
 
   return (
     <div className="flex items-center gap-2">
@@ -269,11 +309,11 @@ function ProviderKeyRow({ workspaceSlug, slot }: { workspaceSlug: string; slot: 
         placeholder={slot.configured ? 'Update key…' : 'Enter key…'}
         className="min-w-0 flex-1 rounded border border-black/15 px-2 py-1 text-xs dark:border-white/15 dark:bg-white/[.04]"
       />
-      <Button type="button" size="sm" variant="outline" disabled={busy || !value.trim()} onClick={() => void save()}>
+      <Button type="button" size="sm" variant="outline" disabled={busy || !value.trim()} onClick={save}>
         Save
       </Button>
       {slot.configured && (
-        <Button type="button" size="sm" variant="destructive" disabled={busy} onClick={() => void clear()}>
+        <Button type="button" size="sm" variant="destructive" disabled={busy} onClick={clear}>
           Clear
         </Button>
       )}

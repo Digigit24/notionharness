@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useEffect, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   AlertTriangle,
@@ -48,8 +48,22 @@ export function ProjectWorktreesTab({
 }) {
   const router = useRouter()
   const [resources, setResources] = useState(overview.resources)
+  // Mirrors `overview.worktrees`/`overview.statuses` so creating or removing
+  // a worktree shows up the instant that git operation itself finishes,
+  // instead of ALSO waiting on `router.refresh()`'s full server round trip
+  // on top of it (D0) — the git op is real, unavoidable latency; the refresh
+  // used to be a second one stacked on it. Resynced on a fresh `overview`
+  // (a background refresh landing, or the page reloading).
+  const [worktrees, setWorktrees] = useState(overview.worktrees)
+  const [statuses, setStatuses] = useState(overview.statuses)
+  useEffect(() => {
+    setResources(overview.resources)
+    setWorktrees(overview.worktrees)
+    setStatuses(overview.statuses)
+  }, [overview])
   const [error, setError] = useState<string | null>(null)
-  const [busy, startTransition] = useTransition()
+  const [busy, setBusy] = useState(false)
+  const [, startBackgroundRefresh] = useTransition()
 
   const [localPath, setLocalPath] = useState('')
   const [ghRepo, setGhRepo] = useState('')
@@ -71,16 +85,24 @@ export function ProjectWorktreesTab({
   // back to the first repository keeps it usable the moment one exists.
   const selectedResourceId = newResourceId ?? repoResources[0]?.id ?? null
 
-  const run = (work: () => Promise<unknown>) => {
+  // `work` is expected to have already updated whichever local state it
+  // touched (resources/worktrees/statuses) with the server's own returned
+  // data before resolving — see each call site below. `router.refresh()`
+  // here is therefore purely a BACKGROUND sync (this worktree's live git
+  // status, and the Files tab's visibility, which the parent computes from
+  // its own separate `gitOverview` prop) — run in its own transition so it
+  // never extends `busy` past the point the paint above already landed.
+  const run = async (work: () => Promise<void>) => {
     setError(null)
-    startTransition(async () => {
-      try {
-        await work()
-        router.refresh()
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'That did not work.')
-      }
-    })
+    setBusy(true)
+    try {
+      await work()
+      startBackgroundRefresh(() => router.refresh())
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'That did not work.')
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (
@@ -238,7 +260,7 @@ export function ProjectWorktreesTab({
               disabled={busy || !newName.trim() || selectedResourceId == null}
               onClick={() =>
                 run(async () => {
-                  unwrap(
+                  const created = unwrap(
                     await createProjectWorktree({
                       workspaceSlug,
                       projectId,
@@ -246,6 +268,7 @@ export function ProjectWorktreesTab({
                       name: newName.trim(),
                     }),
                   )
+                  setWorktrees((current) => [...current, created])
                   setNewName('')
                 })
               }
@@ -256,13 +279,13 @@ export function ProjectWorktreesTab({
           </div>
         )}
 
-        {overview.worktrees.length === 0 && (
+        {worktrees.length === 0 && (
           <p className="mt-3 text-xs text-black/40 dark:text-white/40">No worktrees yet.</p>
         )}
 
         <ul className="mt-3 space-y-1.5">
-          {overview.worktrees.map((worktree) => {
-            const status = overview.statuses[worktree.id]
+          {worktrees.map((worktree) => {
+            const status = statuses[worktree.id]
             return (
               <li
                 key={worktree.id}
@@ -331,6 +354,7 @@ export function ProjectWorktreesTab({
                                 deleteBranch: true,
                               }),
                             )
+                            setWorktrees((current) => current.filter((w) => w.id !== worktree.id))
                             setConfirmRemove(null)
                             setDirtyWarning(null)
                           })
@@ -359,6 +383,7 @@ export function ProjectWorktreesTab({
                         run(async () => {
                           try {
                             unwrap(await removeProjectWorktree({ workspaceSlug, projectId, worktreeId: worktree.id }))
+                            setWorktrees((current) => current.filter((w) => w.id !== worktree.id))
                           } catch (err) {
                             // A dirty worktree needs an explicit decision, so
                             // escalate to the confirm affordance rather than
