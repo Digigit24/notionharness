@@ -20,7 +20,7 @@
  */
 import { useCallback, useMemo, useState, useTransition } from 'react'
 import Link from 'next/link'
-import { FileWarning, GitBranch, Send, WrapText } from 'lucide-react'
+import { FileWarning, FolderTree, GitBranch, Send, WrapText } from 'lucide-react'
 import {
   addReviewCommentAction,
   approveAndMergeRun,
@@ -67,6 +67,7 @@ export function ReviewSurface({
   files,
   initialComments,
   initialPatches,
+  projectId,
 }: {
   workspaceSlug: string
   run: Run
@@ -79,6 +80,10 @@ export function ReviewSurface({
    * file's, so the diff is on screen at first paint instead of after a round
    * trip. Keyed by path. */
   initialPatches: Record<string, string>
+  /** The project whose repository these files belong to, when the run has one.
+   * Null for a run with no project, in which case no cross-link is offered —
+   * a link that leads nowhere is worse than its absence. */
+  projectId?: number | null
 }) {
   const tree = useMemo(() => buildFileTree(files), [files])
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(tree.map((n) => n.path)))
@@ -440,6 +445,25 @@ export function ReviewSurface({
         </div>
       </div>
 
+      {/* R9 shows a file whole; this shows the fragment that changed. Crossing
+          over used to mean going back to the project page and hunting for the
+          path. Offered only when the run actually belongs to a project — a
+          link that leads nowhere is worse than its absence. */}
+      {projectId != null && (
+        <div>
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-black/40 dark:text-white/40">
+            Repository
+          </h2>
+          <Link
+            href={`/workspace/${workspaceSlug}/projects/${projectId}/files`}
+            className="mt-1 flex items-center gap-1 text-xs text-black/60 underline underline-offset-2 hover:text-black dark:text-white/60 dark:hover:text-white"
+          >
+            <FolderTree size={12} />
+            Browse these files whole
+          </Link>
+        </div>
+      )}
+
       <div>
         <h2 className="text-xs font-semibold uppercase tracking-wide text-black/40 dark:text-white/40">Branch</h2>
         <div className="mt-1 flex flex-col gap-1 text-xs text-black/60 dark:text-white/60">
@@ -459,6 +483,16 @@ export function ReviewSurface({
           <span className={worktreeState.worktreeExists ? '' : 'italic'}>
             {worktreeState.worktreeExists ? 'worktree on disk' : 'worktree already cleaned up'}
           </span>
+          {/* Worth stating, because the obvious inference is wrong: a reclaimed
+              worktree does NOT cost you this review. The diff is computed from
+              the bare clone (`ref...branch`), not from the checkout, and
+              retention removes the directory without deleting the branch. Only
+              UNCOMMITTED work in the directory is lost. */}
+          {!worktreeState.worktreeExists && worktreeState.branchExists && (
+            <span className="text-black/40 dark:text-white/40">
+              The diff below is read from the branch, so it is unaffected.
+            </span>
+          )}
           {worktreeState.hasUncommittedChanges && (
             <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
               <FileWarning size={12} /> uncommitted changes in worktree

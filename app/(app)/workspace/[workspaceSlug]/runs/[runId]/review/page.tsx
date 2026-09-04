@@ -1,7 +1,7 @@
 import { notFound } from 'next/navigation'
 import { getPayloadClient } from '@/lib/payload'
 import { getWorkspaceBySlug } from '@/lib/pages-cache'
-import { getRun } from '@/lib/broker'
+import { getRun, getChatSession } from '@/lib/broker'
 import { loadRunReview, locateRunWorktree } from '@/lib/run-worktrees/review'
 import { getFileDiff } from '@/lib/run-worktrees/diff'
 import { listReviewComments } from '@/lib/review-comments'
@@ -63,8 +63,31 @@ export default async function RunReviewPage({
     }
   }
 
+  // R9 <-> R5: which project's repository these files live in.
+  //
+  // The review shows a FRAGMENT of a file — the lines that changed. The
+  // question it cannot answer is "what does this file look like as a whole",
+  // and R9's browser is exactly that. Resolving the project here means a
+  // reviewer can cross over without going back to the project page and
+  // hunting for the path.
+  //
+  // A run reaches a project three ways (task, session, page), the same join
+  // `listRunsForProject` uses. Only the task route is cheap here because the
+  // task is already loaded; the others cost a query and are worth it, since a
+  // Work-session run is the common case and the link would otherwise be
+  // missing exactly where reviews are most used.
+  let projectId: number | null = null
+  if (task) {
+    projectId = typeof task.project === 'number' ? task.project : (task.project?.id ?? null)
+  } else if (run.sessionId) {
+    projectId = await getChatSession(run.sessionId)
+      .then((session) => session?.projectId ?? null)
+      .catch(() => null)
+  }
+
   return (
     <ReviewSurface
+      projectId={projectId}
       workspaceSlug={workspace.slug}
       run={run}
       taskTitle={task?.title ?? null}
