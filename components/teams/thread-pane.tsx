@@ -66,6 +66,7 @@ export function ThreadPane({
   onPatchMessage,
   onDismissPending,
   onOpenTask,
+  onOpenRun,
 }: {
   workspaceId: number
   workspaceSlug: string
@@ -105,6 +106,7 @@ export function ThreadPane({
   onPatchMessage: (id: number, patch: Partial<RoomFeedMessage>) => void
   onDismissPending: (runId: number) => void
   onOpenTask: (taskId: number) => void
+  onOpenRun: (runId: number) => void
 }) {
   const scrollerRef = useRef<HTMLDivElement>(null)
   const root = messages[0] ?? null
@@ -272,6 +274,8 @@ export function ThreadPane({
                 taskChip={taskChipFor(tasks, slots, root.taskId)}
                 runSessionId={runLinkFor(root, runs, slots)?.sessionId ?? null}
                 runIsExact={runLinkFor(root, runs, slots)?.exact ?? false}
+                runId={runLinkFor(root, runs, slots)?.runId}
+                onOpenRun={onOpenRun}
                 workspaceSlug={workspaceSlug}
                 focused={false}
                 threadOpen
@@ -296,8 +300,8 @@ export function ThreadPane({
                         slotName={slot?.displayName ?? null}
                         canDecide={row.requestedUserId === currentUserId}
                         holderName={slots.find((s) => s.userId === row.requestedUserId)?.displayName ?? null}
-                        workspaceSlug={workspaceSlug}
                         onSettled={onApprovalSettled}
+                        onOpenRun={onOpenRun}
                       />
                     </li>
                   )
@@ -321,6 +325,8 @@ export function ThreadPane({
                   taskChip={taskChipFor(tasks, slots, reply.taskId)}
                   runSessionId={runLinkFor(reply, runs, slots)?.sessionId ?? null}
                   runIsExact={runLinkFor(reply, runs, slots)?.exact ?? false}
+                  runId={runLinkFor(reply, runs, slots)?.runId}
+                  onOpenRun={onOpenRun}
                   workspaceSlug={workspaceSlug}
                   focused={false}
                   threadOpen={false}
@@ -337,11 +343,11 @@ export function ThreadPane({
                 <PendingReplyRow
                   key={row.runId}
                   workspaceId={workspaceId}
-                  workspaceSlug={workspaceSlug}
                   teamId={teamId}
                   pending={row}
                   slots={slots}
                   onDismiss={onDismissPending}
+                  onOpenRun={onOpenRun}
                 />
               ))}
             </ul>

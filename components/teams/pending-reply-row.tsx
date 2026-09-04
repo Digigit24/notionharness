@@ -1,7 +1,6 @@
 'use client'
 
 import { useCallback, useMemo } from 'react'
-import Link from 'next/link'
 import { ExternalLink, Loader2, TriangleAlert, X } from 'lucide-react'
 import { unwrap } from '@/lib/failures'
 import { cn } from '@/lib/utils'
@@ -40,18 +39,21 @@ import { colourOf, initialsOf, slotById, type PendingReply, type TeamSlotView } 
  */
 export function PendingReplyRow({
   workspaceId,
-  workspaceSlug,
   teamId,
   pending,
   slots,
   onDismiss,
+  onOpenRun,
 }: {
   workspaceId: number
-  workspaceSlug: string
   teamId: number
   pending: PendingReply
   slots: TeamSlotView[]
   onDismiss: (runId: number) => void
+  /** R14-P0.5 — this row already streams `pending.runId` inline; opening the
+   * sheet gives the SAME run more room (full transcript width, no ghost-row
+   * height cap) rather than a different view of it. */
+  onOpenRun: (runId: number) => void
 }) {
   const slot = slotById(slots, pending.slotId)
 
@@ -160,15 +162,14 @@ export function PendingReplyRow({
               · {toolCount} tool {toolCount === 1 ? 'call' : 'calls'}
             </span>
           )}
-          {pending.sessionId != null && (
-            <Link
-              href={`/workspace/${workspaceSlug}/work?session=${pending.sessionId}`}
-              className="inline-flex items-center gap-1 text-[11px] text-indigo-600 hover:underline dark:text-indigo-400"
-            >
-              <ExternalLink size={10} />
-              See full run
-            </Link>
-          )}
+          <button
+            type="button"
+            onClick={() => onOpenRun(pending.runId)}
+            className="inline-flex items-center gap-1 text-[11px] text-indigo-600 hover:underline dark:text-indigo-400"
+          >
+            <ExternalLink size={10} />
+            See full run
+          </button>
         </div>
 
         {text.trim().length > 0 ? (

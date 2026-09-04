@@ -14,6 +14,7 @@ import {
   createTaskFromMessageAction,
   createTeamTaskAction,
   joinChannelAction,
+  loadChannelRunSnapshotAction,
   loadChannelRunsAction,
   loadThreadAction,
   markChannelReadAction,
@@ -41,6 +42,7 @@ import { CanvasPane } from './canvas-pane'
 import { LanesView } from './lanes-view'
 import { BoardView } from './board-view'
 import { RosterPanel } from './roster-panel'
+import { RunDetailSheet } from '@/components/runs/run-detail-sheet'
 
 type RoomView = 'channel' | 'lanes' | 'board'
 
@@ -201,6 +203,32 @@ export function TeamRoom({
   const [retiredRunIds, setRetiredRunIds] = useState<Set<number>>(() => new Set())
   /** The board card to scroll to and flash, set by a task chip in the feed. */
   const [focusTaskId, setFocusTaskId] = useState<number | null>(null)
+  /** R14-P0.5 — the run-detail sheet's own state, owned here rather than by
+   * whichever row opened it: the sheet outlives the row that triggered it
+   * (a ghost row can finish and unmount while its sheet is still open), and
+   * there is exactly one sheet per room regardless of how many rows can open
+   * one. */
+  const [sheetRunId, setSheetRunId] = useState<number | null>(null)
+  const openRunSheet = useCallback((runId: number) => setSheetRunId(runId), [])
+  // Same authorization boundary as every other run-reader in this room: the
+  // channel-scoped action, which checks the run's message belongs to this
+  // team. No new "any run" loader — that would widen what the sheet can read
+  // beyond what the row that opened it was ever allowed to see.
+  const loadRunSnapshot = useCallback(
+    async (runId: number) => unwrap(await loadChannelRunSnapshotAction({ workspaceId, teamId: channel.id, runId })),
+    [workspaceId, channel.id],
+  )
+  // The Work page is keyed by session, not run — `runs` (keyed by message id)
+  // is the only place this component already has that mapping, so the sheet's
+  // "Open in Work" link is found the same way `runLinkFor` finds it for the
+  // feed rows themselves, rather than adding a second lookup path.
+  const sheetSessionId = useMemo(() => {
+    if (sheetRunId == null) return null
+    for (const link of runs.values()) {
+      if (link.runId === sheetRunId) return link.sessionId
+    }
+    return null
+  }, [sheetRunId, runs])
 
   // The server re-renders this component with fresh props after any action
   // that calls revalidatePath (adding a slot, changing the leader). Without
@@ -1204,6 +1232,7 @@ export function TeamRoom({
             mentionsAtOpen={initialUnread.mentionCount}
             threadRootId={threadRootId}
             onOpenThread={openThread}
+            onOpenRun={openRunSheet}
             onDispatched={onDispatched}
             onOptimisticInsert={insertOptimistic}
             onOptimisticSettle={settleOptimistic}
@@ -1274,6 +1303,7 @@ export function TeamRoom({
             onOptimisticDiscard={discardOptimistic}
             onPatchMessage={patchMessage}
             onDismissPending={dismissPending}
+            onOpenRun={openRunSheet}
             onOpenTask={openTask}
           />
         )}
@@ -1299,6 +1329,16 @@ export function TeamRoom({
           agents={agents}
           users={users}
           onSlotsChanged={setSlots}
+        />
+
+        <RunDetailSheet
+          open={sheetRunId != null}
+          onOpenChange={(open) => {
+            if (!open) setSheetRunId(null)
+          }}
+          runId={sheetRunId}
+          loader={loadRunSnapshot}
+          fullPageHref={sheetSessionId != null ? `/workspace/${workspaceSlug}/work?session=${sheetSessionId}` : undefined}
         />
       </div>
     </div>

@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import Link from 'next/link'
 import { ExternalLink, ShieldAlert, ShieldCheck, ShieldX } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { ChannelApproval } from '@/lib/broker/channels'
@@ -63,8 +62,8 @@ export function ApprovalStrip({
   slotName,
   canDecide,
   holderName,
-  workspaceSlug,
   onSettled,
+  onOpenRun,
 }: {
   approval: ChannelApproval
   /** The member that is blocked, when the slot is still on the roster. */
@@ -73,7 +72,10 @@ export function ApprovalStrip({
   canDecide: boolean
   /** Who has to decide, shown to everyone else instead of dead buttons. */
   holderName: string | null
-  workspaceSlug: string
+  /** R14-P0.5 — opens the run-detail sheet in place. `approval.runId` is
+   * always present (unlike a message's derived link), so this strip never
+   * needs the Work-page fallback `MessageRow` does. */
+  onOpenRun: (runId: number) => void
   /** Lets the room drop the row the instant the server accepts, rather than
    * leaving a decided request on screen until the next poll. */
   onSettled: (externalId: string) => void
@@ -163,16 +165,15 @@ export function ApprovalStrip({
           </span>
         )}
 
-        {approval.sessionId != null && (
-          <Link
-            href={`/workspace/${workspaceSlug}/work?session=${approval.sessionId}`}
-            title="Open the run that is blocked — the tool call, its arguments, and everything before it."
-            className="inline-flex shrink-0 items-center gap-1 rounded px-1 py-0.5 text-black/45 hover:bg-black/[.05] hover:text-black/70 dark:text-white/45 dark:hover:bg-white/[.08] dark:hover:text-white/70"
-          >
-            <ExternalLink size={11} />
-            Run
-          </Link>
-        )}
+        <button
+          type="button"
+          onClick={() => onOpenRun(approval.runId)}
+          title="Open the run that is blocked — the tool call, its arguments, and everything before it, without leaving the channel."
+          className="inline-flex shrink-0 items-center gap-1 rounded px-1 py-0.5 text-black/45 hover:bg-black/[.05] hover:text-black/70 dark:text-white/45 dark:hover:bg-white/[.08] dark:hover:text-white/70"
+        >
+          <ExternalLink size={11} />
+          Run
+        </button>
       </div>
 
       {approval.detail && !settled && (

@@ -71,6 +71,7 @@ export function ChannelView({
   mentionsAtOpen,
   threadRootId,
   onOpenThread,
+  onOpenRun,
   onDispatched,
   onOptimisticInsert,
   onOptimisticSettle,
@@ -140,6 +141,10 @@ export function ChannelView({
   mentionsAtOpen: number
   threadRootId: number | null
   onOpenThread: (rootId: number) => void
+  /** R14-P0.5 — opens the run-detail sheet in place of a navigation. See
+   * `MessageRow`'s own `onOpenRun` for why this only fires for an EXACT
+   * run link. */
+  onOpenRun: (runId: number) => void
   /**
    * What a send produced: the row, and the two lists that used to be dropped
    * on the floor.
@@ -673,6 +678,8 @@ export function ChannelView({
                   taskChip={taskChipFor(tasks, slots, message.taskId)}
                   runSessionId={runLink?.sessionId ?? null}
                   runIsExact={runLink?.exact ?? false}
+                  runId={runLink?.runId}
+                  onOpenRun={onOpenRun}
                   workspaceSlug={workspaceSlug}
                   focused={focusedId === message.id}
                   threadOpen={threadRootId === message.id}
@@ -723,8 +730,8 @@ export function ChannelView({
                         holderName={
                           slots.find((s) => s.userId === row.requestedUserId)?.displayName ?? null
                         }
-                        workspaceSlug={workspaceSlug}
                         onSettled={onApprovalSettled}
+                        onOpenRun={onOpenRun}
                       />
                     </li>
                   )
@@ -736,11 +743,11 @@ export function ChannelView({
                   <PendingReplyRow
                     key={row.runId}
                     workspaceId={workspaceId}
-                    workspaceSlug={workspaceSlug}
                     teamId={teamId}
                     pending={row}
                     slots={slots}
                     onDismiss={onDismissPending}
+                    onOpenRun={onOpenRun}
                   />
                 ))}
               </Fragment>

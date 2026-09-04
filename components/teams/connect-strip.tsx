@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import Link from 'next/link'
 import { ExternalLink, Plug, PlugZap } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { ChannelApproval } from '@/lib/broker/channels'
@@ -34,8 +33,8 @@ export function ConnectStrip({
   slotName,
   canDecide,
   holderName,
-  workspaceSlug,
   onSettled,
+  onOpenRun,
 }: {
   approval: ChannelApproval
   /** The member that is blocked, when the slot is still on the roster. */
@@ -44,7 +43,10 @@ export function ConnectStrip({
   canDecide: boolean
   /** Who has to act, shown to everyone else instead of dead buttons. */
   holderName: string | null
-  workspaceSlug: string
+  /** R14-P0.5 — opens the run-detail sheet in place, matching ApprovalStrip's
+   * own prop of the same name and shape (the two share a `Strip` reference
+   * at their call sites). */
+  onOpenRun: (runId: number) => void
   /** Lets the room drop the row the instant the server accepts, rather than
    * leaving a settled request on screen until the next poll. */
   onSettled: (externalId: string) => void
@@ -131,16 +133,15 @@ export function ConnectStrip({
           </span>
         )}
 
-        {approval.sessionId != null && (
-          <Link
-            href={`/workspace/${workspaceSlug}/work?session=${approval.sessionId}`}
-            title="Open the run that is waiting — what it was doing, and everything before it."
-            className="inline-flex shrink-0 items-center gap-1 rounded px-1 py-0.5 text-black/45 hover:bg-black/[.05] hover:text-black/70 dark:text-white/45 dark:hover:bg-white/[.08] dark:hover:text-white/70"
-          >
-            <ExternalLink size={11} />
-            Run
-          </Link>
-        )}
+        <button
+          type="button"
+          onClick={() => onOpenRun(approval.runId)}
+          title="Open the run that is waiting — what it was doing, and everything before it, without leaving the channel."
+          className="inline-flex shrink-0 items-center gap-1 rounded px-1 py-0.5 text-black/45 hover:bg-black/[.05] hover:text-black/70 dark:text-white/45 dark:hover:bg-white/[.08] dark:hover:text-white/70"
+        >
+          <ExternalLink size={11} />
+          Run
+        </button>
       </div>
 
       {/* The row disappears by itself when the callback settles the request —

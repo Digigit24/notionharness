@@ -61,6 +61,8 @@ export function MessageRow({
   taskChip,
   runSessionId,
   runIsExact,
+  runId,
+  onOpenRun,
   workspaceSlug,
   focused,
   threadOpen,
@@ -85,6 +87,12 @@ export function MessageRow({
   /** False when the link is the agent's SESSION rather than the exact run —
    * the tooltip says so rather than overclaiming. */
   runIsExact: boolean
+  /** R14-P0.5 — set only in the exact case (see `runLinkFor`). When present,
+   * "See full run" opens the run-detail sheet in place instead of navigating
+   * to Work; a session-only link (no exact run id) still goes to Work,
+   * because the sheet's loader needs a specific run, not just a session. */
+  runId?: number
+  onOpenRun?: (runId: number) => void
   workspaceSlug: string
   /** Keyboard cursor. Drawn as a ring, never as a background: a focused row
    * that is also a mention must still read as a mention. */
@@ -348,19 +356,31 @@ export function MessageRow({
           read" is a fact about the message, and hiding facts behind a hover
           is how people never learn they exist.
         */}
-        {runSessionId != null && (
-          <Link
-            href={`/workspace/${workspaceSlug}/work?session=${runSessionId}`}
-            title={
-              runIsExact
-                ? 'Open the run this message started — every tool call, terminal line and diff.'
-                : "Open this member's conversation in Work. `team_messages` carries no run id, so the exact run behind this reply cannot be named — this is the session it ran in."
-            }
+        {runSessionId != null && runIsExact && runId != null && onOpenRun ? (
+          <button
+            type="button"
+            onClick={() => onOpenRun(runId)}
+            title="Open the run this message started — every tool call, terminal line and diff, without leaving the channel."
             className="mt-1 mr-2 inline-flex items-center gap-1 rounded px-1 py-0.5 text-xs text-black/45 hover:bg-black/[.05] hover:text-black/70 dark:text-white/45 dark:hover:bg-white/[.08] dark:hover:text-white/70"
           >
             <ExternalLink size={11} />
             See full run
-          </Link>
+          </button>
+        ) : (
+          runSessionId != null && (
+            <Link
+              href={`/workspace/${workspaceSlug}/work?session=${runSessionId}`}
+              title={
+                runIsExact
+                  ? 'Open the run this message started — every tool call, terminal line and diff.'
+                  : "Open this member's conversation in Work. `team_messages` carries no run id, so the exact run behind this reply cannot be named — this is the session it ran in."
+              }
+              className="mt-1 mr-2 inline-flex items-center gap-1 rounded px-1 py-0.5 text-xs text-black/45 hover:bg-black/[.05] hover:text-black/70 dark:text-white/45 dark:hover:bg-white/[.08] dark:hover:text-white/70"
+            >
+              <ExternalLink size={11} />
+              See full run
+            </Link>
+          )
         )}
 
         {/* The thread summary. A root that has replies always shows this, open
