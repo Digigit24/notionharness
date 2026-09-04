@@ -6,6 +6,7 @@ import { ExternalLink, ListPlus, MailX, MessageSquareReply, SmilePlus } from 'lu
 import type { TeamTaskStatus } from '@/lib/broker'
 import { cn } from '@/lib/utils'
 import { formatRelativeTime } from '@/lib/relative-time'
+import { ChannelAttachment } from '@/components/thread/Attachment'
 import {
   MESSAGE_KIND_CLASS,
   MESSAGE_KIND_LABEL,
@@ -268,6 +269,18 @@ export function MessageRow({
             ),
           )}
         </p>
+
+        {/* R14-P0.4 — attachments render as part of the message content, not
+            as a status line: a photo or a file IS what was sent, the same way
+            the body text is, and grouping it under the body keeps one message
+            reading as one thing rather than as text-plus-an-attachment-widget. */}
+        {message.attachments.length > 0 && (
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            {message.attachments.map((mediaId) => (
+              <ChannelAttachment key={mediaId} mediaId={mediaId} />
+            ))}
+          </div>
+        )}
 
         {failedToSend && (
           <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-red-600 dark:text-red-400">
