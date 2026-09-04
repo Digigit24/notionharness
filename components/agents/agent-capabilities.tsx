@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { saveAgent } from '@/app/(app)/workspace/[workspaceSlug]/agents/actions'
 import { Button } from '@/components/ui/button'
 import type { Agent } from '@/components/agents/agent-editor'
+import { formatTimestamp } from '@/lib/relative-time'
 
 type SkillItem = {
   name: string
@@ -536,7 +537,7 @@ export function AgentCapabilities({
           <div className="max-h-60 space-y-2 overflow-y-auto pr-1">
             {skills.map((skill) => {
               const isBound = boundSkillNames.has(skill.name)
-              const infoBits = [formatBytes(skill.size), skill.modifiedAt ? new Date(skill.modifiedAt).toLocaleString() : null].filter(Boolean)
+              const infoBits = [formatBytes(skill.size), skill.modifiedAt ? formatTimestamp(skill.modifiedAt) : null].filter(Boolean)
               return (
                 <div key={skill.name} className="rounded-md border border-black/10 p-2 dark:border-white/10">
                   <div className="flex items-start justify-between gap-2">
@@ -735,7 +736,7 @@ export function AgentCapabilities({
         </div>
         {modelsRefreshedAt && (
           <p className="mt-1 text-[11px] text-black/50 dark:text-white/50">
-            Last refreshed {new Date(modelsRefreshedAt).toLocaleString()}
+            Last refreshed {formatTimestamp(modelsRefreshedAt)}
           </p>
         )}
         {modelsError && <p className="mt-2 text-xs text-red-600">{modelsError}</p>}

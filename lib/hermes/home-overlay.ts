@@ -159,6 +159,16 @@ export async function buildHermesHomeOverlay(opts: BuildHermesHomeOverlayOptions
   const taskRoot = resolve(opts.taskRoot ?? defaultTaskRoot())
 
   const homeDir = join(taskRoot, opts.runId)
+  // Start from a genuinely empty directory. `cleanup()` below is
+  // best-effort by design (Windows refuses to unlink a file the agent's
+  // process still has open, so a run can legitimately leave its overlay
+  // behind), and a retry of the same run id then hit
+  // `EEXIST: file already exists, link ...\.backup.lock` on the very first
+  // passthrough link and failed the whole run — confirmed live. Clearing
+  // first is safe: this path is a disposable per-run overlay, and the
+  // persistent stores it links out to (memories/, state.db) live elsewhere
+  // and are never inside it.
+  await rm(homeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(() => {})
   await mkdir(homeDir, { recursive: true })
 
   const hardlinkFallbackFor: string[] = []
@@ -175,6 +185,14 @@ export async function buildHermesHomeOverlay(opts: BuildHermesHomeOverlayOptions
   // agent-specific, every run reads the same live copy.
   for (const entry of baseEntries) {
     if (IDENTITY_SCOPED_ENTRIES.has(entry.name)) continue
+    // SQLite sidecars belong to the BASE home's own state.db, not to the
+    // per-conversation one linked in below. Linking `state.db-wal`/`-shm`
+    // next to a different database made SQLite replay the base's
+    // write-ahead log into the conversation's file — every run then logged
+    // "state.db schema is malformed", spent startup on a failed auto-repair,
+    // and littered `state.db.malformed-backup-*` copies. Skipping every
+    // `state.db*` entry (sidecars and those backups alike) is the fix.
+    if (entry.name.startsWith('state.db')) continue
     const target = join(baseHermesHome, entry.name)
     const dest = join(homeDir, entry.name)
     if (entry.isDirectory()) {

@@ -5,6 +5,7 @@ import { getPayloadClient } from '@/lib/payload'
 import { getWorkspaceBySlug } from '@/lib/pages-cache'
 import { getProjectUsageRollup } from '@/lib/broker'
 import { EmptyState } from '@/components/ui/empty-state'
+import { AddProjectForm } from '@/components/projects/add-project-form'
 
 // ROADMAP B-1 (project detail) — a minimal list route, added specifically so
 // the new `/projects/[projectId]` detail page isn't an orphan: previously no
@@ -42,19 +43,22 @@ export default async function ProjectsListPage({ params }: { params: Promise<{ w
   )
 
   return (
-    <main className="mx-auto w-full max-w-3xl px-6 py-8">
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold">Projects</h1>
-        <p className="mt-1 text-sm text-black/50 dark:text-white/50">
-          The grouping unit above tasks — every project&apos;s brief, tasks, pages, runs, files, and settings live on its own page.
-        </p>
+    <main className="w-full px-5 py-8">
+      <div className="mb-6 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold">Projects</h1>
+          <p className="mt-1 text-sm text-black/50 dark:text-white/50">
+            The grouping unit above tasks — every project&apos;s brief, tasks, pages, runs, files, and settings live on its own page.
+          </p>
+        </div>
+        <AddProjectForm workspaceId={workspace.id} workspaceSlug={workspace.slug} />
       </div>
 
       {result.docs.length === 0 ? (
         <EmptyState
           icon={<FolderKanban />}
           title="No projects yet"
-          description="Create a project from a task&apos;s Project field, or via the Payload admin, to see it here."
+          description="Create your first project above to get started."
         />
       ) : (
         <ul className="flex flex-col divide-y divide-black/5 rounded-lg border border-black/10 dark:divide-white/10 dark:border-white/10">

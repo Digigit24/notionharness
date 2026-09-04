@@ -1,6 +1,4 @@
 import { notFound } from 'next/navigation'
-import Link from 'next/link'
-import { ShieldAlert, Server, Sparkles, Blocks } from 'lucide-react'
 import { getWorkspaceBySlug } from '@/lib/pages-cache'
 import { Breadcrumbs } from '@/components/nav/breadcrumbs'
 import { SpendCapForm } from '@/components/workspace/spend-cap-form'
@@ -22,7 +20,7 @@ export default async function WorkspaceSettingsPage({
   if (!workspace) notFound()
 
   return (
-    <main className="mx-auto w-full max-w-2xl px-6 py-8">
+    <main className="w-full px-5 py-8">
       <div className="mb-6">
         <Breadcrumbs
           className="mb-2"
@@ -32,7 +30,10 @@ export default async function WorkspaceSettingsPage({
           ]}
         />
         <h1 className="text-2xl font-semibold">Settings</h1>
-        <p className="mt-1 text-sm text-black/50 dark:text-white/50">Workspace-level configuration.</p>
+        <p className="mt-1 text-sm text-black/50 dark:text-white/50">
+          Workspace-level configuration. Everything Hermes owns — models, providers, skills, connectors,
+          approvals — is in the sections beside this one.
+        </p>
       </div>
 
       <section className="rounded-lg border border-black/10 p-4 dark:border-white/10">
@@ -51,69 +52,6 @@ export default async function WorkspaceSettingsPage({
         </div>
       </section>
 
-      <section className="mt-6 rounded-lg border border-black/10 p-4 dark:border-white/10">
-        <div className="flex items-center gap-2">
-          <ShieldAlert size={14} className="text-black/40 dark:text-white/40" />
-          <h2 className="text-sm font-medium">Audit log</h2>
-        </div>
-        <p className="mt-1 text-xs text-black/50 dark:text-white/50">
-          Every recorded activity in this workspace — who did what, to what, and when.
-        </p>
-        <Link
-          href={`/workspace/${workspace.slug}/audit`}
-          className="mt-2 inline-block text-xs font-medium underline underline-offset-2"
-        >
-          Open the audit log →
-        </Link>
-      </section>
-
-      <section className="mt-6 rounded-lg border border-black/10 p-4 dark:border-white/10">
-        <div className="flex items-center gap-2">
-          <Server size={14} className="text-black/40 dark:text-white/40" />
-          <h2 className="text-sm font-medium">Runtimes</h2>
-        </div>
-        <p className="mt-1 text-xs text-black/50 dark:text-white/50">
-          Every runtime profile this workspace can dispatch to, and whether Hermes actually reached it.
-        </p>
-        <Link
-          href={`/workspace/${workspace.slug}/runtimes`}
-          className="mt-2 inline-block text-xs font-medium underline underline-offset-2"
-        >
-          Open runtimes →
-        </Link>
-      </section>
-
-      <section className="mt-6 rounded-lg border border-black/10 p-4 dark:border-white/10">
-        <div className="flex items-center gap-2">
-          <Sparkles size={14} className="text-black/40 dark:text-white/40" />
-          <h2 className="text-sm font-medium">Personality</h2>
-        </div>
-        <p className="mt-1 text-xs text-black/50 dark:text-white/50">
-          Hermes profiles and per-sender identity overrides — real, live data from this machine&apos;s Hermes install.
-        </p>
-        <Link
-          href={`/workspace/${workspace.slug}/personality`}
-          className="mt-2 inline-block text-xs font-medium underline underline-offset-2"
-        >
-          Open personality →
-        </Link>
-      </section>
-
-      <section className="mt-6 rounded-lg border border-black/10 p-4 dark:border-white/10">
-        <div className="flex items-center gap-2">
-          <Blocks size={14} className="text-black/40 dark:text-white/40" />
-          <h2 className="text-sm font-medium">MCP Connectors</h2>
-        </div>
-        <p className="mt-1 text-xs text-black/50 dark:text-white/50">
-          Browse Nous-approved MCP server presets bundled with this Hermes install.
-        </p>
-        <Link
-          href={`/workspace/${workspace.slug}/mcp-catalog`}
-          className="mt-2 inline-block text-xs font-medium underline underline-offset-2"
-        >
-          Open MCP connectors →
-        </Link>
-      </section>
     </main>
   )
 }

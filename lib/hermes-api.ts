@@ -10,20 +10,52 @@ import { getSession } from '@/lib/session'
 // developer's own Tailscale hostname baked into source, which meant nobody
 // else could point this app at their own Hermes without editing checked-in
 // code). `HERMES_API_BASE_URL` is required; see `assertHermesConfigured`.
+// REWIRED 2026-09-04 — these proxies now talk to the LOCAL Hermes dashboard
+// server (`hermes serve`), not to a remote `HERMES_API_BASE_URL`.
+//
+// The old target was Hermes's *gateway* API server
+// (`gateway/platforms/api_server.py`): an OpenAI-compatible chat surface with
+// bearer `API_SERVER_KEY` auth. It does not implement `/api/skills`,
+// `/api/mcp/servers`, `/api/profiles` or `/api/memories` at all — those live
+// only on the dashboard server (`hermes_cli/web_server.py` + `web_routers/`),
+// which is the same backend the Hermes desktop app spawns. So every page
+// built on these proxies was calling endpoints that were never there; the
+// agent Memories tab's permanent "Failed to load memories" was the most
+// visible symptom, and the skills and MCP views were quietly empty for the
+// same reason. See `lib/hermes/serve-supervisor.ts` for how the server is
+// started and authenticated.
+//
+// `profile` is forwarded verbatim, which is what makes every one of these
+// screens per-profile: the dashboard API scopes almost every route to a
+// profile's own HERMES_HOME when given `?profile=<name>`.
+import { getServeEndpoint } from '@/lib/hermes/serve-supervisor'
+
+/** Retained only so existing callers keep compiling; nothing reads it now. */
 export const HERMES_BASE_URL = process.env.HERMES_API_BASE_URL || ''
 export const HERMES_API_KEY = process.env.HERMES_API_KEY || ''
 
 /**
- * Every Hermes-proxying route should call this before doing anything else,
- * so an unconfigured installation gets one clear, actionable error instead
- * of a confusing downstream failure (an empty-string URL reaching `fetch`,
- * or a request silently going nowhere).
+ * A few call sites were written against endpoint names the dashboard server
+ * spells differently. Translating here keeps those routes working unchanged
+ * rather than leaving them silently 404ing, and each entry records the real
+ * path verified against the running server.
  */
+const PATH_MAP: Record<string, string> = {
+  '/api/crons': '/api/cron/jobs',
+  '/api/crons/create': '/api/cron/jobs',
+  '/api/models': '/api/model/options',
+}
+
+function mapPath(hermesPath: string): string {
+  return PATH_MAP[hermesPath] ?? hermesPath
+}
+
+/** Throws when Hermes cannot be located at all — kept for callers that
+ * pre-flight before proxying. The dashboard server is started on demand, so
+ * the only hard requirement is knowing where Hermes is installed. */
 export function assertHermesConfigured(): void {
-  if (!HERMES_BASE_URL) {
-    throw new Error(
-      'Hermes is not configured: set HERMES_API_BASE_URL (and HERMES_API_KEY if your Hermes requires one).',
-    )
+  if (!process.env.HERMES_HOME_BASE) {
+    throw new Error('Hermes is not configured: set HERMES_HOME_BASE to your Hermes install directory.')
   }
 }
 
@@ -37,23 +69,31 @@ export async function proxyToHermes(options: HermesProxyOptions) {
   if (!session) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
-  if (!HERMES_BASE_URL) {
+
+  const { hermesPath, searchParams, ...fetchOptions } = options
+
+  let baseUrl: string
+  let token: string
+  try {
+    const endpoint = await getServeEndpoint()
+    baseUrl = endpoint.baseUrl
+    token = endpoint.token
+  } catch (err) {
+    // A failed start is an operational problem worth naming precisely, not a
+    // generic 500 — this is the message that tells someone their Hermes
+    // install path is wrong or the server could not boot.
     return NextResponse.json(
-      { error: 'Hermes is not configured. Set HERMES_API_BASE_URL (and HERMES_API_KEY if required).' },
+      { error: err instanceof Error ? err.message : 'Could not reach the Hermes server.' },
       { status: 503 },
     )
   }
 
-  const { hermesPath, searchParams, ...fetchOptions } = options
-
-  const url = new URL(`${HERMES_BASE_URL}${hermesPath}`)
+  const url = new URL(`${baseUrl}${mapPath(hermesPath)}`)
   if (searchParams) {
     for (const [key, value] of Object.entries(searchParams)) {
       if (value !== undefined) {
         if (Array.isArray(value)) {
-          for (const v of value) {
-            url.searchParams.append(key, v)
-          }
+          for (const v of value) url.searchParams.append(key, v)
         } else {
           url.searchParams.set(key, value)
         }
@@ -62,15 +102,25 @@ export async function proxyToHermes(options: HermesProxyOptions) {
   }
 
   const headers: HeadersInit = {
-    'Authorization': `Bearer ${HERMES_API_KEY}`,
+    'X-Hermes-Session-Token': token,
     'Content-Type': 'application/json',
     ...(fetchOptions.headers || {}),
   }
 
-  const response = await fetch(url.toString(), {
-    ...fetchOptions,
-    headers,
-  })
+  let response: Response
+  try {
+    response = await fetch(url.toString(), {
+      ...fetchOptions,
+      headers,
+      cache: 'no-store',
+      signal: AbortSignal.timeout(60_000),
+    })
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'The Hermes server did not respond.' },
+      { status: 504 },
+    )
+  }
 
   const data = await response.text()
   let parsed: unknown

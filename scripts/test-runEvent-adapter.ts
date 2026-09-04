@@ -120,9 +120,10 @@ function main() {
             break
           case 'tool_call':
             summary = `🔧 ${content.toolName}(${JSON.stringify(content.toolInput).slice(0, 40)})`
+            if (content.toolOutput !== undefined) summary += ` → ${JSON.stringify(content.toolOutput).slice(0, 40)}`
             break
-          case 'tool_result':
-            summary = `✓ result from ${content.toolCallId}`
+          case 'terminal':
+            summary = `$ ${content.text.slice(0, 60)}`
             break
         }
         if (summary) {

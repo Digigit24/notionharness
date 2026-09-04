@@ -1,7 +1,7 @@
 'use client'
 
 import { ReactNode } from 'react'
-import { Bubble } from './Bubble'
+import { ToolCard } from './ToolCard'
 
 /**
  * Tool renderer registry
@@ -16,6 +16,18 @@ export interface ToolRendererContext {
   toolInput: Record<string, unknown>
   toolOutput?: unknown
   isError?: boolean
+  /** How long the call took, from `tool_call` to its `tool_result`. */
+  durationMs?: number
+  /** Paths the call touches, from ACP `ToolCall.locations`. */
+  toolLocations?: string[]
+  /** ACP tool kind (read/edit/search/execute/…). */
+  toolKind?: string
+  /** When the call started — used to detect a call that never returned. */
+  startedAt?: string
+  /** Coarse wall clock from the Thread's single shared timer. */
+  now?: number
+  /** The owning run reached a terminal status. */
+  runEnded?: boolean
 }
 
 export type ToolRenderer = (ctx: ToolRendererContext) => ReactNode
@@ -39,23 +51,17 @@ export function getToolRenderer(toolName: string): ToolRenderer {
 /**
  * Default tool renderer — displays tool call and result as JSON
  */
-export const defaultToolRenderer: ToolRenderer = (ctx) => {
-  return (
-    <div className="flex flex-col gap-2">
-      <Bubble type="tool-call" metadata={{ toolName: ctx.toolName }}>
-        <div className="whitespace-pre-wrap break-words">
-          {JSON.stringify(ctx.toolInput, null, 2)}
-        </div>
-      </Bubble>
-      {ctx.toolOutput !== undefined && (
-        <Bubble type="tool-result" metadata={{ isError: ctx.isError }}>
-          <div className="whitespace-pre-wrap break-words">
-            {typeof ctx.toolOutput === 'string'
-              ? ctx.toolOutput
-              : JSON.stringify(ctx.toolOutput, null, 2)}
-          </div>
-        </Bubble>
-      )}
-    </div>
-  )
-}
+export const defaultToolRenderer: ToolRenderer = (ctx) => (
+  <ToolCard
+    toolName={ctx.toolName}
+    toolInput={ctx.toolInput}
+    toolOutput={ctx.toolOutput}
+    isError={ctx.isError}
+    durationMs={ctx.durationMs}
+    toolLocations={ctx.toolLocations}
+    toolKind={ctx.toolKind}
+    startedAt={ctx.startedAt}
+    now={ctx.now}
+    runEnded={ctx.runEnded}
+  />
+)

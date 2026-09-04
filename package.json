@@ -64,7 +64,8 @@
     "ws": "^8.18.3",
     "yaml": "^2.9.0",
     "yjs": "^13.6.32",
-    "zod": "^4.5.4"
+    "zod": "^4.5.4",
+    "zod-v3": "npm:zod@3.25.76"
   },
   "devDependencies": {
     "@better-auth/cli": "^1.4.22",

@@ -280,7 +280,7 @@ function projectEvent(
         id: redacted.id,
         title: redacted.title,
         detail: redacted.detail,
-        options: [...redacted.options],
+        options: redacted.options.map((option) => option.label ?? option.optionId),
       }
     case 'file_change':
       return {

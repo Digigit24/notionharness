@@ -1,11 +1,12 @@
 'use client'
 
 import { ReactNode } from 'react'
+import { Brain, CheckCircle2, Wrench, XCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 /**
- * Bubble component for individual content pieces within a message
- * Supports text, code, thinking, tool calls, and tool results
+ * Bubble component for individual content pieces within a message.
+ * Supports text, code, thinking, tool calls, and tool results.
  */
 export type BubbleType = 'text' | 'code' | 'thinking' | 'tool-call' | 'tool-result'
 
@@ -17,30 +18,43 @@ export interface BubbleProps {
 }
 
 export function Bubble({ type = 'text', children, className, metadata }: BubbleProps) {
-  const typeStyles = {
+  const typeStyles: Record<BubbleType, string> = {
     text: 'bg-transparent',
-    code: 'bg-gray-100 dark:bg-gray-800 font-mono text-sm',
-    thinking: 'bg-blue-50 dark:bg-blue-900/20 border-l-2 border-blue-500 italic',
+    code: 'rounded-md bg-black/[0.04] font-mono text-[13px] dark:bg-white/[0.06]',
+    thinking:
+      'rounded-md border border-black/10 bg-black/[0.02] text-[13px] text-black/60 dark:border-white/10 dark:bg-white/[0.03] dark:text-white/50',
     'tool-call':
-      'bg-purple-50 dark:bg-purple-900/20 border-l-2 border-purple-500 font-mono text-sm',
+      'rounded-md border border-black/10 bg-black/[0.02] font-mono text-[12px] dark:border-white/10 dark:bg-white/[0.03]',
     'tool-result':
-      'bg-green-50 dark:bg-green-900/20 border-l-2 border-green-500 font-mono text-sm',
+      'rounded-md border border-emerald-500/20 bg-emerald-500/[0.05] font-mono text-[12px] dark:border-emerald-400/20 dark:bg-emerald-400/[0.06]',
   }
 
   return (
-    <div className={cn('p-2', typeStyles[type], className)}>
-      {type === 'thinking' && <span className="text-xs text-gray-600 dark:text-gray-400">💭 </span>}
+    <div className={cn('px-3 py-2', typeStyles[type], className)}>
+      {type === 'thinking' && (
+        <span className="mb-1 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-black/35 dark:text-white/35">
+          <Brain size={11} /> Thinking
+        </span>
+      )}
       {type === 'tool-call' && (
-        <span className="text-xs text-purple-600 dark:text-purple-400">
-          🔧 {metadata?.toolName ? String(metadata.toolName) : ''}:{' '}
+        <span className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-black/50 dark:text-white/50">
+          <Wrench size={11} /> {metadata?.toolName ? String(metadata.toolName) : 'Tool call'}
         </span>
       )}
       {type === 'tool-result' && (
-        <span className="text-xs text-green-600 dark:text-green-400">
-          ✓ {metadata?.isError ? '(error)' : ''}{' '}
+        <span
+          className={cn(
+            'mb-1 flex items-center gap-1.5 text-[11px] font-medium',
+            metadata?.isError ? 'text-red-500' : 'text-emerald-600 dark:text-emerald-400',
+          )}
+        >
+          {metadata?.isError ? <XCircle size={11} /> : <CheckCircle2 size={11} />}
+          {metadata?.isError ? 'Error' : 'Result'}
         </span>
       )}
-      <span>{children}</span>
+      <div className={cn(type === 'thinking' && 'italic', 'whitespace-pre-wrap break-words leading-relaxed')}>
+        {children}
+      </div>
     </div>
   )
 }

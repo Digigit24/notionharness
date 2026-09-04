@@ -8,10 +8,13 @@ import { registerNativeDatabaseSlashMenuItem } from '@/components/editor/blocks/
 import { RunCardBlockSchema } from '@/components/editor/blocks/run-card/schema'
 import { RunCardBlockSpec } from '@/components/editor/blocks/run-card/spec'
 import { TaskBlockSchema } from '@/components/editor/blocks/task/schema'
+import { AgentSessionBlockSchema } from '@/components/editor/blocks/agent-session/schema'
 import { TaskBlockSpec } from '@/components/editor/blocks/task/spec'
+import { AgentSessionBlockSpec } from '@/components/editor/blocks/agent-session/spec'
 import { registerTaskSlashMenuItem } from '@/components/editor/blocks/task/slash-menu'
 import { registerPageCommandsSlashMenuItems } from '@/components/editor/slash-commands/page-commands'
 import { MentionSpec, mentionPageConfig } from '@/components/editor/mentions/spec'
+import { MentionAwareDefaultInlineManagerExtension } from '@/components/editor/mentions/inline-manager-override'
 import { askAgentPageConfig } from '@/components/editor/agent-thread/toolbar-trigger'
 import { ConfigExtension } from '@/lib/blocksuite-block-std'
 // Side-effect only: registers the "Ask agent" handler the toolbar trigger
@@ -47,11 +50,13 @@ function ensureBlockSuiteEffects() {
       import('@/components/editor/blocks/native-database/effects'),
       import('@/components/editor/blocks/run-card/effects'),
       import('@/components/editor/blocks/task/effects'),
+      import('@/components/editor/blocks/agent-session/effects'),
       import('@/components/editor/mentions/effects'),
-    ]).then(([, nativeDatabaseModule, runCardModule, taskModule, mentionsModule]) => {
+    ]).then(([, nativeDatabaseModule, runCardModule, taskModule, agentSessionModule, mentionsModule]) => {
       nativeDatabaseModule.effects()
       runCardModule.effects()
       taskModule.effects()
+      agentSessionModule.effects()
       mentionsModule.effects()
     })
   }
@@ -142,7 +147,9 @@ export function BlockSuiteEditor({
         const { PageEditorBlockSpecs } = blocks
         if (cancelled) return
 
-        const schema = new Schema().register(AffineSchemas).register([NativeDatabaseBlockSchema, RunCardBlockSchema, TaskBlockSchema])
+        const schema = new Schema()
+          .register(AffineSchemas)
+          .register([NativeDatabaseBlockSchema, RunCardBlockSchema, TaskBlockSchema, AgentSessionBlockSchema])
         const collection = new DocCollection({ schema })
         collection.meta.initialize()
 
@@ -179,7 +186,15 @@ export function BlockSuiteEditor({
           ...NativeDatabaseBlockSpec,
           ...RunCardBlockSpec,
           ...TaskBlockSpec,
+          ...AgentSessionBlockSpec,
           ...MentionSpec,
+          // Must come AFTER `...PageEditorBlockSpecs` above (array order =
+          // setup-call order): this uses `di.override`, not `di.addImpl`, to
+          // replace `DefaultInlineManagerExtension`'s registration — if the
+          // stock spec's own `di.addImpl` ran AFTER ours instead, it would
+          // throw `DuplicateServiceDefinitionError` trying to register a slot
+          // we'd already filled. See mentions/inline-manager-override.ts.
+          MentionAwareDefaultInlineManagerExtension,
           // Merged into a single `ConfigExtension('affine:page', ...)` call —
           // mentions/spec.ts and agent-thread/toolbar-trigger.ts each need an
           // `affine:page` config, but BlockSuite throws

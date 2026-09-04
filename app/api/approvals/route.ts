@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getCurrentPayloadUser } from '@/lib/current-user'
-import { resolveApproval, listPendingApprovalsForUser, getApproval } from '@/lib/hermes/approval-helpers'
+import {
+  resolveApproval,
+  listPendingApprovalsForUser,
+  getApproval,
+  getApprovalByExternalId,
+} from '@/lib/hermes/approval-helpers'
 
 // P5.4 — identity always comes from the authenticated session, never a
 // client-supplied header (same rule as enqueuePageRun / live-state): a
@@ -19,18 +24,26 @@ export async function POST(req: NextRequest) {
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
 
   const body = await req.json()
-  const { id, decision, selectedOptionId, reason } = body as {
-    id: number
+  const { id, externalId, decision, selectedOptionId, reason } = body as {
+    id?: number
+    externalId?: string
     decision: 'approved' | 'denied'
     selectedOptionId?: string
     reason?: string
   }
 
-  if (!id || !decision) {
-    return NextResponse.json({ error: 'id and decision are required' }, { status: 400 })
+  if ((!id && !externalId) || !decision) {
+    return NextResponse.json({ error: 'id (or externalId) and decision are required' }, { status: 400 })
   }
 
-  const approval = await getApproval(id)
+  // The in-chat approval card (components/hermes/PermissionCard) only ever
+  // sees the ACP request id from the RunEvent stream — the `approvals` row is
+  // created inside the dispatcher, after the card has already been painted, so
+  // its numeric id is not something the transcript can carry. Resolving by
+  // `externalId` lets the card answer the request it is actually showing;
+  // access is still checked against the row's own `requestedUser` below, so
+  // this widens the lookup, never the authorization.
+  const approval = externalId ? await getApprovalByExternalId(externalId) : await getApproval(id!)
   if (!approval) {
     return NextResponse.json({ error: 'Approval not found' }, { status: 404 })
   }
@@ -39,7 +52,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    await resolveApproval(id, {
+    await resolveApproval(approval.id, {
       approved: decision === 'approved',
       selectedOptionId,
       reason,

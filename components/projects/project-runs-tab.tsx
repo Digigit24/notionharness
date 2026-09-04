@@ -8,6 +8,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import type { Agent } from '@/payload-types'
 import type { RunStatus } from '@/lib/broker'
 import { PlayCircle } from 'lucide-react'
+import { formatTimestamp } from '@/lib/relative-time'
 
 const STATUS_BADGE_VARIANT: Record<RunStatus, 'default' | 'secondary' | 'destructive' | 'outline'> = {
   completed: 'default',
@@ -132,7 +133,7 @@ export function ProjectRunsTab({
                   <td className="border-b border-black/5 px-2 py-2 dark:border-white/10">{durationLabel(run.startedAt, run.completedAt)}</td>
                   <td className="border-b border-black/5 px-2 py-2 dark:border-white/10">${(usage.totalCostTicks / 100).toFixed(2)}</td>
                   <td className="border-b border-black/5 px-2 py-2 text-black/50 dark:border-white/10 dark:text-white/50">
-                    {run.startedAt ? new Date(run.startedAt).toLocaleString() : '—'}
+                    {run.startedAt ? formatTimestamp(run.startedAt) : '—'}
                   </td>
                 </tr>
               ))}

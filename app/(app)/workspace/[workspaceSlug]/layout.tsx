@@ -3,7 +3,7 @@ import { notFound } from 'next/navigation'
 import { getPayloadClient } from '@/lib/payload'
 import { getSession } from '@/lib/session'
 import { getCurrentPayloadUser } from '@/lib/current-user'
-import { getWorkspaceBySlug, getWorkspacePages } from '@/lib/pages-cache'
+import { getSidebarPages, getWorkspaceBySlug } from '@/lib/pages-cache'
 import { getUnreadNotificationCount } from '@/app/(app)/notifications/actions'
 import { getAmbientStatus } from '@/app/(app)/workspace/[workspaceSlug]/actions'
 import { Sidebar } from '@/components/sidebar/sidebar'
@@ -51,7 +51,7 @@ export default async function WorkspaceLayout({
       sort: 'name',
       overrideAccess: true,
     }),
-    getWorkspacePages(workspace.id),
+    getSidebarPages(workspace.id),
     getAmbientStatus(workspace.id),
     getUnreadNotificationCount(),
   ])

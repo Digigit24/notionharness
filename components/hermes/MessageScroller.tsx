@@ -1,6 +1,6 @@
 'use client'
 
-import { type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowDown } from 'lucide-react'
 import { useStickToBottom } from 'use-stick-to-bottom'
 import { cn } from '@/lib/utils'
@@ -35,9 +35,12 @@ export interface MessageScrollerProps {
   children?: ReactNode
   className?: string
   autoScroll?: boolean
+  /** Number of messages currently rendered. Used only to count how many
+   * arrived while the reader was scrolled away. */
+  itemCount?: number
 }
 
-export function MessageScroller({ children, className, autoScroll = true }: MessageScrollerProps) {
+export function MessageScroller({ children, className, autoScroll = true, itemCount = 0 }: MessageScrollerProps) {
   const prefersReducedMotion =
     typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
@@ -51,6 +54,20 @@ export function MessageScroller({ children, className, autoScroll = true }: Mess
     initial: autoScroll ? 'instant' : false,
     resize: prefersReducedMotion ? 'instant' : undefined,
   })
+
+  // Baseline resets every time the reader returns to the bottom, so the
+  // count always means "arrived since you looked away" rather than a
+  // running total.
+  const seenCountRef = useRef(itemCount)
+  const [unreadCount, setUnreadCount] = useState(0)
+  useEffect(() => {
+    if (isAtBottom) {
+      seenCountRef.current = itemCount
+      setUnreadCount(0)
+    } else {
+      setUnreadCount(Math.max(0, itemCount - seenCountRef.current))
+    }
+  }, [itemCount, isAtBottom])
 
   return (
     <div
@@ -72,11 +89,23 @@ export function MessageScroller({ children, className, autoScroll = true }: Mess
         <button
           type="button"
           onClick={() => void scrollToBottom()}
-          aria-label="Jump to latest message"
-          title="Jump to latest message"
-          className="sticky bottom-3 left-1/2 z-10 flex size-8 -translate-x-1/2 items-center justify-center rounded-full border border-black/10 bg-white text-black/60 shadow-md hover:text-black dark:border-white/10 dark:bg-gray-800 dark:text-white/60 dark:hover:text-white"
+          aria-label={unreadCount > 0 ? `Jump to ${unreadCount} new messages` : 'Jump to latest message'}
+          title={unreadCount > 0 ? `${unreadCount} new below` : 'Jump to latest message'}
+          // `self-center` + `w-fit` are load-bearing: this is a sticky child
+          // of a `flex flex-col` container, whose default `align-items:
+          // stretch` blew the pill out to the container's full width — it
+          // rendered as a ~650px blank bar clipped at the bottom edge,
+          // covering the last line of the transcript. The `left-1/2 +
+          // -translate-x-1/2` centring trick does not apply to a flex child
+          // and was fighting it besides.
+          className="sticky bottom-3 z-10 flex w-fit shrink-0 items-center gap-1.5 self-center rounded-full border border-black/10 bg-white px-3 py-1.5 text-xs font-medium text-black/60 shadow-md hover:text-black dark:border-white/10 dark:bg-gray-800 dark:text-white/60 dark:hover:text-white"
         >
-          <ArrowDown size={14} />
+          <ArrowDown size={13} />
+          {/* Only counts what arrived while scrolled away, so reading back
+              through history doesn't feel like fighting the autoscroll —
+              you can see whether anything is actually waiting below. Always
+              renders a label: an icon-only capsule read as an empty bar. */}
+          <span className="tabular-nums">{unreadCount > 0 ? `${unreadCount} new` : 'Latest'}</span>
         </button>
       )}
     </div>

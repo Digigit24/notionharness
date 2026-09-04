@@ -3,6 +3,7 @@ import { getPayloadClient } from '@/lib/payload'
 import { getCurrentPayloadUser } from '@/lib/current-user'
 import { listReviewReadyRuns } from '@/lib/broker/runs'
 import type { Run, RunStatus } from '@/lib/broker/types'
+import { formatRelativeTime } from '@/lib/relative-time'
 
 /**
  * ROADMAP P6.5 - Review mode's workspace-root landing list.
@@ -80,6 +81,30 @@ export default async function ReviewLandingPage({
     (tasksRes?.docs ?? []).map((t) => [t.id, t.title ?? '(untitled)']),
   )
 
+  // Agent and page were being printed as `#12` and `#33` — the raw database
+  // ids, which name nothing. The batched-lookup pattern was already right
+  // here for task titles; these two just never got the same treatment.
+  const agentIds = [...new Set(runs.map((r) => r.agentId).filter((id): id is number => id != null))]
+  const pageIds = [...new Set(runs.map((r) => r.pageId).filter((id): id is number => id != null))]
+  const [agentsRes, pagesRes] = await Promise.all([
+    agentIds.length
+      ? payload
+          .find({ collection: 'agents', where: { id: { in: agentIds } }, limit: agentIds.length, depth: 0, overrideAccess: true })
+          .catch(() => null)
+      : Promise.resolve(null),
+    pageIds.length
+      ? payload
+          .find({ collection: 'pages', where: { id: { in: pageIds } }, limit: pageIds.length, depth: 0, overrideAccess: true })
+          .catch(() => null)
+      : Promise.resolve(null),
+  ])
+  const agentNameById = new Map<number, string>(
+    (agentsRes?.docs ?? []).map((a) => [a.id, a.name ?? '(unnamed agent)']),
+  )
+  const pageTitleById = new Map<number, string>(
+    (pagesRes?.docs ?? []).map((pg) => [pg.id, pg.title ?? 'Untitled']),
+  )
+
   return (
     <div className="flex flex-col gap-6 p-6">
       <header className="flex items-baseline justify-between gap-4">
@@ -106,6 +131,8 @@ export default async function ReviewLandingPage({
               workspaceSlug={workspaceSlug}
               run={run}
               taskTitle={run.taskId ? taskTitleById.get(run.taskId) ?? null : null}
+              agentName={run.agentId ? agentNameById.get(run.agentId) ?? null : null}
+              pageTitle={run.pageId ? pageTitleById.get(run.pageId) ?? null : null}
             />
           ))}
         </ul>
@@ -122,10 +149,14 @@ function ReviewRunCard({
   workspaceSlug,
   run,
   taskTitle,
+  agentName,
+  pageTitle,
 }: {
   workspaceSlug: string
   run: Run
   taskTitle: string | null
+  agentName: string | null
+  pageTitle: string | null
 }) {
   const taskHref = run.taskId
     ? `/workspace/${workspaceSlug}/tasks?task=${run.taskId}`
@@ -154,17 +185,25 @@ function ReviewRunCard({
         </span>
       )}
 
+      <p className="text-xs text-[var(--nf-fg-muted,#9ca3af)]">
+        {formatRelativeTime(run.completedAt ?? run.updatedAt)}
+      </p>
+
       <dl className="grid grid-cols-2 gap-x-2 gap-y-1 text-xs text-[var(--nf-fg-muted,#6b7280)]">
         {run.agentId !== null && run.agentId !== undefined ? (
           <>
             <dt>Agent</dt>
-            <dd className="truncate font-mono">#{run.agentId}</dd>
+            <dd className="truncate">{agentName ?? `#${run.agentId}`}</dd>
           </>
         ) : null}
         {run.pageId !== null && run.pageId !== undefined ? (
           <>
             <dt>Page</dt>
-            <dd className="truncate font-mono">#{run.pageId}</dd>
+            <dd className="truncate">
+              <Link href={`/workspace/${workspaceSlug}/p/${run.pageId}`} className="hover:underline">
+                {pageTitle ?? `#${run.pageId}`}
+              </Link>
+            </dd>
           </>
         ) : null}
       </dl>

@@ -22,14 +22,34 @@ export async function getCurrentPayloadUser(): Promise<User | null> {
   })
   if (existing.docs[0]) return existing.docs[0]
 
-  return payload.create({
-    collection: 'users',
-    data: {
-      email: session.user.email,
-      name: session.user.name || session.user.email,
-      role: 'member',
-      password: crypto.randomBytes(32).toString('hex'),
-    },
-    overrideAccess: true,
-  })
+  // Real race, not hypothetical: confirmed live this session — Next.js's
+  // own post-signup `router.push('/'); router.refresh()` can fire two
+  // near-simultaneous requests to this same route, both finding no
+  // existing row and both racing to `create` one for the same brand-new
+  // email, which `users.email`'s unique constraint then rejects for
+  // whichever one loses — surfaced as an opaque "field is invalid: email"
+  // 400, not a clear "someone else already created this" message. Losing
+  // the create race isn't a real failure here (the row exists now, created
+  // by the winner) — re-fetch and return it instead of throwing.
+  try {
+    return await payload.create({
+      collection: 'users',
+      data: {
+        email: session.user.email,
+        name: session.user.name || session.user.email,
+        role: 'member',
+        password: crypto.randomBytes(32).toString('hex'),
+      },
+      overrideAccess: true,
+    })
+  } catch (err) {
+    const retry = await payload.find({
+      collection: 'users',
+      where: { email: { equals: session.user.email } },
+      limit: 1,
+      overrideAccess: true,
+    })
+    if (retry.docs[0]) return retry.docs[0]
+    throw err
+  }
 }

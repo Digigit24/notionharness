@@ -6,6 +6,7 @@ import { Maximize2, X } from 'lucide-react'
 import { getRunMessages, getTaskActivity, getTaskRuns, updateTaskFields } from '@/app/(app)/workspace/[workspaceSlug]/tasks/actions'
 import { ThreadDrawerTab } from '@/components/hermes'
 import type { Activity, Agent, Project, Task, TaskStatus, User, Workspace } from '@/payload-types'
+import { formatTimestamp } from '@/lib/relative-time'
 
 type Tab = 'overview' | 'activity' | 'sessions'
 
@@ -301,7 +302,7 @@ function ActivityTab({ taskId }: { taskId: number }) {
               <span className="font-medium">{actor?.name || actor?.email || 'System'}</span>{' '}
               <span className="text-black/60 dark:text-white/60">{item.action}</span>
             </div>
-            <div className="text-xs text-black/30 dark:text-white/30">{new Date(item.createdAt).toLocaleString()}</div>
+            <div className="text-xs text-black/30 dark:text-white/30">{formatTimestamp(item.createdAt)}</div>
           </li>
         )
       })}

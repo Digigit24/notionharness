@@ -22,6 +22,7 @@ import {
   retryRunInbox,
 } from '@/app/(app)/workspace/[workspaceSlug]/inbox/actions'
 import type { ApprovalOption } from '@/collections/Approvals'
+import { formatTimestamp } from '@/lib/relative-time'
 
 export type InboxItemKind = 'approval' | 'failed_run' | 'review_run' | 'mention'
 
@@ -255,7 +256,7 @@ function InboxRow({
       </div>
 
       <div className="flex shrink-0 items-center gap-1.5">
-        <span className="text-xs text-muted-foreground">{new Date(item.time).toLocaleString()}</span>
+        <span className="text-xs text-muted-foreground">{formatTimestamp(item.time)}</span>
 
         {item.kind === 'approval' && (
           <>

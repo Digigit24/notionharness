@@ -5,6 +5,10 @@ import { LinkedWidgetUtils } from '@/lib/blocksuite-blocks'
 import { html } from 'lit'
 import { insertMentionNode } from './insert-mention'
 import type { MentionAttribute } from './schema'
+import {
+  openAgentSessionBlock,
+  type AgentSessionDocLike,
+} from '@/components/editor/blocks/agent-session/open-session-block'
 
 interface MentionableUser {
   id: string
@@ -74,6 +78,7 @@ function createPeopleMenuGroup(
 
 function createAgentMenuGroup(
   abort: () => void,
+  editorHost: EditorHost,
   inlineEditor: AffineInlineEditor,
   agents: MentionableAgent[],
 ): LinkedMenuGroup {
@@ -89,6 +94,30 @@ function createAgentMenuGroup(
         action: () => {
           abort()
           insertMentionNode({ inlineEditor, mention })
+          // Picking an agent from the `@` menu OPENS the conversation, it
+          // does not merely leave a coloured chip behind. Mentioning an agent
+          // in a document is a request to talk to it, and making the user
+          // then hunt for and click the chip they just created is a step that
+          // exists for no reason. Clicking an existing chip still works, and
+          // reveals this same block rather than adding a second one.
+          //
+          // Deferred a frame: the caret and the inserted delta have to settle
+          // before the anchor paragraph can be resolved from the DOM.
+          requestAnimationFrame(() => {
+            const doc = (editorHost as EditorHost & { doc?: AgentSessionDocLike }).doc
+            if (!doc) return
+            // The paragraph being typed into: the inline editor's own root
+            // element sits inside it, so walking up finds the block that
+            // should host the conversation.
+            const anchorBlockId =
+              inlineEditor.rootElement?.closest('[data-block-id]')?.getAttribute('data-block-id') ?? null
+            openAgentSessionBlock({
+              doc,
+              anchorBlockId,
+              agentId: agent.id,
+              scrollTarget: editorHost,
+            })
+          })
         },
       }
     }),
@@ -125,7 +154,7 @@ export function getMenusWithMentions(
         groups.push(createPeopleMenuGroup(abort, inlineEditor, users))
       }
       if (agents.length > 0) {
-        groups.push(createAgentMenuGroup(abort, inlineEditor, agents))
+        groups.push(createAgentMenuGroup(abort, editorHost, inlineEditor, agents))
       }
       groups.push(LinkedWidgetUtils.createLinkedDocMenuGroup(query, abort, editorHost, inlineEditor))
       groups.push(LinkedWidgetUtils.createNewDocMenuGroup(query, abort, editorHost, inlineEditor))

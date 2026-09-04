@@ -17,6 +17,7 @@ import * as migration_20260902_140000_push_notifications from './20260902_140000
 import * as migration_20260902_150000_spend_caps from './20260902_150000_spend_caps';
 import * as migration_20260903_130000_hermes_config from './20260903_130000_hermes_config';
 import * as migration_20260903_140000_project_resources from './20260903_140000_project_resources';
+import * as migration_20260904_010000_agents_hermes_profile from './20260904_010000_agents_hermes_profile';
 
 export const migrations = [
   {
@@ -113,5 +114,10 @@ export const migrations = [
     up: migration_20260903_140000_project_resources.up,
     down: migration_20260903_140000_project_resources.down,
     name: '20260903_140000_project_resources'
+  },
+  {
+    up: migration_20260904_010000_agents_hermes_profile.up,
+    down: migration_20260904_010000_agents_hermes_profile.down,
+    name: '20260904_010000_agents_hermes_profile'
   },
 ];

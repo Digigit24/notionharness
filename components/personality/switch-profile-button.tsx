@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
-import { switchActiveHermesProfile } from '@/app/(app)/workspace/[workspaceSlug]/personality/actions'
+import { switchActiveHermesProfile } from '@/app/(app)/workspace/[workspaceSlug]/settings/personality/actions'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/hooks/use-toast'
 

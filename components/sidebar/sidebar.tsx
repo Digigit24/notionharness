@@ -11,10 +11,13 @@ import {
   ChevronsRight,
   FolderKanban,
   History,
+  Activity,
+  GitPullRequest,
   Home,
   Inbox,
   ListTodo,
   LogOut,
+  MessageCircle,
   Plus,
   Search,
   Settings,
@@ -53,7 +56,9 @@ import { WORK_MODE_SUBROUTES, type WorkSubRoute } from '@/lib/entity-links'
  *               page isn't reachable only via a task's project picker;
  *               previously NOT LINKED, no route existed).
  *   Agents   -> `/workspace/:slug/agents` (existing)
- *   Ask      -> NOT LINKED. No route exists yet.
+ *   Work     -> `/workspace/:slug/work` (the chat surface; was `/ask`,
+ *               which now redirects here. Named sessions with a history
+ *               rail; see components/work/work-view.tsx).
  *   Settings -> `/workspace/:slug/settings` (ROADMAP B7.2, Batch B-6
  *               "Finish" — previously NOT LINKED, no route existed).
  *   Audit    -> `/workspace/:slug/audit` (ROADMAP B7.3, same batch — not
@@ -67,6 +72,12 @@ const SECTION_LINKS: Array<{ href: string; label: string; icon: LucideIcon }> = 
   { href: '/tasks', label: 'Tasks', icon: ListTodo },
   { href: '/projects', label: 'Projects', icon: FolderKanban },
   { href: '/agents', label: 'Agents', icon: Bot },
+  { href: '/work', label: 'Work', icon: MessageCircle },
+  // Both of these routes existed and were reachable only sideways — Review
+  // through the mode-switcher pill, Active runs from the home page and the
+  // ambient bar. A route nobody can navigate to is a route nobody uses.
+  { href: '/review', label: 'Review', icon: GitPullRequest },
+  { href: '/active-runs', label: 'Active runs', icon: Activity },
   { href: '/audit', label: 'Audit', icon: History },
   { href: '/settings', label: 'Settings', icon: Settings },
 ]
@@ -298,13 +309,10 @@ export function Sidebar({
 
       {/* ROADMAP B-0 (Frame) / B-1 (project detail) — Section-level nav, the
           middle of the three-tier Workspace / Section / Entity navigation
-          model. The target section set is Home, Inbox, Projects, Tasks,
-          Agents, Ask, Settings; only sections with a real existing route are
-          linked here — Ask and Settings have no dedicated page yet (building
-          those is other batches' job), so they're omitted rather than
-          invented. Entity-level navigation (a specific page/task/agent/run)
-          lives in the page tree below and in per-page breadcrumbs, not in
-          this list. */}
+          model: Home, Inbox, Projects, Tasks, Agents, Ask, Settings — the
+          full B-0 target set, all now linked. Entity-level navigation (a
+          specific page/task/agent/run) lives in the page tree below and in
+          per-page breadcrumbs, not in this list. */}
       {SECTION_LINKS.map(({ href, label, icon: Icon }) => (
         <Link
           key={href}

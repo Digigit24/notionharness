@@ -3,6 +3,10 @@ import { WithDisposable } from '@/lib/blocksuite-global'
 import { type DeltaInsert, ZERO_WIDTH_NON_JOINER, ZERO_WIDTH_SPACE } from '@/lib/blocksuite-inline'
 import { css, html, nothing } from 'lit'
 import type { AffineTextAttributes } from '@/lib/blocksuite-affine-shared'
+import {
+  openAgentSessionBlock,
+  type AgentSessionDocLike,
+} from '@/components/editor/blocks/agent-session/open-session-block'
 
 // ROADMAP 6.3 audit — keep mentions inline (not a block): matches real
 // Notion UX, and migrating a persisted inline delta to a block flavour is
@@ -11,8 +15,16 @@ import type { AffineTextAttributes } from '@/lib/blocksuite-affine-shared'
 // shape and the markdown serializer are untouched.
 const AGENT_STATUS_POLL_MS = 4000
 
-// Non-interactive v1 chip: renders "@Name" inline. No click/hover popup yet —
-// that's a reasonable follow-up, not a blocker for mentions to exist at all.
+
+
+// An agent mention is now interactive: clicking it starts (or reveals) an
+// agent conversation on this page, rendered as a `notionforge:agent-session`
+// block right after the paragraph the mention sits in. That is the whole
+// point of mentioning an agent in a document — before this, the chip was a
+// coloured span that did nothing, and the only way to talk to an agent was
+// to leave the page.
+//
+// Person and page mentions stay inert, unchanged.
 export class AffineMention extends WithDisposable(ShadowlessElement) {
   // Plain (non-decorator) reactive-property declaration — this app's build
   // doesn't support the `@property()` + `accessor` combo BlockSuite's own
@@ -36,6 +48,12 @@ export class AffineMention extends WithDisposable(ShadowlessElement) {
     .affine-mention.agent {
       color: #7c3aed;
       background: rgba(124, 58, 237, 0.1);
+    }
+    .affine-mention.clickable {
+      cursor: pointer;
+    }
+    .affine-mention.clickable:hover {
+      background: rgba(124, 58, 237, 0.2);
     }
     .affine-mention .live-dot {
       display: inline-block;
@@ -95,6 +113,29 @@ export class AffineMention extends WithDisposable(ShadowlessElement) {
     }
   }
 
+  /**
+   * Opens this agent's conversation on the page.
+   *
+   * Reveals an existing session block for the same agent if one is already
+   * here — mentioning an agent twice in a document means one conversation,
+   * not two — and otherwise inserts a fresh one directly after the paragraph
+   * containing the mention, so the chat appears exactly where it was asked
+   * for.
+   */
+  private _openConversation(agentId: number) {
+    const host = this.closest('editor-host') as
+      | (HTMLElement & { doc?: AgentSessionDocLike })
+      | null
+    const doc = host?.doc
+    if (!doc) return
+    openAgentSessionBlock({
+      doc,
+      anchorBlockId: this.closest('[data-block-id]')?.getAttribute('data-block-id') ?? null,
+      agentId,
+      scrollTarget: host,
+    })
+  }
+
   override render() {
     const mention = this.delta.attributes?.mention
     if (!mention) return nothing
@@ -102,7 +143,20 @@ export class AffineMention extends WithDisposable(ShadowlessElement) {
     // See reference-node.ts: an embed inline element needs a zero-width
     // joiner v-text child so BlockSuite's inline-range math stays correct.
     const isAgent = mention.kind === 'agent'
-    return html`<span class="affine-mention ${isAgent ? 'agent' : ''}"
+    const agentId = isAgent ? Number(mention.userId) : Number.NaN
+    const clickable = isAgent && Number.isFinite(agentId)
+    return html`<span
+      class="affine-mention ${isAgent ? 'agent' : ''} ${clickable ? 'clickable' : ''}"
+      title=${clickable ? `Open a conversation with ${mention.name} on this page` : ''}
+      @click=${clickable
+        ? (event: MouseEvent) => {
+            // The chip lives inside editable text; without this the click
+            // just places a caret.
+            event.preventDefault()
+            event.stopPropagation()
+            this._openConversation(agentId)
+          }
+        : nothing}
       >${isAgent && this._agentActive ? html`<span class="live-dot" title="Currently running"></span>` : nothing}${isAgent
         ? '@🤖 '
         : '@'}${mention.name}<v-text .str=${ZERO_WIDTH_NON_JOINER}></v-text

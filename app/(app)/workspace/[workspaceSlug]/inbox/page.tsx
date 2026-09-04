@@ -1,4 +1,5 @@
 import { notFound } from 'next/navigation'
+import Link from 'next/link'
 import { getPayloadClient } from '@/lib/payload'
 import { getCurrentPayloadUser } from '@/lib/current-user'
 import { getWorkspaceBySlug } from '@/lib/pages-cache'
@@ -92,17 +93,32 @@ export default async function InboxPage({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-      <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-6 py-8">
+      <div className="flex w-full flex-col gap-4 px-5 py-8">
         <header className="flex items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold text-foreground">Inbox</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              What needs you across {workspace.name} — newest first.
+              {items.length === 0
+                ? `Nothing waiting in ${workspace.name}.`
+                : `${items.length} item${items.length === 1 ? '' : 's'} need you across ${workspace.name} — newest first.`}
             </p>
+            {/* The list already registers these; nothing told anyone they
+                existed. */}
+            {items.length > 0 && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                <kbd className="rounded border border-black/10 px-1 dark:border-white/15">j</kbd>/
+                <kbd className="rounded border border-black/10 px-1 dark:border-white/15">k</kbd> to move ·{' '}
+                <kbd className="rounded border border-black/10 px-1 dark:border-white/15">y</kbd> approve ·{' '}
+                <kbd className="rounded border border-black/10 px-1 dark:border-white/15">n</kbd> deny ·{' '}
+                <kbd className="rounded border border-black/10 px-1 dark:border-white/15">e</kbd> dismiss
+              </p>
+            )}
           </div>
-          <a href="/settings/notifications" className="mt-1 shrink-0 text-xs text-muted-foreground hover:text-foreground hover:underline">
+          {/* A plain anchor here forced a full document reload out of an app
+              that is otherwise entirely client-navigated. */}
+          <Link href="/settings/notifications" className="mt-1 shrink-0 text-xs text-muted-foreground hover:text-foreground hover:underline">
             Notification settings
-          </a>
+          </Link>
         </header>
 
         <InboxList items={items} workspaceSlug={workspaceSlug} />

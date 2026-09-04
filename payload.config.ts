@@ -26,6 +26,8 @@ import { Approvals } from './collections/Approvals'
 import { SavedViews } from './collections/SavedViews'
 import { PushSubscriptions } from './collections/PushSubscriptions'
 import { NotificationPreferences } from './collections/NotificationPreferences'
+import { ProjectResources } from './collections/ProjectResources'
+import { HermesConfig } from './globals/HermesConfig'
 
 const filename = fileURLToPath(import.meta.url)
 const dirname = path.dirname(filename)
@@ -59,7 +61,9 @@ export default buildConfig({
     SavedViews,
     PushSubscriptions,
     NotificationPreferences,
+    ProjectResources,
   ],
+  globals: [HermesConfig],
   editor: lexicalEditor(),
   secret: process.env.PAYLOAD_SECRET || '',
   cors: [
@@ -74,13 +78,27 @@ export default buildConfig({
       connectionString: process.env.DATABASE_URI || '',
       // Left unset, node-postgres's own `Pool` defaults `max` to 10 — this
       // process ALSO opens `lib/broker/db.ts`'s separate raw-pg pool
-      // (currently `max: 6`) for the runs/run_messages/run_usage tables
-      // (D5), so an unset max here means up to 16 connections from this one
-      // process alone against a shared Supabase instance whose session-mode
-      // cap is ~15 (confirmed live: "max clients reached in session mode").
-      // 8 here + 6 there = 14, leaving headroom for a one-off script or a
-      // second teammate's dev server without immediately exhausting the pool.
-      max: 8,
+      // (currently `max: 3`) and `lib/auth.ts`'s (`max: 2`) for the same
+      // shared Supabase instance, whose session-mode cap is ~15 (confirmed
+      // live: "max clients reached in session mode"). 7 (down from 8) + 3 +
+      // 2 = 12, leaving real headroom — a prior 8+6=14 (before auth's pool
+      // was accounted for) and then 8+4+3=15 both stopped the outright
+      // crashing but still left zero room: confirmed live that all 15 slots
+      // sat idle-but-held by these three pools' own warm connections, so a
+      // single extra burst (one more page load, one ad-hoc script) timed
+      // out waiting rather than actually being denied at the DB.
+      max: 7,
+      // Without this, a query that can't get a connection because this pool
+      // (or a sibling one — lib/auth.ts, lib/broker/db.ts) is at `max` waits
+      // forever with node-postgres's default (no timeout) — silently, no
+      // thrown error, no console output. Confirmed live: connections sat at
+      // 15/15 (this instance's real session-mode cap) with active queries
+      // contending, right when a "blank white screen after login, nothing
+      // in the console" report came in — exactly the failure mode a hung
+      // connection-acquire produces (the workspace home page alone fires
+      // ~13 parallel queries). Failing loud after 8s turns that into a
+      // visible, debuggable error instead of an indefinite blank page.
+      connectionTimeoutMillis: 8_000,
     },
     // Migrations are the source of truth for this project (see `migrations/`).
     // Without this, Payload's dev-mode schema-drift auto-push kicks in on every

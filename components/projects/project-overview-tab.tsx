@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
 import { updateProject } from '@/app/(app)/workspace/[workspaceSlug]/projects/[projectId]/actions'
+import { formatTimestamp } from '@/lib/relative-time'
 
 export interface ProjectStatusCount {
   category: string
@@ -117,7 +118,7 @@ export function ProjectOverviewTab({
           </div>
           <div>
             <dt className="text-xs text-black/40 dark:text-white/40">Last activity</dt>
-            <dd className="mt-0.5 font-medium">{lastActivityAt ? new Date(lastActivityAt).toLocaleString() : '—'}</dd>
+            <dd className="mt-0.5 font-medium">{lastActivityAt ? formatTimestamp(lastActivityAt) : '—'}</dd>
           </div>
         </dl>
       </section>

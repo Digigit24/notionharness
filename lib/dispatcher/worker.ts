@@ -16,13 +16,34 @@
 // out to be); that's a separate concern from making one claimed run
 // actually execute correctly, which is what this module is responsible for.
 import { getPayloadClient } from '@/lib/payload'
-import { claimNextRun, markRunStarted, renewLease, settleRun, appendRunEvent, recordUsage, type Run } from '@/lib/broker'
+import {
+  claimNextRun,
+  markRunStarted,
+  renewLease,
+  settleRun,
+  appendRunEventsBatch,
+  clearRunBacklog,
+  getRunSeqBase,
+  publishRunEvent,
+  recordUsage,
+  setHermesSessionId,
+  touchSession,
+  getChatSession,
+  getWorktree,
+  touchWorktree,
+  type Run,
+} from '@/lib/broker'
 import { RunWorktreeManager } from '@/lib/run-worktrees/manager'
 import { resolveRunWorktreeConfig } from '@/lib/run-worktrees/config'
 import { sendTurnWithIdentity } from '@/lib/hermes/run-with-identity'
+import { warnIfHermesProbeUnpatched } from '@/lib/hermes/install-checks'
+import { resolveProfileHome } from '@/lib/hermes/profiles'
+import { access } from 'node:fs/promises'
+import { join } from 'node:path'
 import { createPendingApproval, waitForApproval } from '@/lib/hermes/approval-helpers'
 import { hrefForEntity } from '@/lib/entity-links.server'
 import { sendPushToUser } from '@/lib/push/send'
+import type { RunEvent } from '@/lib/run-events'
 import type { Agent, Task } from '@/payload-types'
 import type { ApprovalOption } from '@/collections/Approvals'
 import type { ApprovalOutcome } from '@/lib/hermes/acp-client'
@@ -62,6 +83,23 @@ const inFlightRuns = new Map<number, Promise<void>>()
 // — not the same set as `inFlightRuns`, which also counts runs still
 // claimed but waiting on this counter to drop before their turn starts.
 const agentInFlightCounts = new Map<number, number>()
+// Stop controls for runs currently mid-turn, so a user can interrupt an
+// answer they no longer want. In-process only, like `inFlightRuns` above:
+// a run whose server restarted is reclaimed by the lease sweeper instead.
+const runCancelControls = new Map<number, () => Promise<void>>()
+
+/**
+ * Interrupts a run that's still answering. Uses ACP's own `session/cancel`
+ * (see acp-client.ts) rather than killing the process, so the agent stops
+ * cooperatively and the turn still ends with a real `done` event — whatever
+ * it had already streamed stays in the transcript.
+ */
+export async function requestRunCancel(runId: number): Promise<{ cancelled: boolean }> {
+  const cancel = runCancelControls.get(runId)
+  if (!cancel) return { cancelled: false }
+  await cancel()
+  return { cancelled: true }
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -119,6 +157,31 @@ export async function dispatchNextRun(workerId: string): Promise<DispatchOutcome
   })
 
   return { claimed: true, runId: run.id, status: 'started' }
+}
+
+/**
+ * The project worktree this run should execute in, when its session is bound
+ * to one.
+ *
+ * Returns null for anything unbound, and also for a worktree whose row says
+ * it was removed — a stale binding must fall back to a disposable checkout
+ * rather than failing the run or, worse, running in a directory that no
+ * longer means what it used to.
+ */
+async function resolveSessionWorktree(run: Run) {
+  if (!run.sessionId) return null
+  const session = await getChatSession(run.sessionId).catch(() => null)
+  if (!session?.worktreeId) return null
+  const worktree = await getWorktree(session.worktreeId).catch(() => null)
+  if (!worktree || worktree.status === 'removed') return null
+  const { existsSync } = await import('node:fs')
+  if (!existsSync(worktree.path)) {
+    console.warn(
+      `[dispatcher] Session ${session.id} points at worktree ${worktree.path}, which is not on disk — using a disposable checkout instead.`,
+    )
+    return null
+  }
+  return worktree
 }
 
 function stringArray(raw: unknown): string[] {
@@ -295,9 +358,34 @@ async function executeClaimedRun(
     console.warn(`[dispatcher] Run ${run.id} was claimed with no run_token — page-writes auth will fail for this run.`)
   }
 
-  const { source, rootDir, baseBranch } = resolveRunWorktreeConfig()
-  const manager = new RunWorktreeManager({ rootDir })
-  const worktree = await manager.create(source, String(run.id), baseBranch)
+  // Where this turn actually runs.
+  //
+  // A session bound to a project worktree runs INSIDE that worktree: it is
+  // the checkout the user is looking at, with their branch and their
+  // uncommitted work, and running anywhere else would make the agent's edits
+  // invisible to them. Everything else keeps the previous behaviour — a
+  // disposable per-run worktree cut from the configured source repo.
+  //
+  // Note the asymmetry in cleanup: a per-run worktree is ours to create and
+  // discard, while a project worktree belongs to the user and must survive
+  // the run untouched.
+  let runCwd: string
+  const sessionWorktree = await resolveSessionWorktree(run)
+
+  if (sessionWorktree) {
+    runCwd = sessionWorktree.path
+    await touchWorktree(sessionWorktree.id).catch(() => undefined)
+  } else {
+    const { source, rootDir, baseBranch } = resolveRunWorktreeConfig()
+    const manager = new RunWorktreeManager({ rootDir })
+    const disposable = await manager.create(source, String(run.id), baseBranch)
+    runCwd = disposable.worktreePath
+  }
+  // Deliberately NOT removed after the run: `runs/[runId]/review` reads its
+  // diff straight from this checkout (lib/run-worktrees/diff.ts), so deleting
+  // it on settle would empty the review screen for every completed run. They
+  // accumulate under the worktree root and need a real retention policy —
+  // named here rather than quietly leaked.
 
   // Per-agent concurrency ceiling (`agent.maxConcurrentRuns`, `collections/
   // Agents.ts` — defaults to 1). The run stays claimed (lease kept alive by
@@ -310,11 +398,72 @@ async function executeClaimedRun(
   }
 
   incrAgentInFlight(agentId)
+  // Read the run's current high-water seq ONCE, here, rather than letting
+  // the database allocate a seq per streamed chunk (see appendRunEvent's own
+  // comment). `acp-client.ts` restarts its envelope counter at 1 for each
+  // turn, and `enqueueAskRun` has usually already written the user's own
+  // message at seq 1, so every envelope's seq is offset above whatever is
+  // already there.
+  const seqBase = await getRunSeqBase(run.id).catch(() => 0)
+  // Durable writes still go out in order, but they no longer sit between the
+  // agent and the screen — `publishRunEvent` below has already delivered the
+  // chunk by the time any of these resolve.
+  // Durable writes are accumulated here and flushed in batches rather than
+  // one connection per streamed chunk — see appendRunEventsBatch for why
+  // both one-at-a-time and all-at-once were wrong. Delivery to the browser
+  // never waits on any of this (that's `publishRunEvent`).
+  const writeBuffer: Array<{ seq: number; event: RunEvent }> = []
+  let writeChain: Promise<unknown> = Promise.resolve()
+  let flushTimer: ReturnType<typeof setTimeout> | null = null
+
+  const flushWrites = () => {
+    if (flushTimer) {
+      clearTimeout(flushTimer)
+      flushTimer = null
+    }
+    if (writeBuffer.length === 0) return
+    const batch = writeBuffer.splice(0, writeBuffer.length)
+    // Chained so only one batch is ever in flight for this run — batches
+    // stay small and the pool stays free for everything else in the process.
+    writeChain = writeChain.then(() =>
+      appendRunEventsBatch(run.id, batch).catch((err) => {
+        console.error(`[dispatcher] Failed to persist ${batch.length} event(s) for run ${run.id}.`, err)
+      }),
+    )
+  }
+
+  const scheduleFlush = () => {
+    if (flushTimer) return
+    flushTimer = setTimeout(flushWrites, 250)
+  }
+  // Resolved before the spawn so an unknown/typo'd profile fails the run with
+  // a clear message, rather than silently running as the install default and
+  // leaving someone to wonder why their agent is answering with the wrong
+  // model. `resolveProfileHome` also validates the name before it becomes a
+  // filesystem path.
+  let agentProfileHome: string | undefined
+  const configuredProfile = typeof agent.hermesProfile === 'string' ? agent.hermesProfile.trim() : ''
+  if (configuredProfile) {
+    try {
+      agentProfileHome = resolveProfileHome(configuredProfile)
+      await access(join(agentProfileHome, 'config.yaml'))
+    } catch {
+      const message = `Hermes profile "${configuredProfile}" was not found in this Hermes install.`
+      await settleRun(run.id, 'failed', { error: message, retryable: false })
+      return { status: 'failed', error: message }
+    }
+  }
+
+  // Once per process: if a Hermes update reverted the stdin patch on its Git
+  // Bash probe, say so here, in the dispatcher's own log, before the first
+  // tool call of this run silently hangs on it (lib/hermes/install-checks.ts).
+  void warnIfHermesProbeUnpatched()
+
   let result
   try {
     result = await sendTurnWithIdentity({
       binaryPath: runtimeProfile.commandName,
-      cwd: worktree.worktreePath,
+      cwd: runCwd,
       text: buildPromptText(task, agent, run),
       runId: String(run.id),
       agentId: run.agentId,
@@ -331,10 +480,31 @@ async function executeClaimedRun(
       // every page-scoped run its own throwaway shard and silently drop
       // memory across turns on the same page. `run.id` remains the last
       // resort for a run with neither a task nor a page.
-      conversationId: run.taskId ?? run.pageId ?? run.id,
+      // A chat session is the strongest conversation identity there is —
+      // it is the thread the user is actually looking at — so it wins over
+      // task and page. Before sessions existed this fell through to
+      // `run.id` for every Work turn, giving each one its own throwaway
+      // state.db shard: Hermes started from zero history every message,
+      // which is exactly what forced the old transcript-replay workaround.
+      conversationId: run.sessionId ?? run.taskId ?? run.pageId ?? run.id,
       enabledSkills: agent.skills,
       args: [...stringArray(runtimeProfile.fixedArgs), ...stringArray(agent.customArgs)],
       permissionMode: agent.permissionMode,
+      // Per-agent model/provider/credentials, via the ONE lever Hermes
+      // actually exposes: HERMES_HOME. `buildHermesHomeOverlay` already
+      // accepts this base and passthrough-links everything in it except
+      // `skills`/`memories`/`state.db` — so pointing it at a profile gives
+      // this agent that profile's config.yaml (model + provider) and
+      // auth.json (credentials) while the run-scoped identity overlay stays
+      // fully intact. Undefined falls back to the install root, which is
+      // exactly the previous behaviour for every agent that sets no profile.
+      //
+      // Note this is deliberately NOT done by passing `-p <profile>`: that
+      // flag repoints HERMES_HOME *into* the profile directory, silently
+      // bypassing the overlay and reverting per-agent skills, memories and
+      // per-conversation state to the profile's own. Verified — it fails
+      // quietly, with no error, which is the worst way to be wrong.
+      baseHermesHome: agentProfileHome,
       // P5.4: when permissionMode is 'ask', wire the callback that creates a
       // real pending approval and waits for the user to resolve it. Also raise
       // timeouts significantly — the turn can now be blocked waiting for a human.
@@ -355,19 +525,51 @@ async function executeClaimedRun(
       // against `POST /api/daemon/page-writes` is separate, real future
       // work, not invented here.
       env: { ...stringEnv(agent.customEnv), ...(run.runToken ? { RUN_TOKEN: run.runToken } : {}) },
+      onControl: (control) => {
+        runCancelControls.set(run.id, control.cancel)
+      },
       onEvent: (envelope) => {
-        // Best-effort, fire-and-forget: a dropped live event must never
-        // abort the turn itself. `envelopes` in `result` below is still the
-        // complete, ordered record this function's own return value is
-        // computed from, so nothing is lost even if a single append fails.
-        void appendRunEvent(run.id, envelope.event).catch((err) => {
-          console.error(`[dispatcher] Failed to append live run event for run ${run.id}.`, err)
+        const seq = seqBase + envelope.seq
+
+
+        // THE hot path — everything a viewer sees comes from this line, and
+        // it is a synchronous in-process emit (microseconds), not a network
+        // round-trip. This app's Postgres is remote (a Supabase pooler in
+        // ap-northeast-2), and Hermes streams word-by-word, so routing
+        // delivery through the database meant every single word paid a
+        // write round-trip AND a read-back round-trip before it could be
+        // painted — hundreds of them per reply. That is what made streaming
+        // feel laggy rather than live. Ordering doesn't depend on the
+        // database either: `envelope.seq` was assigned synchronously in
+        // generation order by acp-client.ts before this callback ran.
+        publishRunEvent({
+          runId: run.id,
+          seq,
+          event: envelope.event,
+          createdAt: new Date().toISOString(),
         })
+
+        // Durability, deliberately off the hot path: the viewer already has
+        // this event. These no longer need to be chained one-after-another
+        // either — each row carries the `seq` decided above, so concurrent
+        // writes can't reorder anything the way they could when the database
+        // was the thing handing out sequence numbers. Letting them overlap
+        // matters: the database is remote, and serializing ~90 chunk-writes
+        // behind each other meant a reply took ~20s to become durable even
+        // though it was generated instantly. A failed write costs history,
+        // never the live stream or the turn.
+        writeBuffer.push({ seq, event: envelope.event })
+        // Flush immediately once a batch is worth sending, otherwise let the
+        // timer catch the tail of a burst.
+        if (writeBuffer.length >= 50) flushWrites()
+        else scheduleFlush()
         // The run-card block (6.3) and P5.8's cost-on-task-card both read
         // cost via getRunUsageTotals, which SUMs run_usage — without this,
         // every real dispatched run shows $0.00 forever even though the
-        // RunEvent stream genuinely carries real `usage` events. Same
-        // best-effort handling as the appendRunEvent call above.
+        // RunEvent stream genuinely carries real `usage` events. Usage
+        // events don't need seq-ordering against the transcript (they're
+        // summed, not concatenated), so this one stays a simple best-effort
+        // fire-and-forget rather than joining the write queue.
         if (envelope.event.type === 'usage') {
           const usage = envelope.event
           void recordUsage(run.id, {
@@ -382,12 +584,38 @@ async function executeClaimedRun(
       },
     })
   } catch (err) {
+    // Drain whatever writes are still queued before settling — otherwise a
+    // client could see this run reach a terminal `status` (via the SSE
+    // route's own safety-net status check) before the last few events it
+    // should show are actually in `run_messages` yet.
+    flushWrites()
+    await writeChain.catch(() => {})
     const message = err instanceof Error ? err.message : String(err)
     await settleRun(run.id, 'failed', { error: message, retryable: true })
     notifyRunSettled(payload, run, task, 'failed')
     return { status: 'failed', error: message }
   } finally {
     decrAgentInFlight(agentId)
+    // The turn is over either way — nothing left to interrupt.
+    runCancelControls.delete(run.id)
+  }
+
+  // Same reason as the catch block above — settleRun must never run ahead
+  // of the transcript it's settling.
+  flushWrites()
+  await writeChain.catch(() => {})
+
+  // Record the ACP session id against the chat session the moment we have
+  // one. `setHermesSessionId` keeps the FIRST id and ignores later ones,
+  // because that is the id whose history Hermes can replay — a subsequent
+  // turn's fresh id would point at an empty transcript.
+  if (run.sessionId && result.sessionId) {
+    await setHermesSessionId(run.sessionId, result.sessionId).catch((err) => {
+      console.warn(`[dispatcher] Could not record the Hermes session id for session ${run.sessionId}.`, err)
+    })
+  }
+  if (run.sessionId) {
+    await touchSession(run.sessionId).catch(() => undefined)
   }
 
   const doneEvent = result.envelopes.find((e) => e.event.type === 'done')?.event
@@ -396,6 +624,10 @@ async function executeClaimedRun(
   const failureReason = !succeeded ? (doneEvent?.type === 'done' ? doneEvent.reason : 'Turn did not produce a done event.') : undefined
 
   await settleRun(run.id, finalStatus, { error: failureReason, retryable: !succeeded })
+  // Every event is durable by now (the allSettled above), so the in-memory
+  // replay copy has nothing left to protect against — any late viewer reads
+  // this run from the database like any other history.
+  clearRunBacklog(run.id)
   notifyRunSettled(payload, run, task, finalStatus)
 
   return { status: finalStatus, error: failureReason }

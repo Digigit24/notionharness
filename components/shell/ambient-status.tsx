@@ -83,7 +83,7 @@ export function AmbientStatus({
       />
       {status.runtimesUp && (
         <StatusStat
-          href={`/workspace/${workspaceSlug}/runtimes`}
+          href={`/workspace/${workspaceSlug}/settings/runtimes`}
           icon={<Server size={12} />}
           value={`${status.runtimesUp.up}/${status.runtimesUp.total}`}
           title={`${status.runtimesUp.up} of ${status.runtimesUp.total} runtime(s) up, as of the last check`}

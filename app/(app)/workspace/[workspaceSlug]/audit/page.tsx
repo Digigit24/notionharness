@@ -6,6 +6,7 @@ import { Breadcrumbs } from '@/components/nav/breadcrumbs'
 import { EmptyState } from '@/components/ui/empty-state'
 import { AuditFilters } from '@/components/audit/audit-filters'
 import { AuditPager } from '@/components/audit/audit-pager'
+import { formatTimestamp } from '@/lib/relative-time'
 import { ACTIVITY_ENTITY_TYPES } from '@/collections/Activity'
 import type { Where } from 'payload'
 import { History } from 'lucide-react'
@@ -131,7 +132,7 @@ export default async function AuditPage({
   )
 
   return (
-    <main className="mx-auto w-full max-w-4xl px-6 py-8">
+    <main className="w-full px-5 py-8">
       <div className="mb-6">
         <Breadcrumbs
           className="mb-2"
@@ -184,7 +185,12 @@ export default async function AuditPage({
                   </span>
                 </span>
                 <span className="flex shrink-0 items-center gap-2 text-xs text-black/30 dark:text-white/30">
-                  {new Date(item.createdAt).toLocaleString()}
+                  {/* `toLocaleString()` formats with the RUNTIME's locale, so
+                      the server rendered US order and the browser rendered
+                      the user's — the exact hydration mismatch
+                      `formatTimestamp` exists to prevent (see its docstring).
+                      Every other timestamp in this app already uses it. */}
+                  {formatTimestamp(item.createdAt)}
                   {href && (
                     <a href={href} className="font-medium text-black/50 underline underline-offset-2 dark:text-white/50">
                       Open →

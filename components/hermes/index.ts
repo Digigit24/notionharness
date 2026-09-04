@@ -23,6 +23,11 @@ export {
 export { Attachment } from './Attachment'
 export type { AttachmentProps } from './Attachment'
 
+export { PermissionCard } from './PermissionCard'
+export type { PermissionCardProps } from './PermissionCard'
+
+export { DiffBlock, looksLikeDiff } from './DiffBlock'
+
 export { Marker, TypingIndicator } from './Marker'
 export type { MarkerProps, MarkerType } from './Marker'
 

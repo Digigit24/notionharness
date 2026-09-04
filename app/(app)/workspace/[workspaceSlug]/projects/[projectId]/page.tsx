@@ -5,7 +5,8 @@ import { getCurrentPayloadUser } from '@/lib/current-user'
 import { listActiveRunsForProject, getProjectUsageRollup } from '@/lib/broker'
 import { TASK_STATUS_CATEGORIES } from '@/collections/TaskStatuses'
 import { ProjectDetailView } from '@/components/projects/project-detail-view'
-import { getProjectRuns } from './actions'
+import { getProjectRuns, listProjectResources } from './actions'
+import { getProjectGitOverview } from './worktree-actions'
 import type { ColumnData } from '@/components/tasks/task-board'
 import type { Agent, User } from '@/payload-types'
 
@@ -93,7 +94,7 @@ export default async function ProjectDetailPage({
     assignableUsers.push(...resolved.docs)
   }
 
-  const [activeRuns, usageRollup, initialRuns, lastActiveTask, projectPages] = await Promise.all([
+  const [activeRuns, usageRollup, initialRuns, lastActiveTask, projectPages, initialResources, gitOverview] = await Promise.all([
     listActiveRunsForProject(project.id),
     getProjectUsageRollup(project.id, 30),
     getProjectRuns({ projectId: project.id }),
@@ -116,6 +117,11 @@ export default async function ProjectDetailPage({
       depth: 0,
       overrideAccess: true,
     }),
+    listProjectResources(project.id),
+    // Reads real git state (status per worktree, `gh auth status`), so it is
+    // allowed to fail without taking the page down — the tab renders an
+    // explanation instead.
+    getProjectGitOverview(project.id).catch(() => null),
   ])
 
   return (
@@ -135,6 +141,8 @@ export default async function ProjectDetailPage({
       initialRuns={initialRuns}
       defaultStatusId={statuses.docs[0]?.id ?? null}
       projectPages={projectPages.docs}
+      gitOverview={gitOverview}
+      initialResources={initialResources}
     />
   )
 }

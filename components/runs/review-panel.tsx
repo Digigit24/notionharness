@@ -10,6 +10,7 @@ import type { Run, RunStatus } from '@/lib/broker'
 import { DetailLayout, type DetailLayoutTab } from '@/components/layout/detail-layout'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { formatTimestamp } from '@/lib/relative-time'
 
 // ROADMAP P6.4 review surface, first pass. Inline diff mode only (not
 // side-by-side) — the task brief explicitly said "don't half-build both,"
@@ -295,8 +296,29 @@ export function ReviewPanel({
         <p className="mt-1">
           #{run.id} · attempt {run.attempt}/{run.maxAttempts}
         </p>
-        {run.startedAt && <p className="mt-0.5 text-xs text-black/50 dark:text-white/50">started {new Date(run.startedAt).toLocaleString()}</p>}
-        {run.completedAt && <p className="mt-0.5 text-xs text-black/50 dark:text-white/50">completed {new Date(run.completedAt).toLocaleString()}</p>}
+        {run.startedAt && <p className="mt-0.5 text-xs text-black/50 dark:text-white/50">started {formatTimestamp(run.startedAt)}</p>}
+        {run.completedAt && <p className="mt-0.5 text-xs text-black/50 dark:text-white/50">completed {formatTimestamp(run.completedAt)}</p>}
+        {/* Where this run came from. Both ids sit on the run object and were
+            rendered nowhere, so a reviewer looking at a diff had no way back
+            to the conversation or the document that produced it. */}
+        <div className="mt-1 flex flex-wrap gap-2 text-xs">
+          {run.sessionId != null && (
+            <Link
+              href={`/workspace/${workspaceSlug}/work?session=${run.sessionId}`}
+              className="text-black/60 underline underline-offset-2 hover:text-black dark:text-white/60 dark:hover:text-white"
+            >
+              Open conversation
+            </Link>
+          )}
+          {run.pageId != null && (
+            <Link
+              href={`/workspace/${workspaceSlug}/p/${run.pageId}`}
+              className="text-black/60 underline underline-offset-2 hover:text-black dark:text-white/60 dark:hover:text-white"
+            >
+              Open page
+            </Link>
+          )}
+        </div>
       </div>
 
       <div>

@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { TERMINAL_STATUSES } from '@/lib/broker/types'
 import type { Run, RunMessageRow } from '@/lib/broker/types'
 import type { RunEvent } from '@/lib/run-events'
 
@@ -23,7 +24,26 @@ export type RunEventLoader = (taskId: number) => Promise<RunEventSnapshot[]>
  * currently open (or none have been opened yet — nothing to be
  * disconnected from).
  */
-export type RunStreamConnectionStatus = 'connected' | 'reconnecting'
+/**
+ * Four states, not two. The previous two-state version showed the same amber
+ * "reconnecting" banner for every non-open condition, including the brief gap
+ * a normal reconnect always has — so the banner flapped on healthy streams
+ * and looked identical whether recovery was one retry away or never coming.
+ *
+ * - `connected`   nothing to say (also used when nothing live is subscribed)
+ * - `connecting`  a drop just happened; stays SILENT for the grace period,
+ *                 because most reconnects finish inside it
+ * - `reconnecting` still retrying, worth telling the reader about
+ * - `offline`     gave up after MAX_RECONNECT_ATTEMPTS; sources are closed,
+ *                 so this is terminal until the reader hits Retry
+ */
+export type RunStreamConnectionStatus = 'connected' | 'connecting' | 'reconnecting' | 'offline'
+
+/** A drop shorter than this never reaches the screen. */
+const RECONNECT_GRACE_MS = 2000
+/** After this many consecutive failures a stream is declared offline and
+ * closed, rather than retried forever against a server that isn't answering. */
+const MAX_RECONNECT_ATTEMPTS = 5
 
 /** Merge by the daemon-assigned sequence number, never arrival time/order. */
 export function mergeRunEvents(current: RunMessageRow[], incoming: RunMessageRow[]): RunMessageRow[] {
@@ -57,6 +77,9 @@ const RUN_DISCOVERY_INTERVAL_MS = 8000
 export function useRunEventStream(taskId: number, observed: boolean, load: RunEventLoader) {
   const [snapshots, setSnapshots] = useState<RunEventSnapshot[]>([])
   const [connectionStatus, setConnectionStatus] = useState<RunStreamConnectionStatus>('connected')
+  /** How many consecutive reconnects the worst-off stream has attempted —
+   * shown as "(2/5)" so a retry loop reads as progress, not as a stuck UI. */
+  const [connectionAttempt, setConnectionAttempt] = useState(0)
   const loadRef = useRef(load)
   loadRef.current = load
   // Bumped by `retry()` to force the effect below to tear down and rebuild
@@ -64,6 +87,30 @@ export function useRunEventStream(taskId: number, observed: boolean, load: RunEv
   // rather than waiting on the browser's own backoff timer.
   const [retryToken, setRetryToken] = useState(0)
   const retry = useCallback(() => setRetryToken((t) => t + 1), [])
+
+  // Snapshots belong to the id that produced them, so they are dropped the
+  // moment that id changes or observation stops. Without this the previous
+  // thread stayed on screen: clicking "New chat" sets the session to null,
+  // the early return below skips every code path that writes snapshots, and
+  // the last conversation's messages simply stayed painted under a header
+  // reading "New chat". Switching between two existing sessions had a milder
+  // version of the same fault — the old transcript showed until the new one
+  // finished loading.
+  //
+  // Keyed on the id rather than done inside the effect, because the effect
+  // also re-runs on `retryToken` — and `retry()` is called immediately after
+  // every send. Clearing there would blank the transcript for the moment it
+  // takes discovery to re-fetch, on every single message.
+  const observedKey = observed ? taskId : null
+  const lastObservedKey = useRef<number | null>(observedKey)
+  if (lastObservedKey.current !== observedKey) {
+    lastObservedKey.current = observedKey
+    // Setting state during render is the supported way to derive state from
+    // changed inputs; React re-renders immediately without committing the
+    // stale tree. Guarded on length so switching between two empty threads
+    // costs nothing.
+    if (snapshots.length > 0) setSnapshots([])
+  }
 
   useEffect(() => {
     if (!observed) return
@@ -78,15 +125,68 @@ export function useRunEventStream(taskId: number, observed: boolean, load: RunEv
     // Which runs currently have a connection in an error/retrying state —
     // drives the aggregate `connectionStatus` this hook returns.
     const erroredRunIds = new Set<number>()
-    let flushTimer: ReturnType<typeof setTimeout> | null = null
+    /** Consecutive failed connects per run; reset by a successful `onopen`. */
+    const attemptsByRunId = new Map<number, number>()
+    /** Runs that exhausted MAX_RECONNECT_ATTEMPTS. */
+    const offlineRunIds = new Set<number>()
+    /** Fires once the grace period is up, promoting `connecting` to
+     * `reconnecting`. Cleared whenever the connection recovers first. */
+    let graceTimer: ReturnType<typeof setTimeout> | null = null
+    let erroredSince = 0
+    // Runs that have finished on purpose. The server closes the stream right
+    // after sending `done`, and the browser reports every close — including
+    // a deliberate one — as an `onerror`. Without tracking this, a completed
+    // run left a phantom entry in `erroredRunIds` that nothing could ever
+    // clear (its source is closed, so `onopen` will never fire again), which
+    // is why the "Live updates dropped — reconnecting…" banner stayed up
+    // permanently even while streaming was demonstrably working.
+    const finishedRunIds = new Set<number>()
+    let flushHandle: number | null = null
 
     const syncConnectionStatus = () => {
       if (!active) return
-      setConnectionStatus(erroredRunIds.size > 0 ? 'reconnecting' : 'connected')
+
+      if (offlineRunIds.size > 0) {
+        setConnectionStatus('offline')
+        setConnectionAttempt(MAX_RECONNECT_ATTEMPTS)
+        return
+      }
+
+      if (erroredRunIds.size === 0) {
+        if (graceTimer) {
+          clearTimeout(graceTimer)
+          graceTimer = null
+        }
+        erroredSince = 0
+        setConnectionStatus('connected')
+        setConnectionAttempt(0)
+        return
+      }
+
+      let worst = 0
+      for (const runId of erroredRunIds) worst = Math.max(worst, attemptsByRunId.get(runId) ?? 1)
+      setConnectionAttempt(worst)
+
+      // Silent until the grace period elapses. The timer exists so the
+      // promotion happens on its own even if no further events arrive —
+      // without it a drop that never produces another callback would stay
+      // invisible forever.
+      if (erroredSince === 0) erroredSince = Date.now()
+      if (Date.now() - erroredSince < RECONNECT_GRACE_MS) {
+        setConnectionStatus('connecting')
+        if (!graceTimer) {
+          graceTimer = setTimeout(() => {
+            graceTimer = null
+            syncConnectionStatus()
+          }, RECONNECT_GRACE_MS)
+        }
+        return
+      }
+      setConnectionStatus('reconnecting')
     }
 
     const flush = () => {
-      flushTimer = null
+      flushHandle = null
       if (!active || pending.size === 0) return
       const toApply = new Map(pending)
       pending.clear()
@@ -102,8 +202,27 @@ export function useRunEventStream(taskId: number, observed: boolean, load: RunEv
       })
     }
 
+    // Frame-aligned rather than a fixed 50ms timer: paint every chunk on the
+    // very next frame (~16ms at 60Hz, and it lands in the same frame the
+    // browser was going to render anyway), which is what makes the reveal
+    // read as continuous typing instead of arriving in visible steps. Still
+    // coalesced — several chunks arriving inside one frame are applied as a
+    // single React commit, so this doesn't trade smoothness for re-renders.
+    // Falls back to a short timer where rAF isn't available (SSR guard, and
+    // background tabs, where rAF is throttled to near-zero).
     const scheduleFlush = () => {
-      if (!flushTimer) flushTimer = setTimeout(flush, 50)
+      if (flushHandle !== null) return
+      if (typeof requestAnimationFrame === 'function') {
+        flushHandle = requestAnimationFrame(() => {
+          flushHandle = null
+          flush()
+        })
+      } else {
+        flushHandle = setTimeout(() => {
+          flushHandle = null
+          flush()
+        }, 16) as unknown as number
+      }
     }
 
     const closeSource = (runId: number) => {
@@ -125,6 +244,8 @@ export function useRunEventStream(taskId: number, observed: boolean, load: RunEv
       sources.set(runId, source)
 
       source.onopen = () => {
+        attemptsByRunId.delete(runId)
+        offlineRunIds.delete(runId)
         if (erroredRunIds.delete(runId)) syncConnectionStatus()
       }
       source.onmessage = (ev) => {
@@ -143,19 +264,36 @@ export function useRunEventStream(taskId: number, observed: boolean, load: RunEv
         // The route closes right after sending `done`; close from this end
         // too so the browser doesn't treat that as a network drop and try
         // to auto-reconnect into a run that will never emit anything else.
-        if (frame.event.type === 'done') closeSource(runId)
+        if (frame.event.type === 'done') {
+          finishedRunIds.add(runId)
+          closeSource(runId)
+        }
       }
       source.onerror = () => {
         // Network drop or a transient server error: EventSource's built-in
         // reconnect (with Last-Event-ID) handles resuming — this hook still
         // needs to surface that a reconnect is in progress rather than stay
-        // silent about it (ROADMAP B-6 "offline/disconnected" standard). A
-        // run that's already terminal gets closed by the `done` handler
-        // above instead of ever reaching here.
-        if (!erroredRunIds.has(runId)) {
-          erroredRunIds.add(runId)
-          syncConnectionStatus()
+        // silent about it (ROADMAP B-6 "offline/disconnected" standard).
+        //
+        // A run that finished normally is NOT a dropped connection, even
+        // though the browser reports the server's deliberate close through
+        // this same handler — and because its source is already closed,
+        // `onopen` can never fire to clear it again, so treating it as an
+        // error left the reconnecting banner stuck on forever.
+        if (finishedRunIds.has(runId)) return
+        const attempts = (attemptsByRunId.get(runId) ?? 0) + 1
+        attemptsByRunId.set(runId, attempts)
+        erroredRunIds.add(runId)
+        if (attempts >= MAX_RECONNECT_ATTEMPTS) {
+          // Stop the EventSource rather than letting the browser retry into
+          // a server that has failed five times running — an endless retry
+          // loop costs a request every few seconds and still shows the
+          // reader the same amber banner. `retry()` reopens everything.
+          offlineRunIds.add(runId)
+          sources.get(runId)?.close()
+          sources.delete(runId)
         }
+        syncConnectionStatus()
       }
     }
 
@@ -166,6 +304,18 @@ export function useRunEventStream(taskId: number, observed: boolean, load: RunEv
       // invoke a functional updater more than once for the same commit.
       for (const { run, events } of list) {
         runMeta.set(run.id, run)
+        // Only stream runs that can still produce events. A finished run's
+        // transcript is already complete in `events` — opening a stream for
+        // it just makes the server immediately close an empty connection,
+        // which the browser reports as an error, which then showed up as a
+        // permanent "Live updates dropped — reconnecting…" banner with
+        // nothing actually wrong. It also meant a conversation with a long
+        // history opened one pointless SSE connection (and its auth +
+        // database work) per past run on every single page load.
+        if (TERMINAL_STATUSES.includes(run.status)) {
+          finishedRunIds.add(run.id)
+          continue
+        }
         openSource(run.id, events)
       }
       setSnapshots((current) => {
@@ -195,7 +345,11 @@ export function useRunEventStream(taskId: number, observed: boolean, load: RunEv
     return () => {
       active = false
       clearInterval(discoveryTimer)
-      if (flushTimer) clearTimeout(flushTimer)
+      if (graceTimer) clearTimeout(graceTimer)
+      if (flushHandle !== null) {
+        if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(flushHandle)
+        clearTimeout(flushHandle)
+      }
       for (const source of sources.values()) source.close()
       sources.clear()
       pending.clear()
@@ -207,5 +361,5 @@ export function useRunEventStream(taskId: number, observed: boolean, load: RunEv
     // than waiting on the browser's own backoff timer.
   }, [taskId, observed, retryToken])
 
-  return { snapshots, connectionStatus, retry }
+  return { snapshots, connectionStatus, connectionAttempt, maxConnectionAttempts: MAX_RECONNECT_ATTEMPTS, retry }
 }

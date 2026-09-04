@@ -4,21 +4,29 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { FileText, FolderOpen } from 'lucide-react'
 import { DetailLayout, type DetailLayoutTab } from '@/components/layout/detail-layout'
+import { ProjectWorktreesTab } from '@/components/projects/project-worktrees-tab'
+import type { ProjectGitOverview } from '@/app/(app)/workspace/[workspaceSlug]/projects/[projectId]/worktree-actions'
 import { EmptyState } from '@/components/ui/empty-state'
 import { TaskBoard, type ColumnData } from '@/components/tasks/task-board'
 import { NewProjectTaskButton } from './new-project-task-button'
 import { ProjectOverviewTab, type ProjectStatusCount } from './project-overview-tab'
 import { ProjectRunsTab } from './project-runs-tab'
 import { ProjectSettingsTab } from './project-settings-tab'
+import { ProjectResourcesTab } from './project-resources-tab'
 import type { ProjectRunRow } from '@/app/(app)/workspace/[workspaceSlug]/projects/[projectId]/actions'
-import type { Agent, Page, Project, User, Workspace } from '@/payload-types'
+import type { Agent, Page, Project, ProjectResource, User, Workspace } from '@/payload-types'
 
 // ROADMAP B-1 — the project detail page's own DetailLayout wiring. Header
 // and right rail persist across tabs (DetailLayout's own contract); tab
 // state lives in the URL via DetailLayout's built-in `?tab=` handling, not
-// reinvented here. Overview/Tasks/Runs are the three real tabs this batch
-// was asked to build for real; Pages and Files are honest degraded states
-// (see each tab's own comment for exactly why), not faked trees/browsers.
+// reinvented here. Overview/Tasks/Runs/Resources are real tabs; Pages and
+// Files are honest degraded states (see each tab's own comment for exactly
+// why), not faked trees/browsers. Resources (Phase C, closing the C1.1/C3
+// gap once `project_resources` was actually migrated+registered — see
+// AGENTS.md) is deliberately separate from Files: Resources only ever
+// declares WHICH repo/directory a project is bound to (a `project_resources`
+// row), never browses its actual file contents — that's what Files still
+// can't do (no worktree infra keyed by project, only by run).
 export function ProjectDetailView({
   workspace,
   project,
@@ -35,9 +43,14 @@ export function ProjectDetailView({
   initialRuns,
   defaultStatusId,
   projectPages,
+  gitOverview,
+  initialResources,
 }: {
   workspace: Workspace
   project: Project
+  /** Bindings, worktrees and their live git status; null when git could not
+   * be read on this machine. */
+  gitOverview: ProjectGitOverview | null
   columns: ColumnData[]
   taskProjects: Project[]
   assignableUsers: User[]
@@ -51,6 +64,7 @@ export function ProjectDetailView({
   initialRuns: ProjectRunRow[]
   defaultStatusId: number | null
   projectPages: Page[]
+  initialResources: ProjectResource[]
 }) {
   const [currentProject, setCurrentProject] = useState(project)
   const totalTasks = columns.reduce((sum, c) => sum + c.totalDocs, 0)
@@ -132,6 +146,30 @@ export function ProjectDetailView({
       content: <ProjectRunsTab projectId={currentProject.id} workspaceSlug={workspace.slug} agents={agents} initialRuns={initialRuns} />,
     },
     {
+      key: 'resources',
+      label: 'Resources',
+      count: initialResources.length,
+      content: (
+        <ProjectResourcesTab projectId={currentProject.id} workspaceSlug={workspace.slug} initialResources={initialResources} />
+      ),
+    },
+    {
+      key: 'worktrees',
+      label: 'Worktrees',
+      count: gitOverview?.worktrees.length,
+      content: gitOverview ? (
+        <ProjectWorktreesTab
+          workspaceSlug={workspace.slug}
+          projectId={currentProject.id}
+          overview={gitOverview}
+        />
+      ) : (
+        <div className="p-6 text-xs text-black/50 dark:text-white/50">
+          Git information could not be read on this machine.
+        </div>
+      ),
+    },
+    {
       key: 'files',
       label: 'Files',
       content: (
@@ -139,12 +177,11 @@ export function ProjectDetailView({
           {/* ROADMAP B-1 — `lib/run-worktrees/*` only knows how to browse
               ONE run's worktree at a time, scoped by `runId` against a
               single global repo (`RUN_WORKTREE_SOURCE_REPO`, this app's own
-              codebase per `lib/run-worktrees/config.ts`). Projects have no
-              repo/directory binding field at all (confirmed:
-              collections/Projects.ts has name/workspace/icon/description
-              only), so there's no "this project's repo" to browse — building
-              that binding plus a real file browser is out of scope for one
-              pass of one batch. */}
+              codebase per `lib/run-worktrees/config.ts`). The project now
+              DOES have a repo/directory binding (see the Resources tab —
+              `project_resources`, Phase C) — what's still missing is a file
+              browser keyed by that binding rather than by a single run's
+              worktree; building one is out of scope for this pass. */}
           <EmptyState
             icon={<FolderOpen />}
             title="File browsing isn't available yet"

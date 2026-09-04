@@ -1,4 +1,15 @@
-import { z } from 'zod'
+// zod v3, NOT this app's top-level zod v4 — BlockSuite's own inline-attribute
+// merge (`@blocksuite/inline`'s `normalizeAttributes`) does its own internal
+// zod v3 instanceof/`_def` checks on every registered spec's schema. A v4
+// schema object doesn't satisfy those checks, so BlockSuite silently treats
+// the `mention` key as unregistered (`z.never()`) — confirmed live: every
+// mention insert threw `ZodError: expected never, received object` at
+// `insertText` time, which aborted the insert with no visible error to the
+// user (the popover just closed with nothing written). `zod-v3` is an
+// npm-aliased pin of the exact version `@blocksuite/inline` itself bundles
+// (node_modules/@blocksuite/inline/node_modules/zod), not a separate
+// dependency choice.
+import { z } from 'zod-v3'
 
 // Declaration merging onto BlockSuite's own `AffineTextAttributes` interface —
 // the same mechanism `reference`/`link`/`latex` use — so a mention is just

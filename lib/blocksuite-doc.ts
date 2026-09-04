@@ -2,6 +2,7 @@ import { DocCollection, Schema, Text, type Doc } from '@/lib/blocksuite-store'
 import { AffineSchemas } from '@/lib/blocksuite-blocks'
 import { NativeDatabaseBlockSchema } from '@/components/editor/blocks/native-database/schema'
 import { RunCardBlockSchema } from '@/components/editor/blocks/run-card/schema'
+import { TaskBlockSchema } from '@/components/editor/blocks/task/schema'
 import { MENTION_NODE } from '@/components/editor/mentions/insert-mention'
 import type { Payload } from 'payload'
 // ROADMAP B8.3 (Batch B-6 "Finish") — module splitting. The pure markdown-
@@ -32,6 +33,17 @@ export type { TeableDatabaseSnapshot, DatabaseResolver }
 // minus `@blocksuite/*/effects` (those register browser custom elements and
 // aren't needed to read/write the block tree). Must register the same custom
 // block schemas as the client or hydrating a doc that contains one throws.
+//
+// That invariant had silently drifted: `TaskBlockSchema` was registered
+// client-side (BlockSuiteEditor.tsx) but missing here — every real user
+// adding an `affine:embed-task` block via the browser worked fine (client
+// schema had it), but any server-side code path building/mutating a doc
+// containing one (confirmed via Phase C's onboarding-seed work — see
+// AGENTS.md) threw `schema for flavour: affine:embed-task not found`. This
+// is exactly the failure mode this file's own comment already warned
+// about; it had just never been exercised for real until now. Fixed by
+// adding the missing registration, not by avoiding the code path that
+// exposed it.
 
 export type AnyBlockModel = {
   flavour: string
@@ -40,7 +52,7 @@ export type AnyBlockModel = {
 }
 
 function createCollection() {
-  const schema = new Schema().register(AffineSchemas).register([NativeDatabaseBlockSchema, RunCardBlockSchema])
+  const schema = new Schema().register(AffineSchemas).register([NativeDatabaseBlockSchema, RunCardBlockSchema, TaskBlockSchema])
   const collection = new DocCollection({ schema })
   collection.meta.initialize()
   return collection
