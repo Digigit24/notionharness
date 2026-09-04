@@ -96,3 +96,104 @@ export async function rejectRunSuggestions(payload: Payload, runId: number): Pro
   }
   await setSuggestionStatus(runId, 'rejected')
 }
+
+
+// ---------------------------------------------------------------------------
+// R7.4 (Roadmap A A3.5) — per-block proposals.
+//
+// The whole-run accept/reject above is coarse by design, and the reason is
+// recorded in `lib/broker/types.ts`: a per-block suggestion MARK cannot be
+// stored durably without either mutating a stock BlockSuite schema this app
+// does not own, or registering a new container flavour with its own
+// children-rendering component.
+//
+// That constraint is about marking blocks, not about acting on them. The run's
+// subtree already IS the proposal container — a toggle block holding exactly
+// the blocks the run appended — so a per-block decision does not need a new
+// mark at all:
+//
+//   * REJECT one block = delete that block. The rest of the proposal stands.
+//   * ACCEPT one block = move it out of the proposal and into the page proper,
+//     which is precisely what accepting means: it stops being a proposal and
+//     becomes part of the document.
+//
+// Both use the same always-supported `Doc` primitives the whole-run actions
+// use. No schema change, no new flavour, and no pretending the marking problem
+// was solved.
+
+/** A block inside a run's proposal subtree, for review. */
+export interface ProposedBlock {
+  id: string
+  flavour: string
+  /** Plain text, for a review list that must not embed an editor per row. */
+  text: string
+}
+
+/**
+ * The blocks a run has proposed, in document order.
+ *
+ * Returns an empty list when the subtree is gone, which is the honest answer:
+ * a human who deleted it has already rejected the lot.
+ */
+export async function listProposedBlocks(payload: Payload, runId: number): Promise<ProposedBlock[]> {
+  const run = await getRun(runId)
+  if (!run?.pageId || !run.pageSubtreeBlockId) return []
+  const { doc } = await loadDocForWrite(payload, run.pageId)
+  const handle = doc.getBlock(run.pageSubtreeBlockId)
+  if (!handle) return []
+  const children = (handle.model.children ?? []) as Array<{ id: string; flavour: string; text?: { toString(): string } }>
+  return children.map((child) => ({
+    id: child.id,
+    flavour: child.flavour,
+    text: child.text ? child.text.toString() : '',
+  }))
+}
+
+/**
+ * Accepts one proposed block: moves it out of the proposal and into the note,
+ * immediately after the proposal container.
+ *
+ * Placement is deliberate — appending to the end of the note would scatter
+ * accepted blocks away from the context they were proposed in, which for a
+ * multi-block proposal reviewed one row at a time would shuffle the document.
+ */
+export async function acceptProposedBlock(payload: Payload, runId: number, blockId: string): Promise<void> {
+  const run = await getRun(runId)
+  if (!run?.pageId || !run.pageSubtreeBlockId) throw new Error(`Run ${runId} has no proposal to accept from.`)
+  const { doc, persist } = await loadDocForWrite(payload, run.pageId)
+  const subtree = doc.getBlock(run.pageSubtreeBlockId)
+  const block = doc.getBlock(blockId)
+  if (!subtree || !block) throw new Error('That proposed block no longer exists.')
+
+  const parent = doc.getParent(subtree.model)
+  if (!parent) throw new Error('The proposal is no longer attached to the page.')
+
+  // `moveBlocks` is the same primitive BlockSuite's own drag-and-drop uses.
+  // Guarded because it is the one call here that is not on the narrow
+  // always-present surface the rest of this module sticks to.
+  const mover = (doc as unknown as {
+    moveBlocks?: (blocks: unknown[], newParent: unknown, targetSibling?: unknown, before?: boolean) => void
+  }).moveBlocks
+  if (typeof mover !== 'function') {
+    throw new Error('This BlockSuite build cannot move blocks; accept the whole run instead.')
+  }
+  mover.call(doc, [block.model], parent, subtree.model, false)
+  await persist()
+}
+
+/**
+ * Rejects one proposed block by deleting it, leaving the rest of the proposal
+ * intact. The run's own status is untouched: rejecting one block is not
+ * rejecting the run, and marking it so would lose the blocks still pending.
+ */
+export async function rejectProposedBlock(payload: Payload, runId: number, blockId: string): Promise<void> {
+  const run = await getRun(runId)
+  if (!run?.pageId) throw new Error(`Run ${runId} has no page.`)
+  const { doc, persist } = await loadDocForWrite(payload, run.pageId)
+  const block = doc.getBlock(blockId)
+  // Already gone is success, not an error — the outcome the caller wanted is
+  // the outcome that exists.
+  if (!block) return
+  doc.deleteBlock(block.model)
+  await persist()
+}

@@ -3,6 +3,7 @@ import { getPayloadClient } from '@/lib/payload'
 import { getWorkspaceBySlug, getWorkspacePages } from '@/lib/pages-cache'
 import { buildBreadcrumbChain } from '@/lib/tree'
 import { getPageProvenance } from '@/lib/provenance'
+import { getPageOrigin } from '@/lib/page-origin'
 import { PageCanvas } from '@/components/canvas/page-canvas'
 import { RecentPageTracker } from '@/components/home/recent-page-tracker'
 
@@ -32,9 +33,13 @@ export default async function PageView({
   // this same request — `React.cache()` means this reuses that result instead
   // of firing a second query. `getPageProvenance` (ROADMAP B-2) is independent
   // of it, so both run in the same Promise.all rather than sequentially.
-  const [allPages, provenance] = await Promise.all([
+  const [allPages, provenance, origin] = await Promise.all([
     getWorkspacePages(workspace.id),
     getPageProvenance(payload, page.id),
+    // R7.4 — page-level origin, a different question from block-level
+    // provenance above. Independent of both, so it joins the same Promise.all
+    // rather than adding a third sequential await (D0).
+    getPageOrigin(payload, page).catch(() => null),
   ])
 
   const chain = buildBreadcrumbChain(allPages, page.id)
@@ -42,7 +47,7 @@ export default async function PageView({
   return (
     <>
       <RecentPageTracker workspaceSlug={workspace.slug} pageId={page.id} title={page.title} icon={page.icon ?? null} />
-      <PageCanvas workspace={workspace} page={page} breadcrumbChain={chain} provenance={provenance} />
+      <PageCanvas workspace={workspace} page={page} breadcrumbChain={chain} provenance={provenance} origin={origin} />
     </>
   )
 }

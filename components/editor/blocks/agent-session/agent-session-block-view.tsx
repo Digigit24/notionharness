@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Bot, ChevronDown, ChevronRight, Loader2, Maximize2, Send, Square } from 'lucide-react'
+import { Bot, ChevronDown, ChevronRight, Loader2, Maximize2, RotateCw, Send, Square } from 'lucide-react'
 import { Thread } from '@/components/thread/Thread'
 import { useRunEventStream } from '@/components/runs/use-run-event-stream'
 import { adaptRunSnapshotsToThread, type ChatMessage, type ChatThread } from '@/lib/hermes/runEvent-adapter'
@@ -102,7 +102,36 @@ export function AgentSessionBlockView({
   }, [thread, pendingSend])
 
   async function handleSend() {
-    const text = prompt.trim()
+    await submit(prompt.trim())
+  }
+
+  /**
+   * A1.5 — re-run the last thing that was asked.
+   *
+   * The block was a transcript that only grew: iterating on a prompt meant
+   * scrolling up, selecting the text, copying it and pasting it back into the
+   * composer. Notion's AI block is persistent and re-runnable and that is the
+   * shape worth copying — the previous answer stays on the page as history,
+   * and the new one is appended below it rather than replacing it, because a
+   * page is a document and silently rewriting what someone already read would
+   * be the wrong default here.
+   */
+  const lastUserPrompt = useMemo(() => {
+    const messages = thread?.messages ?? []
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]
+      if (message.role !== 'user') continue
+      const text = message.content
+        .filter((part): part is { type: 'text'; text: string } => part.type === 'text')
+        .map((part) => part.text)
+        .join('')
+        .trim()
+      if (text) return text
+    }
+    return null
+  }, [thread])
+
+  async function submit(text: string) {
     if (!text || sending) return
     if (agentId == null) {
       setError('This block is not bound to an agent.')
@@ -111,7 +140,9 @@ export function AgentSessionBlockView({
     setSending(true)
     setError(null)
     setPendingSend(text)
-    setPrompt('')
+    // Only the composer's own send clears it; a re-run must not wipe
+    // something the person has already started typing.
+    setPrompt((current) => (current.trim() === text ? '' : current))
     try {
       let id = sessionId
       if (!id) {
@@ -161,6 +192,18 @@ export function AgentSessionBlockView({
             <span className="size-1.5 animate-pulse rounded-full bg-emerald-500" />
             answering
           </span>
+        )}
+        {lastUserPrompt && !isAnswering && (
+          <button
+            type="button"
+            onClick={() => void submit(lastUserPrompt)}
+            disabled={sending}
+            title={`Run again: ${lastUserPrompt.slice(0, 80)}`}
+            className="flex shrink-0 items-center gap-1 rounded p-1 text-[10px] text-black/45 hover:bg-black/5 disabled:opacity-50 dark:text-white/45 dark:hover:bg-white/10"
+          >
+            <RotateCw size={11} />
+            Run again
+          </button>
         )}
         {sessionId != null && (
           <a

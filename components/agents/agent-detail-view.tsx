@@ -3,6 +3,9 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { DetailLayout, type DetailLayoutTab } from '@/components/layout/detail-layout'
+import { AgentSessionsTab, type AgentSessionRow } from '@/components/agents/agent-sessions-tab'
+import { AgentPluginCapabilities, type AgentPluginRow } from '@/components/agents/agent-plugin-capabilities'
+import Link from 'next/link'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { AgentCapabilities } from '@/components/agents/agent-capabilities'
@@ -41,6 +44,9 @@ export function AgentDetailView({
   activeRunId,
   ownerName,
   weeklySpendTicks,
+  monthlySpendTicks,
+  sessions,
+  plugins,
   activeModel,
   agentModel,
 }: {
@@ -48,11 +54,19 @@ export function AgentDetailView({
   workspaceSlug: string
   agent: Agent
   profiles: AgentProfile[]
-  runtimeProfile: { name: string; commandName: string; protocolFamily: string } | null
+  runtimeProfile: { name: string; commandName: string; protocolFamily: string; homeStrategy?: string } | null
   activeRunId: number | null
   ownerName: string | null
   /** ROADMAP B7.2 — cost ticks for this agent, trailing 7 days. */
   weeklySpendTicks?: number
+  /** R7.3 — trailing 30 days. Shown beside the 7-day figure because either
+   * number alone leaves a real question unanswerable: 7 hides a burst that has
+   * tailed off, 30 lags a change in behaviour. */
+  monthlySpendTicks?: number
+  /** R7.3 — this agent's own conversations, newest first. */
+  sessions?: AgentSessionRow[]
+  /** R7.3 — plugins scoped to this agent, read-only. */
+  plugins?: AgentPluginRow[]
   /** Hermes's one, install-wide active model — not per-agent. See providers.ts. */
   activeModel: ActiveModelConfig | null
   /** The model pinned by THIS agent's own Hermes profile. Null when the agent
@@ -119,6 +133,7 @@ export function AgentDetailView({
         <OverviewField label="Max concurrent runs" value={String(agent.maxConcurrentRuns ?? 1)} />
         <OverviewField label="Skills bound" value={String(skillsCount)} />
         <OverviewField label="Spend, last 7 days" value={`$${((weeklySpendTicks ?? 0) / 100).toFixed(2)}`} />
+        <OverviewField label="Spend, last 30 days" value={`$${((monthlySpendTicks ?? 0) / 100).toFixed(2)}`} />
       </div>
       {agent.instructions && (
         <div>
@@ -131,14 +146,62 @@ export function AgentDetailView({
     </div>
   )
 
+  // The Hermes skills/MCP panel reads a Hermes install. Showing it for an
+  // agent on another runtime rendered an empty panel fetched from something
+  // that agent has no relationship to — so each runtime gets the view that is
+  // actually true for it, and both link to the settings that edit them.
+  const usesHermesHome = (runtimeProfile?.homeStrategy ?? 'hermes') === 'hermes'
   const capabilitiesContent = (
-    <div className="p-6">
-      <AgentCapabilities
-        workspaceId={workspaceId}
+    <div className="flex flex-col gap-6 p-6">
+      <AgentPluginCapabilities
         workspaceSlug={workspaceSlug}
-        agent={agent}
-        onAgentUpdated={(next) => setAgent(next)}
+        plugins={plugins ?? []}
+        runtimeName={runtimeProfile?.name ?? null}
       />
+      {usesHermesHome ? (
+        <div className="border-t border-black/10 pt-6 dark:border-white/10">
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold">Hermes skills and MCP servers</h3>
+              <p className="mt-0.5 text-xs text-black/50 dark:text-white/50">
+                From this agent&apos;s Hermes install. Bound per agent; the pool itself is install-wide.
+              </p>
+            </div>
+            <div className="flex shrink-0 gap-3 text-xs font-medium">
+              <Link
+                href={`/workspace/${workspaceSlug}/settings/skills`}
+                className="text-primary underline-offset-2 hover:underline"
+              >
+                Edit skills →
+              </Link>
+              <Link
+                href={`/workspace/${workspaceSlug}/settings/mcp`}
+                className="text-primary underline-offset-2 hover:underline"
+              >
+                Edit MCP →
+              </Link>
+            </div>
+          </div>
+          <AgentCapabilities
+            workspaceId={workspaceId}
+            workspaceSlug={workspaceSlug}
+            agent={agent}
+            onAgentUpdated={(next) => setAgent(next)}
+          />
+        </div>
+      ) : (
+        <p className="border-t border-black/10 pt-6 text-xs text-black/45 dark:border-white/10 dark:text-white/45">
+          Skills and MCP servers shown here are a Hermes mechanism.{' '}
+          {runtimeProfile?.name ?? 'This runtime'} manages its own tools internally, and its settings are on the{' '}
+          <Link
+            href={`/workspace/${workspaceSlug}/settings/providers`}
+            className="font-medium text-primary underline-offset-2 hover:underline"
+          >
+            Providers page
+          </Link>
+          .
+        </p>
+      )}
     </div>
   )
 
@@ -164,6 +227,12 @@ export function AgentDetailView({
   const tabs: DetailLayoutTab[] = [
     { key: 'overview', label: 'Overview', content: overviewContent },
     { key: 'capabilities', label: 'Capabilities', count: skillsCount, content: capabilitiesContent },
+    {
+      key: 'sessions',
+      label: 'Sessions',
+      count: sessions?.length,
+      content: <AgentSessionsTab workspaceSlug={workspaceSlug} sessions={sessions ?? []} />,
+    },
     { key: 'memory', label: 'Memory', content: memoryContent },
     { key: 'settings', label: 'Settings', content: settingsContent },
   ]

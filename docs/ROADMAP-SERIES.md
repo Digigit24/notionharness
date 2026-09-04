@@ -551,7 +551,7 @@ worktrees, message each other through the board, hit an approval gate, be
 reviewed as diffs, and be merged — and the whole thing survives a server
 restart mid-run.
 
-## R7 — Runtime panels and polish — PARTLY DONE
+## R7 — Runtime panels and polish — DONE
 
 - **R7.1 Per-runtime settings — DONE.** Providers is tabbed per runtime, and
   the tabs are genuinely different screens because the runtimes differ in kind:
@@ -578,11 +578,44 @@ restart mid-run.
   unreachable" is a real state worth naming: turns work, the Hermes settings
   screens do not. Probes are reused for ten minutes so a 30-second health loop
   does not spawn binaries continuously (D0).
-- **R7.3 Agent detail completeness** — not started. A Sessions tab filtered to
-  that agent, and the rest of that item, remain open.
-- **R7.4 Remaining page work from Roadmap A** — not started: the record detail
-  header, page provenance, the persistent re-runnable block, suggest-edits and
-  the projects/tasks list wins.
+- **R7.3 Agent detail completeness — DONE.** A Sessions tab listing that
+  agent's own conversations, each linking into Work rather than being a second
+  transcript viewer that would drift from the real one. Capabilities is now
+  runtime-aware: it showed Hermes skills and MCP servers for every agent, which
+  for an agent on any other runtime was an empty panel fetched from an install
+  it has nothing to do with — so a non-Hermes agent sees the plugins scoped to
+  it instead, and both views link to the settings that edit them. Spend is
+  shown over 7 **and** 30 days, because either alone leaves a real question
+  unanswerable: 7 hides a burst that has tailed off, 30 lags a change in
+  behaviour.
+- **R7.4 Remaining page work from Roadmap A — DONE.**
+  - **Record header and page provenance (A5.1, A5.3).** Row pages and task
+    documents are kept out of the sidebar tree on purpose, which left them with
+    no on-screen context at all — no way to tell which table a row belonged to,
+    and no way back but the browser button. `lib/page-origin.ts` resolves it and
+    a strip states it. The row title comes from the database's primary field
+    and never falls back to the record id, which would have reintroduced the
+    original `Record aojhfiefhh` bug one layer up.
+  - **Persistent, re-runnable block (A1.5).** The agent-session block offers
+    Run again on the last prompt. The previous answer stays as history and the
+    new one is appended below it rather than replacing it: a page is a
+    document, and silently rewriting what someone already read is the wrong
+    default here.
+  - **Suggest edits (A3.5).** Per-block accept and reject. The documented
+    blocker — a per-block suggestion *mark* needs a schema this app does not
+    own — is about marking, not about acting: the run's subtree already **is**
+    the proposal container, so rejecting one block deletes it and accepting one
+    moves it out into the page, using the same always-supported primitives the
+    whole-run actions use. No new flavour, and no pretending the marking
+    problem was solved. Nine checks passing.
+  - **List wins.** Project rows carry task count, runs in flight and last
+    activity, in one query rather than three per project. The tasks board
+    accepts `?project=`, filtered in the query so a large workspace does not
+    fetch rows it is about to discard.
+  - **A real bug found here:** the tasks page destructured
+    `[statuses, projects, agents]` from a `Promise.all` returning
+    `[statuses, agents, projects]`, so the board was handed the agent list as
+    its projects and vice versa.
 
 ---
 

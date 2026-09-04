@@ -18,10 +18,10 @@ export default async function TasksView({
   searchParams,
 }: {
   params: Promise<{ workspaceSlug: string }>
-  searchParams: Promise<{ task?: string }>
+  searchParams: Promise<{ task?: string; project?: string }>
 }) {
   const { workspaceSlug } = await params
-  const { task: taskParam } = await searchParams
+  const { task: taskParam, project: projectParam } = await searchParams
   // ROADMAP P2.6 — notifications link to `?task=<id>` so clicking one opens
   // straight into that task's drawer. Only works if the task is already in
   // one of its column's first `TASKS_PER_COLUMN_PAGE` — a task further down
@@ -36,7 +36,11 @@ export default async function TasksView({
   ])
   if (!workspace) notFound()
 
-  const [statuses, projects, agents] = await Promise.all([
+  // Destructured in the SAME order as the promises. It previously read
+  // `[statuses, projects, agents]` against `[statuses, agents, projects]`, so
+  // the board was handed the agent list as its projects and vice versa — the
+  // project filter listed agent names and the assignee picker listed projects.
+  const [statuses, agents, projects] = await Promise.all([
     payload.find({
       collection: 'task-statuses',
       where: { workspace: { equals: workspace.id } },
@@ -54,11 +58,22 @@ export default async function TasksView({
     }),
   ])
 
+  // Free win 14 — `?project=<id>` narrows the board to one project. Filtered
+  // in the query rather than after loading, so a workspace with many tasks
+  // does not pay to fetch the ones it is about to discard, and each column's
+  // "load more" count stays truthful for the filtered view.
+  const projectFilterId = projectParam ? Number(projectParam) : null
+  const activeProjectId = Number.isFinite(projectFilterId) ? projectFilterId : null
+
   const columns: ColumnData[] = await Promise.all(
     statuses.docs.map(async (status) => {
       const result = await payload.find({
         collection: 'tasks',
-        where: { workspace: { equals: workspace.id }, status: { equals: status.id } },
+        where: {
+          workspace: { equals: workspace.id },
+          status: { equals: status.id },
+          ...(activeProjectId ? { project: { equals: activeProjectId } } : {}),
+        },
         sort: 'position',
         limit: TASKS_PER_COLUMN_PAGE,
         overrideAccess: true,
@@ -101,6 +116,10 @@ export default async function TasksView({
       workspace={workspace}
       columns={columns}
       projects={projects.docs}
+      // Scoping the board to a project should also mean a task created here
+      // lands in it, rather than making the person pick the project they are
+      // already looking at.
+      defaultProjectId={activeProjectId}
       assignableUsers={assignableUsers}
       agents={agents.docs as Agent[]}
       currentUserId={currentUser?.id ?? null}

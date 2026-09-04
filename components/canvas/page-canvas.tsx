@@ -6,6 +6,8 @@ import { Lock, LockOpen, Maximize2, Minimize2, MoreHorizontal, Trash2 } from 'lu
 import { cn } from '@/lib/cn'
 import { PopoverMenu } from '@/components/ui/popover-menu'
 import { Breadcrumbs } from '@/components/nav/breadcrumbs'
+import { PageOriginHeader } from '@/components/canvas/page-origin-header'
+import type { PageOrigin } from '@/lib/page-origin'
 import { EmojiPicker } from './emoji-picker'
 import { CoverPicker } from './cover-picker'
 import { BlockSuiteEditor } from '@/components/editor/BlockSuiteEditor'
@@ -31,11 +33,15 @@ export function PageCanvas({
   workspace,
   page,
   breadcrumbChain,
+  origin,
   provenance,
 }: {
   workspace: Workspace
   page: Page
   breadcrumbChain: Page[]
+  /** R7.4 — what this page was created FOR (a table row, a task), when it was
+   * created for something. Null for an ordinary page, which needs no strip. */
+  origin?: PageOrigin
   // ROADMAP B-2 — resolved server-side (`lib/provenance.ts`) once per page
   // load and threaded down to both the "written by" strip and the
   // hover-chip/time-filter machinery inside `BlockSuiteEditor`, so there is
@@ -187,6 +193,11 @@ export function PageCanvas({
             fullWidth ? 'max-w-none px-4 md:px-6' : 'max-w-4xl px-6 md:px-12',
           )}
         >
+          {/* R7.4 — a row page or task document says where it belongs. These
+              are kept out of the sidebar tree on purpose (they would bury it),
+              which left them with no on-screen context at all. */}
+          <PageOriginHeader workspaceSlug={workspace.slug} origin={origin ?? null} />
+
           <div className="mb-1 flex flex-col gap-2">
             {page.icon &&
               (locked ? (
