@@ -4,6 +4,10 @@
 /node_modules
 /.pnp
 .pnp.*
+
+# R14-P0.4 — local disk storage for the `media` upload collection
+# (collections/Media.ts). Real attachment bytes, never source.
+/media-uploads
 .yarn/*
 !.yarn/patches
 !.yarn/plugins

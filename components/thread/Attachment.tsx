@@ -1,6 +1,6 @@
 'use client'
 
-import { ReactNode } from 'react'
+import { ReactNode, useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
 
 /**
@@ -69,5 +69,105 @@ export function Attachment({
         </a>
       )}
     </div>
+  )
+}
+
+/**
+ * R14-P0.4 — completes `Attachment` rather than replacing it.
+ *
+ * A sent `team_messages` row carries `attachments: number[]` — Media
+ * collection ids, and nothing else (`lib/broker/channels.ts`'s own comment
+ * explains why: one copy of a file's bytes/name/size, never duplicated onto
+ * the message). So rendering one on a real message needs a step `Attachment`
+ * itself was never meant to do: turning that bare id into the
+ * name/url/size/mimeType props it already knows how to draw. This is that
+ * step, as a small wrapper rather than a second component with its own look —
+ * every attachment in this app still renders through the one `Attachment`
+ * body above.
+ *
+ * A CLIENT fetch to `/api/media/[id]` (not a server component) because the
+ * one place this is meant to be dropped in — a message row inside the
+ * channel feed — is itself a client component tree (`channel-view.tsx`), and
+ * a server component cannot be mounted from inside one without becoming a
+ * boundary the caller would have to restructure around. The route is
+ * authenticated with this app's own session and re-derives visibility from
+ * `lib/media/access.ts`'s `canUserReadMedia`, so a 404 here means "you may
+ * not see this," not "something broke" — rendered as a quiet placeholder
+ * rather than an error state, the same posture `MailX`/undeliverable rows
+ * already take elsewhere in this feed.
+ */
+export interface ResolvedAttachmentMeta {
+  id: number
+  filename: string
+  mimeType: string
+  filesize: number
+  width: number | null
+  height: number | null
+  url: string
+  thumbnailUrl: string | null
+}
+
+const attachmentMetaCache = new Map<number, ResolvedAttachmentMeta>()
+
+export function ChannelAttachment({ mediaId, className }: { mediaId: number; className?: string }) {
+  const [meta, setMeta] = useState<ResolvedAttachmentMeta | null>(attachmentMetaCache.get(mediaId) ?? null)
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    if (attachmentMetaCache.has(mediaId)) return
+    let cancelled = false
+    setFailed(false)
+    fetch(`/api/media/${mediaId}`)
+      .then((res) => (res.ok ? (res.json() as Promise<ResolvedAttachmentMeta>) : Promise.reject(res.status)))
+      .then((data) => {
+        if (cancelled) return
+        attachmentMetaCache.set(mediaId, data)
+        setMeta(data)
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [mediaId])
+
+  if (failed) {
+    return (
+      <div className={cn('rounded border border-black/10 px-2 py-1 text-xs text-black/40 dark:border-white/10 dark:text-white/40', className)}>
+        Attachment unavailable
+      </div>
+    )
+  }
+
+  if (!meta) {
+    return (
+      <div className={cn('h-14 w-40 animate-pulse rounded border border-black/10 bg-black/[.03] dark:border-white/10 dark:bg-white/[.04]', className)} />
+    )
+  }
+
+  const isImage = meta.mimeType.startsWith('image/')
+  return (
+    <Attachment
+      className={className}
+      type={isImage ? 'image' : 'file'}
+      name={meta.filename}
+      url={meta.url}
+      size={meta.filesize}
+      mimeType={meta.mimeType}
+      preview={
+        isImage ? (
+          // An authenticated, per-viewer-authorized route (see
+          // `[id]/file/route.ts`'s own comment), not a static asset
+          // next/image's optimizer would be allowed to cache.
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={meta.thumbnailUrl ?? meta.url}
+            alt={meta.filename}
+            className="max-h-48 w-auto rounded object-contain"
+          />
+        ) : undefined
+      }
+    />
   )
 }

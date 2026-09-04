@@ -142,7 +142,7 @@ export function ThreadPane({
   // different thread would feel broken.
   const pane = useResizablePane({ storageKey: 'notionharness.channel.thread.width', defaultWidth: 384, min: 300, max: 900 })
 
-  async function send(input: { body: string; kind: TeamMessageKind; toSlotId: number | null }) {
+  async function send(input: { body: string; kind: TeamMessageKind; toSlotId: number | null; attachments: number[] }) {
     // Same rule as the feed: the reply is on screen before the write starts.
     const optimistic = makeOptimisticMessage({
       teamId,
@@ -152,6 +152,7 @@ export function ThreadPane({
       body: input.body,
       threadRootId: rootId,
       mentions: parseMentionsLocally(input.body, slots),
+      attachments: input.attachments,
     })
     onOptimisticInsert(optimistic)
 
@@ -165,6 +166,7 @@ export function ThreadPane({
           // this channel inside `postChannelMessage`, so a root id from another
           // room is refused in the data layer as well as by the action's guards.
           threadRootId: rootId,
+          attachments: input.attachments,
         }),
       )
       // Settled in place rather than appended: `onAppendReply` would add the
@@ -192,7 +194,9 @@ export function ThreadPane({
 
   function retrySend(pendingKey: string) {
     const body = onOptimisticDiscard(pendingKey)
-    if (body) void send({ body, kind: 'status', toSlotId: null })
+    // See `channel-view.tsx`'s identical `retrySend` comment: attachments are
+    // not carried through a retry today.
+    if (body) void send({ body, kind: 'status', toSlotId: null, attachments: [] })
   }
 
   async function toggleReaction(messageId: number, emoji: string) {
@@ -358,6 +362,7 @@ export function ThreadPane({
 
         {root != null && (
           <MessageComposer
+            workspaceId={workspaceId}
             slots={slots}
             placeholder="Reply…"
             // A reply inherits the conversation's kind and audience: a per-reply

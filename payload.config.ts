@@ -33,6 +33,7 @@ import { AccessGrants } from './collections/AccessGrants'
 import { Connectors } from './collections/Connectors'
 import { Connections } from './collections/Connections'
 import { ProjectResources } from './collections/ProjectResources'
+import { Media } from './collections/Media'
 import { HermesConfig } from './globals/HermesConfig'
 
 const filename = fileURLToPath(import.meta.url)
@@ -69,6 +70,7 @@ export default buildConfig({
     PushSubscriptions,
     NotificationPreferences,
     ProjectResources,
+    Media,
     // Access control and connectors. Order is cosmetic (it drives the admin
     // sidebar), but members/invitations/grants belong together and the two
     // connector tables belong together, because reading one without the other

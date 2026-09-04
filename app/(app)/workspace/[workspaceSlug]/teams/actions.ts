@@ -656,11 +656,19 @@ export async function postChannelMessageAction(input: {
   kind?: TeamMessageKind
   toSlotId?: number | null
   threadRootId?: number | null
+  /** Media collection ids, already uploaded via `uploadMediaAction`
+   * (`app/api/media/actions.ts`) before `send()` ever runs — see
+   * `message-composer.tsx`'s own comment on why the upload happens ahead of
+   * the send rather than as part of it. */
+  attachments?: number[]
 }): Promise<WithFailure<PostMessageResult>> {
   return guard(async () => {
     const { user, team } = await requireAccess(input.workspaceId, input.teamId)
     const body = input.body.trim()
-    if (!body) raise('invalid_input', 'Write something first.')
+    // R14-P0.4 — an attachment with no caption is a complete message (Slack's
+    // own rule for "just drop the screenshot"), so empty text is refused only
+    // when there is nothing else riding along with it.
+    if (!body && (input.attachments ?? []).length === 0) raise('invalid_input', 'Write something or attach a file.')
 
     // Also the dead-letter guard at this end: a slot removed while the compose
     // box was open is refused here rather than accepted into a mailbox that will
@@ -668,6 +676,30 @@ export async function postChannelMessageAction(input: {
     if (input.toSlotId != null) await requireSlot(input.toSlotId, input.teamId)
     // `postChannelMessage` re-checks that the root belongs to this channel, so a
     // thread id from another room is refused in the data layer as well as here.
+
+    // Re-verified rather than trusted: a media id off the wire is data, and an
+    // id that does not resolve to THIS workspace is refused outright rather
+    // than silently dropped, so a stale or tampered attachment id surfaces as
+    // an error instead of a message that quietly lost a file. Note this is a
+    // data-integrity check, not the security boundary — `lib/media/access.ts`'s
+    // `canUserReadMedia` re-derives visibility from the file's OWN workspace at
+    // READ time regardless of which message it rides on, so attaching another
+    // workspace's media id here could never leak it to a third party even
+    // without this check; this just keeps the channel's own data honest.
+    const attachmentIds = [...new Set(input.attachments ?? [])]
+    if (attachmentIds.length > 0) {
+      const payload = await getPayloadClient()
+      const found = await payload.find({
+        collection: 'media',
+        where: { and: [{ id: { in: attachmentIds } }, { workspace: { equals: input.workspaceId } }] },
+        limit: attachmentIds.length,
+        depth: 0,
+        overrideAccess: true,
+      })
+      if (found.docs.length !== attachmentIds.length) {
+        raise('invalid_input', 'One of those attachments is no longer available.')
+      }
+    }
 
     const [mine, roster] = await Promise.all([resolveMySlot(team.id, user.id), loadSlots(team.id)])
     const message = await postChannelMessage({
@@ -681,6 +713,7 @@ export async function postChannelMessageAction(input: {
       body,
       threadRootId: input.threadRootId ?? null,
       mentions: parseMentions(body, roster),
+      attachments: attachmentIds,
     })
 
     // Posting is reading: you have seen everything up to your own message.

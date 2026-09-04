@@ -135,6 +135,13 @@ export function makeOptimisticMessage(input: {
   body: string
   threadRootId: number | null
   mentions: MentionTarget[]
+  /** R14-P0.4 — Media ids already uploaded by the time `send()` runs, so the
+   * chip/preview the composer showed BEFORE Enter is what paints in the
+   * placeholder row too, rather than the attachment appearing to vanish until
+   * the real row lands. Optional and defaulted to `[]`: every pre-P0.4 caller
+   * of this function keeps compiling with no attachments, same migration
+   * posture `lib/failures.ts`'s own header describes for `WithFailure`. */
+  attachments?: number[]
 }): RoomFeedMessage {
   optimisticCounter += 1
   return {
@@ -153,6 +160,7 @@ export function makeOptimisticMessage(input: {
     reactions: [],
     undeliverableReason: null,
     runId: null,
+    attachments: input.attachments ?? [],
     systemKind: null,
     undeliverableAt: null,
     addresseeMissing: false,

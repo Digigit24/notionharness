@@ -90,6 +90,7 @@ export interface Config {
     'push-subscriptions': PushSubscription;
     'notification-preferences': NotificationPreference;
     'project-resources': ProjectResource;
+    media: Media;
     'workspace-members': WorkspaceMember;
     invitations: Invitation;
     'access-grants': AccessGrant;
@@ -125,6 +126,7 @@ export interface Config {
     'push-subscriptions': PushSubscriptionsSelect<false> | PushSubscriptionsSelect<true>;
     'notification-preferences': NotificationPreferencesSelect<false> | NotificationPreferencesSelect<true>;
     'project-resources': ProjectResourcesSelect<false> | ProjectResourcesSelect<true>;
+    media: MediaSelect<false> | MediaSelect<true>;
     'workspace-members': WorkspaceMembersSelect<false> | WorkspaceMembersSelect<true>;
     invitations: InvitationsSelect<false> | InvitationsSelect<true>;
     'access-grants': AccessGrantsSelect<false> | AccessGrantsSelect<true>;
@@ -929,6 +931,42 @@ export interface ProjectResource {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "media".
+ */
+export interface Media {
+  id: number;
+  /**
+   * The tenancy boundary this file was uploaded into. See the collection-level comment for why this is the FLOOR of visibility, not the whole rule.
+   */
+  workspace: number | Workspace;
+  /**
+   * Who attached this file. Also who may read a not-yet-sent draft attachment before any message references it — see canUserReadMedia.
+   */
+  uploadedBy?: (number | null) | User;
+  updatedAt: string;
+  createdAt: string;
+  url?: string | null;
+  thumbnailURL?: string | null;
+  filename?: string | null;
+  mimeType?: string | null;
+  filesize?: number | null;
+  width?: number | null;
+  height?: number | null;
+  focalX?: number | null;
+  focalY?: number | null;
+  sizes?: {
+    thumbnail?: {
+      url?: string | null;
+      width?: number | null;
+      height?: number | null;
+      mimeType?: string | null;
+      filesize?: number | null;
+      filename?: string | null;
+    };
+  };
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "workspace-members".
  */
 export interface WorkspaceMember {
@@ -1179,6 +1217,10 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'project-resources';
         value: number | ProjectResource;
+      } | null)
+    | ({
+        relationTo: 'media';
+        value: number | Media;
       } | null)
     | ({
         relationTo: 'workspace-members';
@@ -1608,6 +1650,39 @@ export interface ProjectResourcesSelect<T extends boolean = true> {
   exists?: T;
   updatedAt?: T;
   createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "media_select".
+ */
+export interface MediaSelect<T extends boolean = true> {
+  workspace?: T;
+  uploadedBy?: T;
+  updatedAt?: T;
+  createdAt?: T;
+  url?: T;
+  thumbnailURL?: T;
+  filename?: T;
+  mimeType?: T;
+  filesize?: T;
+  width?: T;
+  height?: T;
+  focalX?: T;
+  focalY?: T;
+  sizes?:
+    | T
+    | {
+        thumbnail?:
+          | T
+          | {
+              url?: T;
+              width?: T;
+              height?: T;
+              mimeType?: T;
+              filesize?: T;
+              filename?: T;
+            };
+      };
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
