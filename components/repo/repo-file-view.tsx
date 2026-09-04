@@ -10,7 +10,7 @@
 // or re-sanitises that markup — doing any of those in the browser is exactly
 // the render-path cost the server work exists to avoid.
 import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react'
-import { Binary, Code2, Eye, FileWarning } from 'lucide-react'
+import { Binary, Code2, Eye, FileSymlink, FileWarning } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { formatBytes } from './repo-directory-table'
 import type { RepoFilePayload } from '@/app/(app)/workspace/[workspaceSlug]/projects/[projectId]/files/actions'
@@ -103,7 +103,15 @@ export function RepoFileView({
         )}
       </div>
 
-      {blob.tooLarge ? (
+      {blob.symlinkTarget !== null ? (
+        // P5.5 — a symlink is shown as one, with its target, never followed
+        // and never rendered as if its target string were the file's content.
+        <Notice
+          icon={<FileSymlink className="h-4 w-4" />}
+          title="Symlink"
+          detail={`Points to ${blob.symlinkTarget}`}
+        />
+      ) : blob.tooLarge ? (
         <Notice
           icon={<FileWarning className="h-4 w-4" />}
           title="This file is too large to display"

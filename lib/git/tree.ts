@@ -27,11 +27,11 @@
 // machine running this app. Both checks are kept even though either alone
 // would probably do, because "probably" is not the right standard for this.
 import { execFile } from 'node:child_process'
-import { readFile, stat } from 'node:fs/promises'
+import { lstat, readFile, readlink, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { AppFailure, isAppFailure, raise, type FailureCode } from '@/lib/failures'
-import { git, gitFailureFor, pathIsInside } from './repo'
+import { git, gitFailureFor, pathIsInside, GIT_ENV } from './repo'
 
 const exec = promisify(execFile)
 
@@ -55,15 +55,6 @@ const MAX_UNTRACKED_ENTRIES = 200
  * text whatever its name, and extension lists are wrong about exactly the
  * files people care about. */
 const BINARY_SNIFF_BYTES = 8192
-
-/** Same hardening as `git()` in ./repo: no credential prompt, no index lock,
- * because a git that blocks inside a request is indistinguishable from a
- * hang. */
-const GIT_ENV: NodeJS.ProcessEnv = {
-  ...process.env,
-  GIT_TERMINAL_PROMPT: '0',
-  GIT_OPTIONAL_LOCKS: '0',
-}
 
 /**
  * A path or ref this module refused to hand to git.
@@ -202,6 +193,10 @@ interface CachedBlob {
   size: number
   binary: boolean
   text: string | null
+  /** P5.5 — cached alongside the content so a cache HIT still knows to
+   * report this as a symlink rather than re-deriving it from the mode on
+   * every read. */
+  symlink: boolean
 }
 
 /**
@@ -232,7 +227,14 @@ const treeCache = new Lru<CachedTree>(600)
 // ---------------------------------------------------------------------------
 // Listing
 
-export type RepoEntryType = 'blob' | 'tree' | 'commit'
+/**
+ * `symlink` is git's own `blob` type with mode `120000` — the object store
+ * has no distinct symlink type, only a mode bit. Split out here (P5.5)
+ * because it changes what a row means: not "a file with these bytes" but "a
+ * pointer whose bytes ARE the target path", and the two must not be rendered
+ * the same way.
+ */
+export type RepoEntryType = 'blob' | 'tree' | 'commit' | 'symlink'
 
 /**
  * What the working tree has done to an entry, overlaid on the committed tree.
@@ -285,10 +287,13 @@ function parseLsTree(out: string, prefix: string): RepoEntry[] {
     // the size column, so a whitespace split is the documented way to read it.
     const meta = record.slice(0, tab).trim().split(/\s+/)
     if (meta.length < 3) continue
-    const [, type, oid, rawSize] = meta
+    const [mode, gitType, oid, rawSize] = meta
     const name = record.slice(tab + 1)
     if (!name) continue
-    if (type !== 'blob' && type !== 'tree' && type !== 'commit') continue
+    if (gitType !== 'blob' && gitType !== 'tree' && gitType !== 'commit') continue
+    // A symlink is git's `blob` type at mode 120000 — there is no separate
+    // object type for it, only this mode bit.
+    const type: RepoEntryType = gitType === 'blob' && mode === '120000' ? 'symlink' : gitType
     const size = Number(rawSize)
     entries.push({
       name,
@@ -488,6 +493,13 @@ function collectUntracked(rel: string, overlay: StatusOverlay, takenNames: Set<s
 /** Sizes for untracked files, from the filesystem, since they have no blob.
  * Best-effort and parallel: a file deleted between the status call and this
  * one simply keeps a null size. */
+/**
+ * Also promotes an untracked `blob` row to `symlink` (P5.5) — `git status`
+ * cannot say this on its own; only the filesystem can. `lstat`, not `stat`:
+ * the whole point is to see the link itself rather than follow it, which is
+ * exactly what would happen to a symlink pointing outside the repository (or
+ * nowhere at all).
+ */
 async function fillUntrackedSizes(repoDir: string, entries: RepoEntry[]): Promise<void> {
   await Promise.all(
     entries
@@ -495,8 +507,12 @@ async function fillUntrackedSizes(repoDir: string, entries: RepoEntry[]): Promis
       .map(async (entry) => {
         try {
           const abs = await resolveInsideRepo(repoDir, entry.path)
-          const info = await stat(abs)
-          if (info.isFile()) entry.size = info.size
+          const info = await lstat(abs)
+          if (info.isSymbolicLink()) {
+            entry.type = 'symlink'
+          } else if (info.isFile()) {
+            entry.size = info.size
+          }
         } catch {
           // Leave it null.
         }
@@ -520,6 +536,13 @@ export interface RepoBlob {
   /** Null when the file is binary or over `MAX_BLOB_BYTES`. */
   text: string | null
   tooLarge: boolean
+  /** P5.5 — non-null exactly when this path is a symlink, and then it is the
+   * link's target (the raw text, unresolved — this app never dereferences a
+   * symlink to browse across it, which is what makes a repository with a
+   * symlink pointing outside itself safe to open at all). `text` is left
+   * equal to this for a symlink, since a target string genuinely is the
+   * "content" a git blob holds for one. */
+  symlinkTarget: string | null
 }
 
 /** execFile with `encoding: 'buffer'`, because `git()` in ./repo decodes as
@@ -555,7 +578,39 @@ function isMaxBufferError(err: unknown): boolean {
   return e?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' || /maxBuffer length exceeded/i.test(String(e?.message ?? ''))
 }
 
+/**
+ * P5.5 — non-UTF-8 encodings: UTF-16, specifically, since it is the one a
+ * real repository is likely to actually contain (Windows tooling —
+ * PowerShell's default `>`/`Out-File` encoding, some `.reg` files — writes
+ * it routinely). A BOM is the only reliable signal available without a full
+ * charset sniffer, but it IS reliable: `FF FE`/`FE FF` at byte 0 is
+ * vanishingly unlikely to occur by chance in a real UTF-8 or binary file.
+ *
+ * This matters because without it, an ASCII-range UTF-16 file sniffs as
+ * BINARY below — every other byte of `H\0e\0l\0l\0o\0` is a NUL, which is
+ * exactly what `BINARY_SNIFF_BYTES` looks for — so a real text file a person
+ * can read in Notepad would render as "binary file, N kB" here, which is
+ * cheaper to be wrong about than it looks: the whole point of that fallback
+ * is honesty, and it would not even be honest.
+ */
+function decodeUtf16(buf: Buffer): string | null {
+  if (buf.length < 2) return null
+  const little = buf[0] === 0xff && buf[1] === 0xfe
+  const big = buf[0] === 0xfe && buf[1] === 0xff
+  if (!little && !big) return null
+  const body = buf.subarray(2)
+  if (body.length % 2 !== 0) return null // truncated/corrupt — fall through to the UTF-8 path
+  if (little) return body.toString('utf16le')
+  // Big-endian: Node has no native decoder, so byte-swap a COPY (never the
+  // shared cache buffer) into little-endian order first.
+  const swapped = Buffer.from(body)
+  swapped.swap16()
+  return swapped.toString('utf16le')
+}
+
 function decodeBlob(buf: Buffer): { binary: boolean; text: string | null } {
+  const utf16 = decodeUtf16(buf)
+  if (utf16 !== null) return { binary: false, text: utf16 }
   const sniff = buf.subarray(0, Math.min(buf.length, BINARY_SNIFF_BYTES))
   if (sniff.includes(0)) return { binary: true, text: null }
   // Strip a UTF-8 BOM: it is invisible in an editor and would otherwise show
@@ -572,6 +627,26 @@ async function refExists(repoDir: string, ref: string): Promise<boolean> {
     return true
   } catch {
     return false
+  }
+}
+
+/** The git mode bits for one path at one ref — `120000` is a symlink, and
+ * that is the only bit this module needs (P5.5). `ls-tree` on a single path
+ * rather than folding this into the listing's own `ls-tree`, because a
+ * one-level directory listing has no reason to pay for every entry's mode
+ * when only the row someone actually opens needs it. Swallowed on failure:
+ * this is advisory (best a normal file if unknown), never the reason a read
+ * fails. */
+async function readEntryMode(repoDir: string, ref: string, rel: string): Promise<string | null> {
+  try {
+    const out = await git(repoDir, ['ls-tree', ref, '--', rel], 10_000)
+    const line = out.split('\n').find(Boolean)
+    if (!line) return null
+    const tab = line.indexOf('\t')
+    if (tab < 0) return null
+    return line.slice(0, tab).trim().split(/\s+/)[0] ?? null
+  } catch {
+    return null
   }
 }
 
@@ -603,18 +678,36 @@ export async function readBlob(repoDir: string, options: ReadBlobOptions): Promi
   const source: RepoBlobSource = options.source === 'worktree' ? 'worktree' : 'ref'
 
   if (source === 'worktree') {
-    // `stat` throws a bare ENOENT whose message is a server-side absolute
-    // path; a file that is not on disk is `not_found` and says so.
-    const info = await stat(abs).catch((err: NodeJS.ErrnoException) => {
+    // `lstat`, not `stat`, and BEFORE anything that would follow the link:
+    // a symlink pointing outside the repository, at a directory, or at
+    // nothing at all (broken) all still exist as a link and must be shown as
+    // one — `stat`ing first would either read through to a file this app has
+    // no business exposing, or throw ENOENT for a perfectly real (if broken)
+    // symlink and report it as "not in the working tree", which is false.
+    const linkInfo = await lstat(abs).catch((err: NodeJS.ErrnoException) => {
       throw new RepoPathError(`${rel} is not in the working tree.`, err.code === 'ENOENT' ? 'not_found' : 'invalid_input')
     })
-    if (!info.isFile()) throw new RepoPathError('That path is not a file.')
-    if (info.size > MAX_BLOB_BYTES) {
-      return { path: rel, ref, source, oid: null, size: info.size, binary: false, text: null, tooLarge: true }
+    if (linkInfo.isSymbolicLink()) {
+      const target = await readlink(abs)
+      return {
+        path: rel,
+        ref,
+        source,
+        oid: null,
+        size: Buffer.byteLength(target),
+        binary: false,
+        text: target,
+        tooLarge: false,
+        symlinkTarget: target,
+      }
+    }
+    if (!linkInfo.isFile()) throw new RepoPathError('That path is not a file.')
+    if (linkInfo.size > MAX_BLOB_BYTES) {
+      return { path: rel, ref, source, oid: null, size: linkInfo.size, binary: false, text: null, tooLarge: true, symlinkTarget: null }
     }
     const buf = await readFile(abs)
     const decoded = decodeBlob(buf)
-    return { path: rel, ref, source, oid: null, size: buf.length, ...decoded, tooLarge: false }
+    return { path: rel, ref, source, oid: null, size: buf.length, ...decoded, tooLarge: false, symlinkTarget: null }
   }
 
   const oid = (
@@ -633,8 +726,24 @@ export async function readBlob(repoDir: string, options: ReadBlobOptions): Promi
   ).trim()
   const cached = blobCache.get(oid)
   if (cached) {
-    return { path: rel, ref, source, oid, size: cached.size, binary: cached.binary, text: cached.text, tooLarge: false }
+    return {
+      path: rel,
+      ref,
+      source,
+      oid,
+      size: cached.size,
+      binary: cached.binary,
+      text: cached.text,
+      tooLarge: false,
+      symlinkTarget: cached.symlink ? cached.text : null,
+    }
   }
+
+  // Mode, not content, decides symlink-ness (P5.5) — asked once per open,
+  // never per listing row (`readEntryMode`'s own comment). A cache miss on a
+  // real symlink is rare and its target is always tiny, so this extra call
+  // costs nothing where it matters.
+  const isSymlink = (await readEntryMode(repoDir, ref, rel)) === '120000'
 
   let buf: Buffer
   try {
@@ -645,17 +754,36 @@ export async function readBlob(repoDir: string, options: ReadBlobOptions): Promi
   } catch (err) {
     if (!isMaxBufferError(err)) throw err
     const size = Number((await git(repoDir, ['cat-file', '-s', oid], 10_000)).trim())
-    return { path: rel, ref, source, oid, size: Number.isFinite(size) ? size : MAX_BLOB_BYTES, binary: false, text: null, tooLarge: true }
+    return {
+      path: rel,
+      ref,
+      source,
+      oid,
+      size: Number.isFinite(size) ? size : MAX_BLOB_BYTES,
+      binary: false,
+      text: null,
+      tooLarge: true,
+      symlinkTarget: null,
+    }
   }
 
   if (buf.length > MAX_BLOB_BYTES) {
-    return { path: rel, ref, source, oid, size: buf.length, binary: false, text: null, tooLarge: true }
+    return { path: rel, ref, source, oid, size: buf.length, binary: false, text: null, tooLarge: true, symlinkTarget: null }
   }
 
   const decoded = decodeBlob(buf)
-  const value: CachedBlob = { size: buf.length, binary: decoded.binary, text: decoded.text }
+  const value: CachedBlob = { size: buf.length, binary: decoded.binary, text: decoded.text, symlink: isSymlink }
   blobCache.set(oid, value)
-  return { path: rel, ref, source, oid, size: buf.length, ...decoded, tooLarge: false }
+  return {
+    path: rel,
+    ref,
+    source,
+    oid,
+    size: buf.length,
+    ...decoded,
+    tooLarge: false,
+    symlinkTarget: isSymlink ? decoded.text : null,
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -255,7 +255,10 @@ export function RepoBrowser({
       const position: Position = {
         ...positionRef.current,
         path: entry.path,
-        kind: entry.type === 'blob' ? 'file' : 'directory',
+        // A symlink (P5.5) is opened as a file — `readBlob` reads it as one
+        // and reports its target, never followed as if it were the
+        // directory it might point at.
+        kind: entry.type === 'blob' || entry.type === 'symlink' ? 'file' : 'directory',
         // An untracked file has no blob at any ref, so the only copy that
         // exists is the one on disk. Selecting the working tree for it is not
         // a preference, it is the only readable source.

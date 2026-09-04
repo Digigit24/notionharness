@@ -14,16 +14,8 @@
 // also show base's own unrelated later changes as if the run had undone
 // them.
 import { access, stat } from 'node:fs/promises'
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
+import { git, gitBare } from '@/lib/git/repo'
 import type { RunWorktree } from './manager'
-
-const exec = promisify(execFile)
-
-async function gitBare(barePath: string, args: string[]): Promise<string> {
-  const { stdout } = await exec('git', ['--git-dir', barePath, ...args], { windowsHide: true, maxBuffer: 32 * 1024 * 1024 })
-  return stdout
-}
 
 export type FileChangeStatus = 'added' | 'modified' | 'deleted' | 'renamed' | 'copied' | 'unknown'
 
@@ -50,8 +42,16 @@ function parseStatusLetter(letter: string): FileChangeStatus {
   }
 }
 
+/** Diffs can be large; kept at the same 32 MB cap this module always used,
+ * above `gitBare`'s 16 MB default. */
+const DIFF_MAX_BUFFER = 32 * 1024 * 1024
+
 export async function getChangedFiles(worktree: RunWorktree): Promise<ChangedFile[]> {
-  const stdout = await gitBare(worktree.barePath, ['diff', '--name-status', `${worktree.ref}...${worktree.branch}`])
+  const stdout = await gitBare(
+    worktree.barePath,
+    ['diff', '--name-status', `${worktree.ref}...${worktree.branch}`],
+    { maxBuffer: DIFF_MAX_BUFFER },
+  )
   const files: ChangedFile[] = []
   for (const line of stdout.split('\n')) {
     if (!line.trim()) continue
@@ -68,7 +68,9 @@ export async function getChangedFiles(worktree: RunWorktree): Promise<ChangedFil
 
 export async function getFileDiff(worktree: RunWorktree, file: ChangedFile): Promise<string> {
   const pathspecs = file.oldPath && file.oldPath !== file.path ? [file.oldPath, file.path] : [file.path]
-  return gitBare(worktree.barePath, ['diff', `${worktree.ref}...${worktree.branch}`, '--', ...pathspecs])
+  return gitBare(worktree.barePath, ['diff', `${worktree.ref}...${worktree.branch}`, '--', ...pathspecs], {
+    maxBuffer: DIFF_MAX_BUFFER,
+  })
 }
 
 export interface WorktreeState {
@@ -120,8 +122,8 @@ export async function getWorktreeState(worktree: RunWorktree): Promise<WorktreeS
   }
   if (worktreeExists) {
     try {
-      const status = await exec('git', ['-C', worktree.worktreePath, 'status', '--porcelain'], { windowsHide: true })
-      hasUncommittedChanges = status.stdout.trim().length > 0
+      const status = await git(worktree.worktreePath, ['status', '--porcelain'])
+      hasUncommittedChanges = status.trim().length > 0
     } catch {
       hasUncommittedChanges = false
     }

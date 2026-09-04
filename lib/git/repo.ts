@@ -104,6 +104,17 @@ async function classifyGitFailure(cwd: string, args: string[], err: ExecFailure)
   if (/is not a working tree|worktree .* does not exist/.test(text)) {
     return build('worktree_missing', 'That working copy is no longer on this machine.', true)
   }
+  // git's own refusal to discard work — `worktree remove` on a checkout with
+  // modified or untracked files says exactly this rather than silently
+  // deleting anything. The sentence itself never mentions the word
+  // "worktree", so this is keyed on the command (`args`) actually run, not
+  // just the text — `.includes` rather than a positional check because a
+  // bare-repo caller prepends `--git-dir <path>` before the subcommand.
+  // Named explicitly (P5.6) rather than left as `unknown`, so a caller can
+  // branch on the code instead of pattern-matching the sentence a second time.
+  if (args.includes('worktree') && args.includes('remove') && /contains modified or untracked files/.test(text)) {
+    return build('worktree_dirty', 'This worktree has uncommitted changes. Remove it with force to discard them.')
+  }
   // git echoes the rev it could not resolve, and a rev containing a colon
   // (`<commit>:lib/git/nope`) names a path inside a tree rather than a
   // revision — so this is a missing path, not a missing branch.
@@ -122,25 +133,71 @@ async function classifyGitFailure(cwd: string, args: string[], err: ExecFailure)
   return build('unknown', stderr.split('\n')[0] || String(err.message ?? '').split('\n')[0] || 'git failed.')
 }
 
-export async function git(cwd: string, args: string[], timeoutMs = GIT_TIMEOUT_MS): Promise<string> {
+/** Never let a credential helper or editor open a prompt: a blocked git
+ * inside a server request is indistinguishable from a hang. Exported so the
+ * few callers that cannot go through `git()`/`gitBare()` directly — `tree.ts`
+ * reads a blob as a raw buffer, `checks.ts` shells out to `gh` — still run
+ * with the same guards instead of a second, slightly different environment. */
+export const GIT_ENV: NodeJS.ProcessEnv = {
+  ...process.env,
+  GIT_TERMINAL_PROMPT: '0',
+  GIT_OPTIONAL_LOCKS: '0',
+}
+
+/**
+ * P5.1 — the one hardened path every `execFile('git', …)` in this codebase
+ * routes through. Explicit `cwd`, a timeout, `windowsHide` (this runs on
+ * Windows too), a capped `maxBuffer`, and every failure classified rather
+ * than thrown raw. `git()` and `gitBare()` below are both thin callers of
+ * this; nothing else in `lib/git/*` or `lib/run-worktrees/*` should call
+ * `execFile('git', …)` directly.
+ */
+async function execGit(cwd: string, args: string[], timeoutMs: number, maxBuffer = 16 * 1024 * 1024): Promise<string> {
   try {
     const { stdout } = await exec('git', args, {
       cwd,
       timeout: timeoutMs,
       windowsHide: true,
-      maxBuffer: 16 * 1024 * 1024,
-      // Never let a credential helper or editor open a prompt: a blocked git
-      // inside a server request is indistinguishable from a hang.
-      env: {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: '0',
-        GIT_OPTIONAL_LOCKS: '0',
-      },
+      maxBuffer,
+      env: GIT_ENV,
     })
     return stdout
   } catch (err) {
     throw await classifyGitFailure(cwd, args, err as ExecFailure)
   }
+}
+
+export async function git(cwd: string, args: string[], timeoutMs = GIT_TIMEOUT_MS): Promise<string> {
+  return execGit(cwd, args, timeoutMs)
+}
+
+/**
+ * The same hardened path, for git commands that address a repository by
+ * `--git-dir` rather than by `cwd` — `RunWorktreeManager`'s shared bare
+ * clone, and the review surface (`lib/run-worktrees/diff.ts`,
+ * `lib/run-worktrees/merge.ts`) that reads a run's branch out of it after its
+ * disposable worktree has already been removed.
+ *
+ * `cwd` still matters even though the repository is addressed by
+ * `--git-dir`: it is what Node spawns the process in, and it is what
+ * `classifyGitFailure`'s ENOENT-vs-missing-directory check stats. It
+ * defaults to `barePath` itself, which exists for every caller except the
+ * one moment it does not — mid-clone, before the bare directory has been
+ * created — so that one caller passes its own known-good `cwd` (its `rootDir`,
+ * already `mkdir`'d) explicitly rather than getting a misleading
+ * "directory not found" for a repository that was never expected to exist yet.
+ */
+export async function gitBare(
+  barePath: string,
+  args: string[],
+  options: { cwd?: string; timeoutMs?: number; maxBuffer?: number } = {},
+): Promise<string> {
+  return execGit(
+    options.cwd ?? barePath,
+    ['--git-dir', barePath, ...args],
+    options.timeoutMs ?? GIT_TIMEOUT_MS,
+    options.maxBuffer,
+  )
 }
 
 /** The same classification for a git process spawned elsewhere in `lib/git`
