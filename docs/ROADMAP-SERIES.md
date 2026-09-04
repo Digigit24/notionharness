@@ -159,6 +159,44 @@ and complete a turn, with no code changes.
 
 ---
 
+
+### R1.A — Audit marks: free value on the runtime layer
+
+Tags used throughout these `*.A` sections: **[FREE-UI]** value from the
+backend that already exists, **[OPTIMISTIC]** a round trip in front of a
+paint, **[PERF]** a measured cost, **[EXC]** an exception path that is
+silent or unhandled. Every mark names its evidence and its cost, so it can
+be refused on the evidence rather than on taste.
+
+**R1.A.1 [FREE-UI] A runtime has no defaults of its own, so "Claude's model"
+must be set once per agent.** `collections/RuntimeProfiles.ts` stores the
+handshake and the probe result and nothing else; the dispatcher builds a
+turn's config from `agent.runtimeConfig` alone (`lib/dispatcher/worker.ts`,
+`sessionConfig:` merge). Ten agents on Claude Code means setting the model
+ten times, and a new agent silently gets the CLI's default instead of the
+one this workspace chose. A `defaultSessionConfig` json on the profile,
+merged UNDER the agent's own map, fixes it. Cost: one column, one line in
+the existing merge, no new query — the profile is already loaded on that
+path.
+
+**R1.A.2 [FREE-UI] The generic settings renderer exists and is mounted in
+exactly one place.** `components/runtimes/runtime-config-fields.tsx` renders
+whatever options a runtime declared about itself — for Claude Code that is
+`model`, `effort`, `fast`, `mode` — and it is used only by
+`components/agents/agent-settings-form.tsx`. Mounting the same component
+against R1.A.1's new field turns Settings → Runtimes into a real editor for
+every runtime, present and future, with no runtime-specific screen.
+
+**R1.A.3 [EXC] Probe failures are stored machine-readable and shown raw.**
+`lastProbeCode` is deliberately a code (`acp_init_timeout`,
+`command_not_found`, `spawn_failed`) so a log can be grepped. The UI prints
+the code. Each code implies exactly one fix; say the fix. This is the
+difference between "acp_init_timeout" and "the command started but never
+answered the ACP handshake — check it supports `--acp`, or raise the probe
+timeout".
+
+---
+
 ## R2 — Portable identity: personalities without Hermes profiles
 
 - **R2.1 Personality becomes a first-class record**: instructions, memory
@@ -178,6 +216,18 @@ and complete a turn, with no code changes.
 
 **Done when** an agent on a non-Hermes runtime has instructions, memory and
 skills that behave the same way.
+
+---
+
+
+### R2.A — Audit marks: identity
+
+**R2.A.1 [OPTIMISTIC] Switching a personality profile round-trips the whole
+page.** `components/personality/switch-profile-button.tsx` calls the action
+and then `router.refresh()`, which re-runs the server component for a pill
+whose new state is already known at click time. The same pattern appears in
+23 other places (`grep -rn "router.refresh()" components/` → 24 hits);
+R12-P2 handles them as a class rather than one at a time.
 
 ---
 
@@ -247,6 +297,39 @@ real binary or measured, not reasoned about.
   instead. `scripts/test-redaction.ts` checks both halves: secrets go, and
   ordinary error text survives untouched, because an over-eager redactor that
   eats real error messages is its own bug. 14 cases, all passing.
+
+---
+
+
+### R3.A — Audit marks: correctness and failure
+
+**R3.A.1 [EXC] One error boundary covers the entire application.**
+`app/(app)/workspace/[workspaceSlug]/error.tsx` is the only `error.tsx` in
+the repo. It is a good one — it prints `error.message` verbatim rather than
+"something went wrong" — but a failure in the channel, the editor, the repo
+browser or the review surface takes out the whole workspace shell instead
+of the one pane that broke. Segment boundaries are cheap and are the
+difference between "a pane says it failed, with a retry" and "the app went
+white".
+
+**R3.A.2 [EXC] 139 swallowed catches, of which only some are deliberate.**
+`grep -rn "catch {}\|\.catch(() => undefined)" components/ lib/ app/`
+returns 139. A large number are correct and documented in place (a
+best-effort push notification must never fail the turn that triggered it).
+The rest are indistinguishable from them at a glance, which is the actual
+problem: there is no way to tell a deliberate swallow from an oversight
+without reading each one. R12-P1 gives them a vocabulary.
+
+**R3.A.3 [PERF] Eleven independent polling loops, with a push channel
+already built.** `grep -rn "setInterval" components/` → 11 sites.
+`components/tasks/task-board.tsx` alone runs THREE four-second intervals
+(metrics, presence, agent columns) and `task-drawer.tsx` a fourth; the room
+polls every 6s, Work every 5s. Meanwhile `lib/broker/notify.ts`
+(LISTEN/NOTIFY) and `lib/broker/live-bus.ts` + the SSE route already deliver
+run events with no interval at all. D0 says a new interval is a design
+failure unless the thing watched is outside the database. Two of these
+genuinely are (the repo stamp, which says so in its own comment); nine are
+not.
 
 ---
 
@@ -335,6 +418,18 @@ important case and still prints ALL PASS is worse than no test.
 
 ---
 
+
+### R4.A — Audit marks: the plugin layer
+
+**R4.A.1 [EXC] A broken plugin is discovered by an agent, not by the person
+who configured it.** The plugin surface validates at build time for a run,
+but the plugins screen shows configuration, not health. The data to show
+"this server answered / refused / timed out on the last run that used it"
+already passes through the dispatcher; nothing keeps it. One row per plugin
+with its last outcome turns a silent misconfiguration into a visible one.
+
+---
+
 ## R5 — Git review, the part Orca does best — CORE DONE
 
 Folded from the old B3, plus what is still missing.
@@ -380,6 +475,23 @@ Folded from the old B3, plus what is still missing.
   R5.2a still holds — the feed keeps its own forgiving renderer either way.
 - **R5.6 Fix broken checks.** Not started; it depends on nothing above, so it
   is cheap to add later.
+
+---
+
+
+### R5.A — Audit marks: git review
+
+**R5.A.1 [FREE-UI] The review surface has no loading state at all.**
+`components/review/review-surface.tsx` (560 lines) contains no `Skeleton`
+and no spinner: a large diff paints nothing and then everything. The file
+tree and hunk list both have a known shape before the data lands, which is
+exactly the case a skeleton is for.
+
+**R5.A.2 [EXC] `lib/git/checks.ts` can fail in ways the surface cannot
+say.** A missing binary, a detached HEAD, a repository that moved — all
+arrive as a thrown error and are rendered as one line. Git's own stderr is
+the single most useful string on that screen and it should be shown, the
+way the workspace error boundary already shows `error.message`.
 
 ---
 
@@ -551,6 +663,58 @@ worktrees, message each other through the board, hit an approval gate, be
 reviewed as diffs, and be merged — and the whole thing survives a server
 restart mid-run.
 
+
+### R6.A — Audit marks: the channel
+
+This is the pillar with the most free value left in it, because the backend
+is complete and the surface in front of it is not.
+
+**R6.A.1 [OPTIMISTIC] The composer waits for the server before it clears —
+a direct D0 violation, in the one place D0 names.** D0 says: "No round trip
+on the send path. Pressing Enter paints immediately… The composer already
+works this way and must stay that way." It does not.
+`components/teams/message-composer.tsx` `send()` does `await onSend(...)`
+and only then `setBody('')`, with the whole composer at `opacity-70`
+meanwhile; `components/teams/channel-view.tsx` `send` awaits
+`postChannelMessageAction` before appending the row. On a warm local
+database that is ~80ms and feels fine; over a real network it is the
+difference between chat and a form. The message must appear the instant
+Enter is pressed, with the server's row reconciling by id after.
+
+**R6.A.2 [FREE-UI] There is a "working" indicator for agents and none for
+people.** `components/teams/pending-reply-row.tsx` already draws a ghost row
+for an agent that has been woken and has not answered. A person typing in
+the same channel produces nothing at all. The composer already knows the
+keystroke; the room already polls; the only missing piece is somewhere to
+put a heartbeat.
+
+**R6.A.3 [FREE-UI] The panes are fixed and separated by a gap.**
+`thread-pane.tsx` is `w-96`, `canvas-pane.tsx` is `w-[26rem]`, and
+`team-room.tsx` lays them out with `gap-4`. A thread you cannot widen is a
+thread you read in a column half the width of the message it belongs to.
+
+**R6.A.4 [PERF] The channel route ships the whole editor to read chat.**
+`next build`: `/workspace/[workspaceSlug]/teams/[teamId]` is **560 kB**
+first load, second only to the page canvas itself (562 kB) — because
+`components/teams/canvas-pane.tsx` imports `BlockSuiteEditor` statically
+while the canvas is CLOSED by default. A `next/dynamic` import moves that
+weight behind the click that actually needs it. This is the single cheapest
+latency win in the app.
+
+**R6.A.5 [PERF] The room polls every six seconds for data the database can
+push.** `POLL_MS = 6000` in `team-room.tsx`. `team_messages` inserts already
+happen inside our own server action, so a `NOTIFY` there and a subscription
+beside the run-events one removes the interval and makes a reply land in
+tens of milliseconds instead of up to six seconds.
+
+**R6.A.6 [FREE-UI] Reactions are already optimistic; nothing else in the
+room is.** `applyReactionToggle` in `components/teams/shared.ts` paints
+first and reconciles after — the correct pattern, already written, already
+tested by `test-channels`. Claiming a task, making a task from a message,
+joining the channel and marking read all still await.
+
+---
+
 ## R7 — Runtime panels and polish — DONE
 
 - **R7.1 Per-runtime settings — DONE.** Providers is tabbed per runtime, and
@@ -616,6 +780,30 @@ restart mid-run.
     `[statuses, projects, agents]` from a `Promise.all` returning
     `[statuses, agents, projects]`, so the board was handed the agent list as
     its projects and vice versa.
+
+---
+
+
+### R7.A — Audit marks: panels and polish
+
+**R7.A.1 [FREE-UI] Four loading states for thirty-five routes.**
+`find app -name loading.tsx` → 4 (`workspace`, `inbox`, `tasks`,
+`artifacts`); `find app -name page.tsx` → 35+. Every other route shows the
+previous screen until the server component resolves, which reads as a
+freeze rather than as loading. Next.js resolves this per segment with one
+file each, and the shape of each screen is already known.
+
+**R7.A.2 [FREE-UI] The settings rail already knows how to be runtime-aware,
+and only does it for Hermes.** `components/settings/settings-rail.tsx` has
+`hermesOnly` groups with a first-class justification for them (a Hermes
+profile is a whole alternate `HERMES_HOME`). The same mechanism, pointed at
+the other runtimes a workspace has enabled, gives Claude Code its own group
+without inventing anything.
+
+**R7.A.3 [FREE-UI] `useOptimistic` appears exactly once in the codebase**
+(`components/sidebar/sidebar.tsx`). Twenty-five components use
+`useTransition`, which makes a mutation *interruptible* but still paints
+after the server. The two are not substitutes.
 
 ---
 
@@ -826,6 +1014,17 @@ the top of the page while the agent writes the bottom loses nothing.
 
 ---
 
+
+### R8.A — Audit marks: artifacts
+
+**R8.A.1 [FREE-UI] The artifacts inbox refreshes the route to change one
+row's state.** `components/artifacts/artifacts-inbox.tsx` uses
+`router.refresh()` after accept/reject. The row's next state is known
+locally; the refresh is a full server round trip to repaint what is already
+decided.
+
+---
+
 ## R9 — The repository browser: a project's files, read through git
 
 R5 reviews what changed. This reads what is there. A project bound to a local
@@ -924,6 +1123,29 @@ that walks more than the directory it was asked for.
 
 ---
 
+
+### R9.A — Audit marks: the repository browser
+
+**R9.A.1 [FREE-UI] Directory-to-file navigation shows a 14px spinner and
+keeps the old content.** `components/repo/repo-browser.tsx` renders
+`<Loader2>` beside the breadcrumb while `pending`. A file view has a
+completely predictable shape — gutter, line numbers, code — and a shimmer of
+that shape reads as "this is loading" where a spinner over stale content
+reads as "this is stuck".
+
+**R9.A.2 [EXC] Git's own stderr is the best diagnostic on the screen and is
+shown as one unstyled line.** Same posture as R5.A.2: a repository that
+moved, a ref that no longer exists, or a `git` that is not on PATH are three
+different problems with three different fixes, and the browser currently
+prints whichever string arrives.
+
+**R9.A.3 [FREE-UI] Binary and image files have no preview path.** R9.3
+called for exactly two file types to get one. A binary today renders as
+whatever `readRepoView` returned; saying "binary file, 41 kB" is both
+cheaper and more honest.
+
+---
+
 ## R10 — First run: the gap between signing up and anything working
 
 Not an insert into an existing pillar. It cuts across runtimes, models, the
@@ -1010,6 +1232,16 @@ command resolution, the runtime-aware model picker, the dispatcher heartbeat,
 and starter-workspace seeding (behind a button nobody finds). Genuinely new:
 the scan screen, the adapter-install action, and collapsing signup into
 workspace creation.
+
+---
+
+
+### R10.A — Audit marks: first run
+
+**R10.A.1 [EXC] The first thing a new signup can hit is a runtime that is
+not installed**, and the message they get is the probe code (R1.A.3). First
+run is the one path where an unexplained failure costs the whole user, so
+it is the first place R1.A.3's mapping should land.
 
 ---
 
@@ -1129,3 +1361,433 @@ cache, and those are what R11 defers.
     serving three different densities. Anyone who tries to unify them will
     rediscover why R6.5 rejected exactly that, so the reason is recorded here
     rather than in a commit message.
+
+---
+
+## R12 — Ship-grade: five phases from "it works" to "it holds"
+
+Everything in R1–R11 was about making the product DO things. This roadmap is
+about what happens on the day it is used by somebody who did not build it:
+when the network is slow, when git is missing, when a worktree is gone, when
+two people type at once, when a runtime is not installed. None of it adds a
+feature. All of it is the difference between a demo and something shippable.
+
+The audit above (`R*.A` sections) is the evidence base. Each phase below
+picks up a class of those marks and finishes it, rather than fixing them one
+screen at a time — the same defect on twenty screens is one piece of work,
+and treating it as twenty is how a polish pass never ends.
+
+**Ordering is deliberate.** P1 first, because everything after it is easier
+to debug once failures have names. P2 second, because it is the largest
+perceived-quality gain per line changed. P3 and P4 are independent of each
+other and can run in parallel. P5 last, because it is the one that benefits
+most from P1's vocabulary being in place.
+
+**D0 still outranks this roadmap.** No phase here is allowed to add a query,
+a subscription or a kilobyte without saying so. Where a phase REMOVES cost,
+it says how much.
+
+---
+
+### R12-P1 — The exception spine
+
+Today the app has one error boundary and 139 catch blocks that all look the
+same. A failure is either invisible or fatal, with almost nothing in
+between, and there is no way to tell a deliberate swallow from an oversight
+by reading the code.
+
+**R12-P1.1 One failure shape, and it crosses the server-action boundary.**
+A typed `AppFailure { code, message, detail?, retryable, surface }` returned
+from server actions rather than thrown, with `code` a stable machine string
+(`git_missing`, `worktree_gone`, `runtime_not_installed`,
+`approval_forbidden`, `db_unavailable`). Thrown errors keep working — the
+boundary catches them — but everything we raise ourselves gets a code a UI
+can branch on and a log can be grepped for. This is the same choice
+`lastProbeCode` already made and it was right there.
+
+**R12-P1.2 A boundary per pane, not per application.** `error.tsx` for the
+channel, the page canvas, the repo browser, the review surface, the settings
+sections and Work; plus a small client `<PaneBoundary>` for panes that are
+not route segments (thread pane, canvas pane, artifact panel). Each states
+what broke, keeps the rest of the screen alive, and offers a retry that
+re-runs only that pane. Cost: one file per segment, zero runtime cost until
+something throws.
+
+**R12-P1.3 Give the 139 swallows a vocabulary.** Two helpers and a rule:
+`bestEffort(promise, why)` for a failure that genuinely must not propagate
+(a push notification, an announcement, a read-marker), and `reportFailure()`
+for one that should reach the user. A bare `catch {}` becomes a lint error.
+The point is not to remove swallowing — much of it is correct — but to make
+the correct ones self-describing and the accidental ones visible.
+
+**R12-P1.4 A dispatcher failure taxonomy, written down and enforced.**
+Which failures are retryable (transient pool exhaustion, a lease lost, a
+worktree that can be recreated) and which are terminal (agent disabled, a
+command that does not exist, a spend cap hit). This already bit us once: a
+transient pool exhaustion surfaced as "Agent missing or disabled" and was
+marked non-retryable, killing runs that would have succeeded on the next
+tick. One table, one classifier, one test per row.
+
+**R12-P1.5 Background failures are allowed to be quiet, not silent.** The
+room's poll swallows every failure by design (a toast every six seconds is
+worse than the bug). It should instead flip a single unobtrusive
+"reconnecting…" state after N consecutive failures, and clear it on the
+first success — the pattern `components/hermes/connection-status-banner.tsx`
+already uses for the run stream.
+
+**R12-P1.6 Logs that can be correlated.** Every dispatcher and broker log
+line carries `run`, `session`, `workspace` where it has them. Today they are
+prose with ids interpolated inconsistently, which makes "what happened to
+run 214" a grep across three formats.
+
+**Done when.** Stopping Postgres, removing `git` from PATH, deleting a live
+worktree, disabling an agent mid-run and killing the runtime process each
+produce a named, actionable message in the right pane; nothing goes white;
+and `grep -rn "catch {}"` returns zero.
+
+---
+
+### R12-P2 — Perceived speed: shimmer, optimism, and weight
+
+The app is fast and does not look it, because it paints nothing until it can
+paint everything. This phase is almost entirely presentation over data that
+already exists — the largest quality gain per line in the whole document.
+
+**R12-P2.1 A loading state for every route.** Four of thirty-five have one.
+Each `loading.tsx` is shaped like the screen it replaces — a channel shows a
+header, a roster rail and six message rows; a table shows a header row and
+eight cells wide; the repo browser shows a breadcrumb and a directory table.
+A skeleton that does not match its screen is a second layout shift, so the
+shape matters more than the animation.
+
+**R12-P2.2 A shimmer primitive, used everywhere something is async.**
+`components/ui/skeleton.tsx` exists and is `animate-pulse`. Add a `shimmer`
+variant (a moving highlight, which reads as "arriving" where a pulse reads
+as "waiting"), make both no-ops under `prefers-reduced-motion`, and export
+composed shapes: `<SkeletonTable>`, `<SkeletonList>`, `<SkeletonCard>`,
+`<SkeletonCode>`. Then use them at COMPONENT level too, not only at route
+level — the agent-session block, the provenance strip, the artifact panel,
+the repo file view, the review diff.
+
+**R12-P2.3 One optimistic-mutation convention, applied to all 24
+`router.refresh()` sites.** A small `useOptimisticAction` wrapper around
+`useOptimistic` + the server action: paint the intended state, reconcile on
+the response, roll back with a toast on failure. `applyReactionToggle` in
+`components/teams/shared.ts` is the shape to generalise — it already does
+exactly this and is already covered by tests.
+
+**R12-P2.4 Stop shipping the editor to screens that do not open it.**
+Measured, from `next build`: `/teams/[teamId]` is **560 kB** first load
+because `canvas-pane.tsx` statically imports `BlockSuiteEditor` while the
+canvas is closed by default. `next/dynamic` moves it behind the click.
+Re-measure `/p/[pageId]` (562 kB) and `/tasks/[taskId]` (539 kB) after, and
+record the numbers in `docs/performance-budget.md` — a budget nobody checks
+is a comment.
+
+**R12-P2.5 Nine polls become subscriptions or one poll.**
+`components/tasks/task-board.tsx` runs three four-second intervals and
+`task-drawer.tsx` a fourth; they can be one batched read at worst and a
+NOTIFY subscription at best. The two polls that are genuinely outside the
+database (the repo stamp, the relative-time ticker) stay, and say why in
+place, as the repo stamp already does.
+
+**R12-P2.6 No layout shift, anywhere.** Every skeleton reserves the exact
+box its content will occupy. This is the difference between a fast app and
+one that feels like it is fighting you.
+
+**Done when.** Every route paints structure within one frame of navigation;
+no mutation in the app waits for a server response before painting; the
+channel route is under 250 kB; and the recorded route weights are in the
+performance budget with a date.
+
+---
+
+### R12-P3 — The channel becomes real-time
+
+The room's backend is finished — threads, mentions, reactions, unread,
+approvals, dispatch — and its surface still behaves like a form over a
+database. This phase makes it feel like the product it is.
+
+**R12-P3.1 Optimistic send, which D0 already required.** Enter paints the
+row immediately with a `sending` state, the composer clears instantly, and
+the server's row reconciles by a client-generated key. A failure turns the
+row red with a retry and the text is recoverable — never lost. This is
+listed first because it is the one place the document's own founding rule is
+violated by the code (R6.A.1).
+
+**R12-P3.2 A typing indicator, with no rows written.** A person typing is
+ephemeral state that must never touch disk: a `pg_notify` payload
+(`{teamId, slotId, at}`) throttled to one per two seconds while the composer
+has uncommitted text, and a client-side TTL of four seconds. Zero writes,
+zero new tables, and it rides the same subscription as P3.3. The agent
+equivalent already exists as `pending-reply-row.tsx`, so the two indicators
+should look like siblings rather than like two features.
+
+**R12-P3.3 Push, with the poll as the fallback.** `NOTIFY` on message
+insert, reaction toggle and approval create/resolve, delivered over an SSE
+route beside the existing run-events one; the six-second poll drops to a
+sixty-second reconciliation sweep and to an immediate catch-up on
+reconnect. Removes ~600 requests per hour per open channel and takes reply
+latency from "up to 6s" to "tens of ms".
+
+**R12-P3.4 One draggable divider, no gap.** Replace `gap-4` plus fixed
+`w-96`/`w-[26rem]` with a 1px separator that is the drag handle: pointer
+events with capture (not mousemove on window), `transform`-free width write
+to a CSS variable so the drag stays on the compositor, min/max clamps,
+double-click to reset, keyboard-resizable with arrow keys, and the width
+persisted per browser the way the roster's collapsed state now is. The same
+component serves the thread pane and the canvas pane.
+
+**R12-P3.5 Everything ephemeral rides the same channel.** The approval
+strip, the ghost rows, the unread divider and the roster's liveness all
+consume the one subscription rather than each finding its own way to be
+current.
+
+**R12-P3.6 Send failures are recoverable, not silent.** A failed send keeps
+its text, offers retry, and survives a reload as a local draft.
+
+**Done when.** Two browsers, one channel: typing shows within 200ms, a
+message appears instantly for the sender and within 300ms for the other,
+dragging the divider holds 60fps with the thread open, and pulling the
+network for 30s produces a "reconnecting" state that self-heals with no lost
+messages.
+
+---
+
+### R12-P4 — Settings that match how the product actually works
+
+Settings today is a good rail in front of a Hermes-shaped model. A workspace
+running Claude Code has one screen that acknowledges it (Providers) and no
+way to set what that runtime should do by default.
+
+**R12-P4.1 A runtime has defaults.** `defaultSessionConfig` on
+`runtime-profiles`, merged UNDER `agent.runtimeConfig` in the dispatcher's
+existing merge (R1.A.1). Precedence becomes: runtime default → agent →
+per-turn override. One column, one line, no new query.
+
+**R12-P4.2 A runtime detail screen with real edit operations.** Settings →
+Runtimes → a runtime opens its own panel: identity and command, the
+generic `RuntimeConfigFields` bound to P4.1's defaults (so "Claude's default
+model" is one control in one place), the probe result with a retry, the
+handshake it declared, and the agents currently using it. No
+Claude-specific code — the runtime declares its own options and always has.
+
+**R12-P4.3 The rail groups per runtime, not per vendor.** `hermesOnly`
+generalises to "shown when this workspace has an enabled runtime of kind X".
+Hermes keeps its group and its justification; Claude gets one; a third
+runtime added later gets one for free.
+
+**R12-P4.4 Precedence is visible where it applies.** On the agent editor, a
+field left unset shows the value it will actually inherit and where from
+("model — inheriting `sonnet` from the Claude Code runtime"). An inherited
+default that is invisible is the same bug as no default at all.
+
+**R12-P4.5 Probe codes become sentences with a fix.** One map from code to
+"what this means / what to do", used by the runtimes screen, the agent
+editor and first run (R1.A.3, R10.A.1).
+
+**R12-P4.6 The settings hygiene pass.** Optimistic saves (P2.3), an
+unsaved-changes guard, inline validation, and a search box over the rail —
+twelve sections is past the point where scanning is reliable.
+
+**Done when.** Changing the default model on the Claude Code runtime changes
+every agent that has not overridden it, a new agent inherits it without
+being told, and no screen in Settings requires knowing which runtime the
+screen was designed against.
+
+---
+
+### R12-P5 — Repo, git, worktrees, orchestration: nothing breaks
+
+The most dangerous surface in the product, because it runs external
+processes against real repositories, and the failure modes are other
+people's code, other people's disks and other people's git versions.
+
+**R12-P5.1 One git invocation path, hardened.** Today `execFile('git', …)`
+appears in `lib/git/*` and `lib/run-worktrees/manager.ts` with different
+error handling in each. One helper: explicit `cwd`, a timeout, `windowsHide`,
+captured stderr, a maximum buffer, and typed failures mapped to P1.1 codes
+(`git_missing`, `not_a_repository`, `bad_ref`, `timeout`). Every caller
+keeps its own logic; none of them re-invents this.
+
+**R12-P5.2 The worktree lifecycle survives a crash on any step.**
+`manager.create` is awaited unguarded on the dispatcher's hot path
+(`lib/dispatcher/worker.ts`): a clone that fails takes the run with it, with
+whatever message git produced. It needs: a typed failure, a retry for the
+transient half (fetch), an orphan reaper on boot (`worktree prune` plus
+removal of `agent/run/*` branches with no run row), a disk budget honoured
+by `retention.ts`, and a refusal to remove a worktree holding uncommitted
+work without saying so.
+
+**R12-P5.3 The mutex is per-process, and that must be true or fixed.**
+`lib/run-worktrees/manager.ts` says "the mutex is in-process by design". It
+is correct only while exactly one Node process touches a given bare clone.
+A dev server and a prod server on one machine, or two dispatcher workers,
+break it. Either take a Postgres advisory lock keyed on the bare path — we
+already have the pool — or make the single-worker invariant explicit and
+enforced at boot rather than assumed in a comment.
+
+**R12-P5.4 Orchestration is verified by killing it, not by reading it.** A
+chaos script that: kills the worker mid-turn (lease recovery), cancels a run
+(`cancel_requested_at` is honoured), saturates the per-agent ceiling,
+exhausts the pool, and times out an approval. Each has a defined outcome;
+each gets a test. Half of these have been fixed once already after being
+found by hand — that is the argument for automating them.
+
+**R12-P5.5 The file viewer handles the files that actually exist.** Large
+files (cap and say so), binary (name it, do not render it), images (preview
+— R9.3 asked for exactly two types), symlinks, submodules, CRLF, non-UTF8
+encodings, and a ref that vanished between the listing and the click.
+
+**R12-P5.6 Destructive operations announce themselves.** Nothing removes a
+worktree, resets a branch or discards changes without a sentence naming what
+is about to be lost. This is the one place in the product where a silent
+success is worse than a loud refusal.
+
+**Done when.** The chaos script runs green; a repository with a 40 MB
+binary, a submodule and a symlink browses without an error; removing git
+from PATH produces "git is not installed or not on PATH" everywhere it is
+needed and nowhere else; and no run can be killed by a failure that is
+recoverable.
+
+---
+
+## R13 — Pages: Notion parity where it is still missing, in three phases
+
+Two complaints drive this, and both are about the same thing: the database
+block is the centre of a Notion-like product, and ours is closer to a grid
+than to Notion's property system. Relations exist and do not feel finished;
+formula and rollup do not exist at all; and every async surface in the
+editor paints empty before it paints content.
+
+The BlockSuite decision from R6.5 stands: documents are BlockSuite, feeds
+are not. Nothing here reopens that.
+
+---
+
+### R13-P1 — The table you can trust
+
+**R13-P1.1 The table shows its shape before its data.** The native database
+block renders empty and fills; with a remote data source that is a visible
+flash of nothing. A header row plus eight ghost rows, sized from the column
+widths the view already knows, using P2.2's shimmer.
+
+**R13-P1.2 Rows virtualise and columns hold their width.** D0's "no
+unbounded lists" applies to tables as much as to feeds. Column widths
+persist per view; resizing does not reflow the page.
+
+**R13-P1.3 Relations feel finished.** `relation-property.ts` and
+`user-database-data-source.ts` already implement the hard half — picking a
+target database, two-way mirroring, bidirectional visibility. What is
+missing is the surface: a searchable picker, create-and-link in one step,
+chip removal without opening a panel, a visible one-way/two-way state, and a
+clear message when the target row was deleted.
+
+**R13-P1.4 Cell editing survives real use.** Enter commits and moves down,
+Tab commits and moves right, Escape reverts, paste of a multi-cell region
+fills a range, undo covers a cell edit rather than only a block edit, and
+multi-select delete asks once rather than per cell.
+
+**R13-P1.5 A row page IS its row.** The record header now renders (it was
+comparing `'user-database'` against a stored `'userDatabase'` and had never
+appeared once), but the page's own title should be the row's title property,
+kept in sync both ways, so a row page opens as "Q3 pricing" and never as
+"record aojhfiefhh".
+
+**R13-P1.6 Cell writes are optimistic.** Same convention as R12-P2.3. A cell
+that waits for a round trip before showing what you typed is the single most
+noticeable lag in a table.
+
+**Done when.** A 2,000-row database opens with structure in one frame,
+scrolls at 60fps, and every edit paints before the network.
+
+---
+
+### R13-P2 — The property system: formula, rollup, and the rest
+
+**R13-P2.1 An explicit parity inventory, with edge cases.** Enumerate
+Notion's property types against ours, and for each one the edge cases that
+make it real rather than nominal: an empty value versus a zero, a select
+option renamed while rows reference it, a date with and without a time and
+with a range, a number's format, a person who left the workspace. The
+inventory is the deliverable of this step — building against a vague "like
+Notion" is how half-types get shipped.
+
+**R13-P2.2 Formula.** A small, total expression language (no loops, no I/O):
+references to other properties, arithmetic, string and date functions,
+`if`/`and`/`or`, and typed results. A dependency graph per database with
+cycle detection at definition time, so a cycle is refused when it is written
+rather than discovered when it is evaluated. Errors render in the cell as an
+error, never as a crash and never as a blank.
+
+**R13-P2.3 Rollup.** Relation property + target property + aggregation
+(count, sum, min, max, average, unique, show original, percent empty). It
+composes with formula, which means the dependency graph from P2.2 has to
+span databases, and that is the design constraint to settle before any code.
+
+**R13-P2.4 Where evaluation runs — a D0 decision, taken deliberately.**
+Client-side evaluation for immediate feedback while typing; server-side
+evaluation on write for the stored value, so a row read by an agent through
+MCP or by another database's rollup sees the same number the human sees.
+Cached in `cells` under a reserved key, invalidated by the dependency graph.
+Never recomputed on read for a list of rows — that is the N+1 D0 forbids.
+
+**R13-P2.5 The remaining types.** Person, files and media, created/edited
+by, created/edited time, status (which is not select — it has groups), and
+unique id.
+
+**R13-P2.6 Migration without a stop-the-world.** `database-rows.cells` is a
+flat json map and the schema is a json array on the parent — chosen exactly
+so this kind of change is additive. New property types must read old rows
+with no backfill, and any backfill that IS needed runs lazily on read.
+
+**Done when.** A database with a relation to a second database, a rollup
+over it and a formula over the rollup recomputes correctly when the far row
+changes, in one write, with no read-time recomputation.
+
+---
+
+### R13-P3 — Views, and no lag anywhere in the editor
+
+**R13-P3.1 Filters, sorts and groups, saved per view.** `collections/
+SavedViews.ts` already exists; the surface does not use it for the native
+database block.
+
+**R13-P3.2 Board, gallery and calendar over the same source.**
+`kanban-board.tsx` exists standalone; it should be a view of a database
+rather than a separate component with its own data path.
+
+**R13-P3.3 The editor's first paint.** `/p/[pageId]` is 562 kB. Split the
+editor from the page shell so the title, the origin header and the
+properties paint immediately and the canvas hydrates after; measure and
+record.
+
+**R13-P3.4 Every async block shows a shape.** The agent-session block, the
+provenance strip, mentions and the suggestion bar all currently paint empty
+first. Same primitives as R12-P2.2.
+
+**R13-P3.5 Keyboard and accessibility.** Full keyboard navigation of a
+table (arrows, Home/End, page keys), focus visible everywhere, roles correct
+on the grid, and the drag handles from R12-P3.4 operable without a mouse.
+
+**R13-P3.6 A perf budget that fails the build.** Route weight and
+first-paint numbers recorded in `docs/performance-budget.md` with a
+threshold; a pull request that crosses it says so.
+
+**Done when.** Opening a page with a 2,000-row database, a relation and a
+rollup shows structure in one frame, is interactive in under a second on a
+cold cache, and nothing in the editor paints empty before it paints content.
+
+---
+
+## What these three roadmaps do NOT include, deliberately
+
+- **No new product surface.** Not one of these phases adds a feature. If a
+  phase finds itself designing a screen that does not exist yet, it has
+  drifted.
+- **No GitHub sync.** R11 stays deferred, for the reason recorded there.
+- **No CRDT anywhere new.** R13 touches tables and properties; it does not
+  move a feed into Yjs. D0's first rule is unchanged.
+- **No abstraction for its own sake.** R12-P5.1 unifies git invocation
+  because there is one correct way to run a subprocess; it does not unify
+  the three diff renderers, for the reason recorded in blocker 14.
