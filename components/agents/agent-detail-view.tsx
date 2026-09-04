@@ -1,7 +1,6 @@
 'use client'
 
-import { useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useState, type ReactNode } from 'react'
 import { DetailLayout, type DetailLayoutTab } from '@/components/layout/detail-layout'
 import { AgentSessionsTab, type AgentSessionRow } from '@/components/agents/agent-sessions-tab'
 import { AgentPluginCapabilities, type AgentPluginRow } from '@/components/agents/agent-plugin-capabilities'
@@ -10,34 +9,53 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { AgentCapabilities } from '@/components/agents/agent-capabilities'
 import { AgentMemories } from '@/components/agents/agent-memories'
+import { AgentWorkTab } from '@/components/agents/agent-work-tab'
 import { AgentSettingsForm, type AgentProfile } from '@/components/agents/agent-settings-form'
 import { SharePanel } from '@/components/access/share-panel'
 import { AgentReachPanel } from '@/components/access/agent-reach-panel'
 import { RuntimePingButton } from '@/components/agents/runtime-ping-button'
 import { saveAgent } from '@/app/(app)/workspace/[workspaceSlug]/agents/actions'
-import { unwrap } from '@/lib/failures'
+import { useOptimisticAction } from '@/lib/optimistic'
+import type { WithFailure } from '@/lib/failures'
 import type { Agent } from '@/components/agents/agent-editor'
 import type { ActiveModelConfig } from '@/lib/runtimes/hermes/providers'
+import type { TaskAgentColumnData } from '@/app/(app)/workspace/[workspaceSlug]/tasks/actions'
+import type { TaskGroup } from '@/lib/task-views/data-layer'
 import { formatTimestamp } from '@/lib/relative-time'
 
-// ROADMAP B-1 (Detail) — the real, linkable home for one agent, conformed to
-// the shared <DetailLayout> primitive (components/layout/detail-layout.tsx)
-// the same way runs/[runId]/review already is (see components/review/). Three
-// URL-backed tabs:
-//   - Overview: read-only metadata summary. Deliberately does not rebuild
-//     the editor form — that's what Settings is for.
-//   - Capabilities: the *existing* <AgentCapabilities> component, relocated
-//     here wholesale (its Skills/MCP/Models work against /api/hermes/* is
-//     untouched) from where it used to live — a client-side tab toggle
-//     inside the list page's inline editor, not a real route. This is now
-//     the only place that UI is mounted.
-//   - Memory (ROADMAP B7.1, Batch B-6 "Finish"): <AgentMemories>, a real
-//     proxy to Hermes's per-agent memory files (app/api/hermes/memories/*)
-//     — list/read/edit/delete, plus the honest last-writer-wins caveat the
-//     plan itself calls for.
-//   - Settings: the actual edit form (agent-settings-form.tsx, extracted out
-//     of the old inline editor) — model, env/args, MCP config, concurrency,
-//     permission mode, enabled toggle.
+// ROADMAP R14-P0.7 — restructured to exactly four tabs, in this order:
+// Overview / Work / Capabilities / Settings.
+//
+//   - Overview: identity + what this agent is bound to. This is a MERGE, not
+//     just a rename — the former standalone "Access" tab (SharePanel +
+//     AgentReachPanel: who may use this agent, and what it may reach) and the
+//     former "Sessions" tab (its own conversations) both answered a piece of
+//     "what is this agent, and what is it bound to" and are folded in here
+//     rather than left as two more tabs answering an overlapping question.
+//   - Work (NEW): a status-grouped board of this agent's own tasks. Reuses
+//     `groupTasks` and `getTaskAgentColumnsData`/`getAgentUsageRollup`
+//     exactly as computed for the tasks board's own agent columns — see
+//     agent-work-tab.tsx's header for the full accounting. No new query
+//     shape, no new poll.
+//   - Capabilities: skills + MCP (<AgentCapabilities>, unchanged), PLUS two
+//     more things folded in here rather than left as their own tabs:
+//     Connectors (<ScopedConnectorsTab>, built by another unit this session
+//     as a top-level tab reached via `extraTabs` — its content now arrives
+//     through the dedicated `connectorsContent` prop instead, still a
+//     server-rendered element composed by the page, just mounted as a
+//     section of this tab rather than a whole tab of its own) and Memory
+//     (<AgentMemories>, formerly its own tab) — both are, honestly, "what
+//     this agent can do/access/remember," which is what Capabilities means.
+//   - Settings: the actual edit form (agent-settings-form.tsx). Its skills
+//     editor moved out — skills are bound from the Capabilities tab's
+//     existing Hermes skills library now, not edited a second way here. See
+//     agent-settings-form.tsx's own comment.
+//
+// `extraTabs` (DetailLayoutTab[]) is left in place as a mechanism — nothing
+// currently feeds it (Connectors moved to the dedicated `connectorsContent`
+// prop below, since it needed to land *inside* an existing tab rather than
+// beside it), but it is genuinely useful for the next unit that needs to add
+// a whole new tab without touching this file, so it is not removed.
 export function AgentDetailView({
   workspaceId,
   workspaceSlug,
@@ -52,6 +70,9 @@ export function AgentDetailView({
   plugins,
   activeModel,
   agentModel,
+  taskGroups,
+  taskColumnsData,
+  connectorsContent,
   extraTabs,
 }: {
   workspaceId: number
@@ -76,45 +97,55 @@ export function AgentDetailView({
   /** The model pinned by THIS agent's own Hermes profile. Null when the agent
    * runs on the install default, in which case `activeModel` is the answer. */
   agentModel?: ActiveModelConfig | null
+  /** R14-P0.7 Work tab — this agent's tasks, already grouped by status via
+   * the shared `groupTasks` (lib/task-views/data-layer.ts), computed
+   * server-side in agents/[agentId]/page.tsx over tasks already filtered to
+   * this agent. Empty array (not undefined) when the agent has none. */
+  taskGroups?: TaskGroup[]
+  /** R14-P0.7 Work tab — the exact same batched broker read the task board's
+   * own agent columns use (`getTaskAgentColumnsData`), keyed by task id. */
+  taskColumnsData?: Record<number, TaskAgentColumnData>
+  /**
+   * R14-P0.7 — the Connectors tab another unit built this session, folded
+   * into Capabilities as a section rather than left as its own tab. This is
+   * a pre-rendered element (`<ScopedConnectorsTab .../>`, an ASYNC SERVER
+   * COMPONENT) composed by the server-component page and handed down as a
+   * prop — the same reason `extraTabs` exists below: a client component
+   * cannot import and invoke an async server component itself, only render
+   * one that its server-component parent already resolved into an element.
+   */
+  connectorsContent?: ReactNode
   /**
    * Tabs contributed by the page that renders this view, appended after the
-   * ones above.
-   *
-   * The shared registration point for every tab whose data belongs to the
-   * server component rather than to this file — the Access panels and the
-   * Connectors tab both arrive this way. One composable array rather than a
-   * prop per feature: two teams adding a tab in the same week is exactly the
-   * case a second mechanism would have made conflict-prone for no gain.
+   * ones above. Nothing feeds this today (see header comment), but it stays
+   * as the registration point for the next whole-new-tab a future unit adds
+   * without needing to edit this file's tab list directly.
    */
   extraTabs?: DetailLayoutTab[]
 }) {
-  const router = useRouter()
   const [agent, setAgent] = useState(initialAgent)
-  const [toggleBusy, setToggleBusy] = useState(false)
-  const [toggleError, setToggleError] = useState<string | null>(null)
+  const toggleOptimistic = useOptimisticAction<Agent>()
 
-  async function toggleEnabled() {
-    setToggleBusy(true)
-    setToggleError(null)
-    try {
-      const updated = unwrap(
-        await saveAgent({
+  function toggleEnabled() {
+    const previous = agent
+    const next = { ...agent, enabled: !agent.enabled }
+    void toggleOptimistic.run({
+      apply: () => setAgent(next),
+      rollback: () => setAgent(previous),
+      // `saveAgent` returns the payload-types `Agent`; this view's `Agent`
+      // (agent-editor.tsx) is a slimmer projection of the same shape — see
+      // this file's own `TimestampRow` comment for why that cast is normal
+      // here.
+      work: () =>
+        saveAgent({
           workspaceId,
           workspaceSlug,
           id: agent.id,
-          data: { enabled: !agent.enabled },
-        }),
-      ) as Agent
-      setAgent(updated)
-      router.refresh()
-    } catch (error) {
-      // Previously a bare try/finally: a refused enable/disable left the badge
-      // showing the old state with nothing said about why, which reads as the
-      // button having done nothing at all.
-      setToggleError(error instanceof Error ? error.message : 'Could not change this agent.')
-    } finally {
-      setToggleBusy(false)
-    }
+          data: { enabled: next.enabled },
+        }) as unknown as Promise<WithFailure<Agent>>,
+      failureTitle: 'Could not change this agent.',
+      onSettled: (updated) => setAgent(updated),
+    })
   }
 
   const statusBadge = !agent.enabled ? (
@@ -126,12 +157,9 @@ export function AgentDetailView({
   )
 
   const primaryAction = (
-    <div className="flex flex-col items-end gap-1">
-      <Button type="button" size="sm" variant="outline" disabled={toggleBusy} onClick={() => void toggleEnabled()}>
-        {toggleBusy ? 'Saving…' : agent.enabled ? 'Disable agent' : 'Enable agent'}
-      </Button>
-      {toggleError && <p className="max-w-64 text-right text-[11px] text-destructive">{toggleError}</p>}
-    </div>
+    <Button type="button" size="sm" variant="outline" disabled={toggleOptimistic.pending} onClick={toggleEnabled}>
+      {agent.enabled ? 'Disable agent' : 'Enable agent'}
+    </Button>
   )
 
   const skillsCount = Array.isArray(agent.skills) ? agent.skills.length : 0
@@ -168,6 +196,39 @@ export function AgentDetailView({
             Instructions
           </h3>
           <p className="mt-1 whitespace-pre-wrap text-sm">{agent.instructions}</p>
+        </div>
+      )}
+
+      {/* MERGED FROM THE FORMER "Access" TAB — who may use this agent, and
+          what this agent may reach, are the two directions of "what this
+          agent is bound to," which is exactly Overview's own brief. Kept as
+          the two panels a prior unit built (SharePanel + AgentReachPanel),
+          just relocated rather than left as an overlapping second tab. */}
+      <div className="border-t border-black/10 pt-5 dark:border-white/10">
+        <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-black/40 dark:text-white/40">
+          Bound to
+        </h3>
+        <div className="space-y-6">
+          <SharePanel
+            workspaceId={workspaceId}
+            workspaceSlug={workspaceSlug}
+            objectType="agent"
+            objectId={String(agent.id)}
+            objectLabel={agent.name}
+          />
+          <AgentReachPanel workspaceId={workspaceId} workspaceSlug={workspaceSlug} agentId={agent.id} />
+        </div>
+      </div>
+
+      {/* MERGED FROM THE FORMER "Sessions" TAB — this agent's own
+          conversations are part of the same "what is this agent" picture,
+          not a separate concern. */}
+      {sessions && sessions.length > 0 && (
+        <div className="border-t border-black/10 pt-5 dark:border-white/10">
+          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-black/40 dark:text-white/40">
+            Recent sessions
+          </h3>
+          <AgentSessionsTab workspaceSlug={workspaceSlug} sessions={sessions} />
         </div>
       )}
     </div>
@@ -229,12 +290,26 @@ export function AgentDetailView({
           .
         </p>
       )}
-    </div>
-  )
 
-  const memoryContent = (
-    <div className="p-6">
-      <AgentMemories agent={agent} />
+      {/* MERGED FROM THE FORMER "Connectors" TAB (built via `extraTabs` by
+          another unit this session) — apps this agent may act on are exactly
+          as much "what this agent can do" as its skills and MCP servers
+          above, so this section replaces what used to be a whole separate
+          tab rather than sitting beside it. `connectorsContent` is a
+          server-rendered element (see this component's prop doc for why);
+          rendered only when the page actually supplies one. */}
+      {connectorsContent && (
+        <div className="border-t border-black/10 pt-6 dark:border-white/10">
+          <h3 className="mb-1 text-sm font-semibold">Connectors</h3>
+          {connectorsContent}
+        </div>
+      )}
+
+      {/* MERGED FROM THE FORMER "Memory" TAB — what an agent remembers is a
+          capability the same way its skills and tools are. */}
+      <div className="border-t border-black/10 pt-6 dark:border-white/10">
+        <AgentMemories agent={agent} />
+      </div>
     </div>
   )
 
@@ -251,37 +326,14 @@ export function AgentDetailView({
     </div>
   )
 
-  // Both halves of "access" on one tab, because they are the two directions of
-  // the same question and answering one without the other is how a permissions
-  // screen misleads: who may USE this agent, and what this agent may REACH.
-  // Splitting them into two tabs would let somebody grant an agent admin on
-  // every project without ever seeing that a viewer can trigger it.
-  const accessContent = (
-    <div className="max-w-2xl space-y-8 p-6">
-      <SharePanel
-        workspaceId={workspaceId}
-        workspaceSlug={workspaceSlug}
-        objectType="agent"
-        objectId={String(agent.id)}
-        objectLabel={agent.name}
-      />
-      <div className="border-t border-black/10 pt-6 dark:border-white/10">
-        <AgentReachPanel workspaceId={workspaceId} workspaceSlug={workspaceSlug} agentId={agent.id} />
-      </div>
-    </div>
+  const workContent = (
+    <AgentWorkTab workspaceSlug={workspaceSlug} groups={taskGroups ?? []} columnsData={taskColumnsData ?? {}} />
   )
 
   const tabs: DetailLayoutTab[] = [
     { key: 'overview', label: 'Overview', content: overviewContent },
+    { key: 'work', label: 'Work', count: taskGroups?.reduce((sum, group) => sum + group.tasks.length, 0), content: workContent },
     { key: 'capabilities', label: 'Capabilities', count: skillsCount, content: capabilitiesContent },
-    {
-      key: 'sessions',
-      label: 'Sessions',
-      count: sessions?.length,
-      content: <AgentSessionsTab workspaceSlug={workspaceSlug} sessions={sessions ?? []} />,
-    },
-    { key: 'memory', label: 'Memory', content: memoryContent },
-    { key: 'access', label: 'Access', content: accessContent },
     { key: 'settings', label: 'Settings', content: settingsContent },
     ...(extraTabs ?? []),
   ]

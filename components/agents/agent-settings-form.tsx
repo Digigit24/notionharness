@@ -10,7 +10,7 @@ import type { ActiveModelConfig } from '@/lib/runtimes/hermes/providers'
 import type { HermesProfileSummary } from '@/lib/runtimes/hermes/profiles'
 import { sessionConfigOptions, type AgentHandshake, type SessionConfigOption } from '@/lib/runtimes/handshake'
 import { RuntimeConfigFields } from '@/components/runtimes/runtime-config-fields'
-import { AgentSkillsField, normalizeSkillNames } from '@/components/agents/agent-skills-field'
+import { normalizeSkillNames } from '@/components/agents/agent-skills-field'
 
 // Extracted out of the old list-page inline editor (agent-editor.tsx) so the
 // same save-a-draft form can be mounted from two places: the "New agent"
@@ -364,12 +364,18 @@ export function AgentSettingsForm({
           behaves like a text file. The column is left in place (it is not this
           unit's to drop) but nothing offers to fill it any more; MCP servers
           are configured as plugins, which the Capabilities tab shows. */}
-      <AgentSkillsField
-        value={draft.skills}
-        onChange={(skills) => setDraft({ ...draft, skills })}
-        usesHermesHome={usesHermesHome}
-        disabled={busy}
-      />
+
+      {/* R14-P0.7 — `<AgentSkillsField>` (the chip editor that used to live
+          here) is GONE too, for the same "two editors of one field drift"
+          reason: the Capabilities tab's `<AgentCapabilities>` already has a
+          per-skill "Bound" checkbox against the live Hermes pool, saving
+          immediately rather than waiting for this form's Save button — a
+          strictly better editor for the same `agents.skills` field, not a
+          different one. `draft.skills` (below) is still carried through this
+          form's submit so saving OTHER fields here never clobbers whatever
+          Capabilities has already set; it is simply no longer edited a
+          second way from this screen. See agent-detail-view.tsx's own header
+          comment for where skill binding now lives. */}
 
       <div className="grid gap-2 sm:grid-cols-2">
         <label className="block text-xs">

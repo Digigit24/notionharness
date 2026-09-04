@@ -5,6 +5,9 @@ import { getActiveRunForAgent, getAgentUsageRollup, listSessions } from '@/lib/b
 import { getActiveModelConfig } from '@/lib/runtimes/hermes/providers'
 import { AgentDetailView } from '@/components/agents/agent-detail-view'
 import { ScopedConnectorsTab } from '@/components/connectors/scoped-connectors-tab'
+import { getTaskAgentColumnsData } from '@/app/(app)/workspace/[workspaceSlug]/tasks/actions'
+import { groupTasks } from '@/lib/task-views/data-layer'
+import { unwrap } from '@/lib/failures'
 
 // ROADMAP B-1 (Detail) — the real, linkable home for one agent. Conforms to
 // <DetailLayout> the same way runs/[runId]/review/page.tsx does: this
@@ -54,13 +57,45 @@ export default async function AgentDetailPage({
   // actually cost" but lags a change in behaviour. Showing one was a choice
   // to make one of those questions unanswerable, so both are here.
   //
-  // Issued together — three independent reads that would otherwise serialise
-  // against a remote database for no reason (D0).
-  const [weeklySpend, monthlySpend, agentSessions] = await Promise.all([
+  // Issued together — five independent reads that would otherwise serialise
+  // against a remote database for no reason (D0). `agentTasks`/`taskStatuses`
+  // are R14-P0.7's Work tab data: this agent's own tasks (depth: 1 so
+  // `status`/`project` come back populated for `groupTasks` and the row
+  // labels below) and the workspace's statuses to group and order them by —
+  // both plain Payload reads, joined here rather than a second round trip.
+  const [weeklySpend, monthlySpend, agentSessions, agentTasks, taskStatuses] = await Promise.all([
     getAgentUsageRollup(agentId, 7),
     getAgentUsageRollup(agentId, 30),
     listSessions({ workspaceId: workspace.id, agentId, limit: 50 }).catch(() => []),
+    payload.find({
+      collection: 'tasks',
+      where: { agent: { equals: agentId } },
+      depth: 1,
+      sort: 'position',
+      limit: 500,
+      overrideAccess: true,
+    }),
+    payload.find({
+      collection: 'task-statuses',
+      where: { workspace: { equals: workspace.id } },
+      sort: 'position',
+      limit: 100,
+      depth: 0,
+      overrideAccess: true,
+    }),
   ])
+
+  // Per-task runs/spend/last-outcome — the EXACT SAME batched broker read the
+  // tasks board's own agent columns use (`getTaskAgentColumnsData`, see
+  // app/.../tasks/actions.ts), called once here for this agent's own task
+  // ids rather than reimplemented. Depends on `agentTasks` above, so it
+  // cannot join the Promise.all — one extra await for one batched call, not
+  // an N+1.
+  const taskColumnsData = unwrap(await getTaskAgentColumnsData(agentTasks.docs.map((task) => task.id)))
+  // Same grouping function the task board's List view uses
+  // (lib/task-views/data-layer.ts) — a second RENDERER of tasks already
+  // fetched above, not a new query shape.
+  const taskGroups = groupTasks(agentTasks.docs, 'status', taskStatuses.docs)
 
   const agentWorkspaceId = agent ? (typeof agent.workspace === 'number' ? agent.workspace : agent.workspace.id) : null
   if (!agent || agentWorkspaceId !== workspace.id) notFound()
@@ -145,27 +180,27 @@ export default async function AgentDetailPage({
       }))}
       activeModel={activeModel}
       agentModel={agentModel}
-      // Registered here rather than inside the view because the content is a
-      // server component — it resolves this agent's connector rows and, for
-      // each, the connection belonging to the PERSON LOOKING AT THE PAGE. That
-      // last part is the whole point: "you have not connected Gmail" is a
-      // sentence somebody can act on, and "this agent has not connected Gmail"
-      // describes something that cannot happen.
-      extraTabs={[
-        {
-          key: 'connectors',
-          label: 'Connectors',
-          content: (
-            <ScopedConnectorsTab
-              workspaceSlug={workspace.slug}
-              scopeType="agent"
-              scopeId={agent.id}
-              heading="Apps this agent may act on"
-              description="Granted to this agent alone. They ADD to the workspace’s and the project’s connectors rather than replacing them — tool availability is additive, so giving this agent one app never takes another away."
-            />
-          ),
-        },
-      ]}
+      taskGroups={taskGroups}
+      taskColumnsData={taskColumnsData}
+      // R14-P0.7 — this used to be its own tab, registered via `extraTabs`
+      // because the content is a SERVER component: it resolves this agent's
+      // connector rows and, for each, the connection belonging to the PERSON
+      // LOOKING AT THE PAGE (a real per-viewer read, not something a client
+      // component could do itself). That reasoning is unchanged — this is
+      // still resolved here and handed down as an already-rendered element —
+      // only WHERE it's mounted changed: Capabilities absorbed it as a
+      // section (see agent-detail-view.tsx's header comment for why), so it
+      // is passed through the dedicated `connectorsContent` prop instead of
+      // `extraTabs`, which would have added it back as a whole fifth tab.
+      connectorsContent={
+        <ScopedConnectorsTab
+          workspaceSlug={workspace.slug}
+          scopeType="agent"
+          scopeId={agent.id}
+          heading="Apps this agent may act on"
+          description="Granted to this agent alone. They ADD to the workspace’s and the project’s connectors rather than replacing them — tool availability is additive, so giving this agent one app never takes another away."
+        />
+      }
     />
   )
 }
