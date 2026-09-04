@@ -1,28 +1,27 @@
 'use client'
 
-// ROADMAP B5.2 (Batch B-5 "Attention") — the Inbox's real list surface: one
-// chronological, keyboard-navigable, dismissible stream. Reuses the exact
-// `j`/`k`-under-the-'list'-scope pattern components/tasks/task-list-view.tsx
-// established in Batch B-4 (lib/keyboard/registry.ts's `'list'` scope,
-// ref-counted activate/deactivate) rather than inventing a second keyboard-
-// nav implementation — this repo's own convention, per this batch's brief.
-import { useEffect, useMemo, useState } from 'react'
-import { useRouter } from 'next/navigation'
-import Link from 'next/link'
+// ROADMAP B5.2 (Batch B-5 "Attention") / R14-P0.9 — the Inbox's real list
+// surface: one chronological, keyboard-navigable, dismissible stream.
+//
+// R14-P0.9 CHANGE: this component is now a CONTROLLED, presentational list.
+// Selection, the item array (with its optimistic removals) and every action's
+// wiring moved up to `inbox-workspace.tsx`, because the right-side preview
+// pane needs to read and act on the SAME selection and the SAME item list —
+// two independent copies of that state is how a list and its own preview pane
+// disagree with each other. This file now owns only: what a row looks like,
+// and the `j`/`k`-under-the-'list'-scope keyboard pattern's RENDER half (the
+// shortcuts themselves are registered by the workspace, which owns focus).
+//
+// THE OTHER CHANGE: a row no longer navigates on click or Enter. It used to
+// call `router.push(item.href)` — a full page navigation away from the list —
+// which is exactly the dead end R14-P0.9 exists to fix. Selecting a row now
+// only ever changes which item the right pane shows; `router.push` is used
+// exactly once in this whole feature, for the detail pane's own explicit
+// "Open in channel" / "Open task" action, never for basic row selection.
 import { AlertTriangle, AtSign, Check, FileDiff, Hash, RotateCcw, ShieldAlert, X } from 'lucide-react'
-import { useKeyboardShortcut } from '@/lib/keyboard/use-keyboard-shortcut'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
-import {
-  approveApprovalInbox,
-  denyApprovalInbox,
-  dismissMentionInbox,
-  dismissRunInbox,
-  markChannelMentionRead,
-  retryRunInbox,
-} from '@/app/(app)/workspace/[workspaceSlug]/inbox/actions'
-import { unwrap } from '@/lib/failures'
 import type { ApprovalOption } from '@/collections/Approvals'
 import { formatTimestamp } from '@/lib/relative-time'
 
@@ -42,12 +41,29 @@ export interface InboxItem {
   href: string | null
   approvalId?: number
   approvalOptions?: ApprovalOption[]
+  /** The ACP `session/request_permission` id `PermissionCard` needs to POST a
+   * decision — see `inbox-approval-preview.tsx`. Distinct from `approvalId`
+   * (the `approvals` collection's numeric row id, used by this route's own
+   * `approveApprovalInbox`/`denyApprovalInbox`) — the two id spaces are not
+   * interchangeable, see `app/api/approvals/route.ts`'s own comment on why. */
+  externalId?: string
   runId?: number
   canRetry?: boolean
+  /** The Work session behind a run item, when it has one — lets the detail
+   * pane offer "See full run" the same way `MessageRow` does, with no extra
+   * fetch: `runToItem` already holds the `Run` row this comes from. */
+  sessionId?: number | null
   notificationId?: number
   /** The mentioning message. The only id the channel-mention action takes —
    * team and slot are re-derived from it server-side. */
   channelMessageId?: number
+  /** channel_mention only — the channel named in the relationship label and
+   * the detail pane's "Open in #channel" action. */
+  channelName?: string
+  /** channel_mention only — true when the mention is on a reply rather than
+   * a thread root, so the relationship label can say "Thread in #x" instead
+   * of "Mentioned in #x". */
+  inThread?: boolean
 }
 
 const KIND_META: Record<InboxItemKind, { label: string; icon: typeof ShieldAlert }> = {
@@ -58,137 +74,46 @@ const KIND_META: Record<InboxItemKind, { label: string; icon: typeof ShieldAlert
   channel_mention: { label: 'Channel', icon: Hash },
 }
 
-export function InboxList({ items: initialItems, workspaceSlug }: { items: InboxItem[]; workspaceSlug: string }) {
-  const [items, setItems] = useState(initialItems)
-  const [focusedId, setFocusedId] = useState<string | null>(initialItems[0]?.id ?? null)
-  const [pendingIds, setPendingIds] = useState<Set<string>>(new Set())
-  const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const router = useRouter()
-
-  // Keep the local copy in sync when the server refetches (revalidatePath
-  // after an action, or a plain navigation back to this route) — but don't
-  // clobber an optimistic removal that's still in flight.
-  useEffect(() => {
-    setItems(initialItems)
-    setFocusedId((prev) => (prev && initialItems.some((i) => i.id === prev) ? prev : initialItems[0]?.id ?? null))
-  }, [initialItems])
-
-  const ids = useMemo(() => items.map((i) => i.id), [items])
-
-  function moveFocus(delta: 1 | -1) {
-    if (ids.length === 0) return
-    const currentIndex = focusedId != null ? ids.indexOf(focusedId) : -1
-    const nextIndex = Math.min(ids.length - 1, Math.max(0, currentIndex === -1 ? 0 : currentIndex + delta))
-    setFocusedId(ids[nextIndex])
+/**
+ * The row's relationship to the reader, stated before its content — "Thread
+ * in #general", "Mentioned in #eng" — the pattern R14-P0.9 asks for. Driven
+ * entirely by `InboxItemKind` (a closed, typed set) plus the structured
+ * fields above, never by re-parsing `headline`'s free text.
+ */
+export function relationshipLabel(item: InboxItem): string {
+  switch (item.kind) {
+    case 'approval':
+      return 'Needs your approval'
+    case 'failed_run':
+      return 'Run failed'
+    case 'review_run':
+      return 'Ready for review'
+    case 'mention':
+      return 'Mentioned you'
+    case 'channel_mention':
+      return item.channelName
+        ? item.inThread
+          ? `Thread in #${item.channelName}`
+          : `Mentioned in #${item.channelName}`
+        : 'Channel mention'
   }
+}
 
-  function removeItem(id: string) {
-    setItems((prev) => {
-      const next = prev.filter((i) => i.id !== id)
-      setFocusedId((current) => {
-        if (current !== id) return current
-        const removedIndex = prev.findIndex((i) => i.id === id)
-        return next[Math.min(removedIndex, next.length - 1)]?.id ?? null
-      })
-      return next
-    })
-  }
-
-  // R12-P1.1 — every inbox action returns its failure instead of throwing it,
-  // so `unwrap` is what turns one back into a throw the catch below already
-  // knew how to render. It lives HERE, in the one funnel all eleven call sites
-  // go through, rather than at each of them: an envelope that reaches this
-  // function un-unwrapped would count as success and silently strike the row
-  // off the list. (The signature cannot enforce that — `WithFailure<unknown>`
-  // is just `unknown` — which is precisely why there is one funnel to police
-  // instead of eleven call sites.)
-  async function runAction(id: string, fn: () => Promise<unknown>) {
-    setPendingIds((prev) => new Set(prev).add(id))
-    setErrorMessage(null)
-    try {
-      unwrap(await fn())
-      removeItem(id)
-    } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : 'Something went wrong.')
-    } finally {
-      setPendingIds((prev) => {
-        const next = new Set(prev)
-        next.delete(id)
-        return next
-      })
-    }
-  }
-
-  const focused = items.find((i) => i.id === focusedId) ?? null
-
-  useKeyboardShortcut('j', 'Next item', () => moveFocus(1), 'list')
-  useKeyboardShortcut('k', 'Previous item', () => moveFocus(-1), 'list')
-  useKeyboardShortcut(
-    'enter',
-    'Open focused item',
-    () => {
-      if (!focused) return
-      if (focused.kind === 'mention' && focused.notificationId != null) {
-        void runAction(focused.id, () => dismissMentionInbox(workspaceSlug, focused.notificationId!))
-      } else if (focused.kind === 'channel_mention' && focused.channelMessageId != null) {
-        // The room moves this same cursor on arrival, but doing it here too is
-        // what stops the row reappearing when the user navigates back onto a
-        // cached RSC payload. GREATEST() makes the double write a no-op.
-        void runAction(focused.id, () => markChannelMentionRead(workspaceSlug, focused.channelMessageId!))
-      } else if (focused.kind === 'review_run' && focused.runId != null) {
-        void runAction(focused.id, () => dismissRunInbox(workspaceSlug, focused.runId!))
-      }
-      if (focused.href) router.push(focused.href)
-    },
-    'list',
-  )
-  useKeyboardShortcut(
-    'y',
-    'Approve focused approval',
-    () => {
-      if (focused?.kind === 'approval' && focused.approvalId != null) {
-        const optionId = focused.approvalOptions?.find((o) => o.kind === 'allow_once' || o.kind === 'allow_always')?.optionId
-        void runAction(focused.id, () => approveApprovalInbox(workspaceSlug, focused.approvalId!, optionId))
-      }
-    },
-    'list',
-  )
-  useKeyboardShortcut(
-    'n',
-    'Deny focused approval',
-    () => {
-      if (focused?.kind === 'approval' && focused.approvalId != null) {
-        void runAction(focused.id, () => denyApprovalInbox(workspaceSlug, focused.approvalId!))
-      }
-    },
-    'list',
-  )
-  useKeyboardShortcut(
-    'r',
-    'Retry focused failed run',
-    () => {
-      if (focused?.kind === 'failed_run' && focused.canRetry && focused.runId != null) {
-        void runAction(focused.id, () => retryRunInbox(workspaceSlug, focused.runId!))
-      }
-    },
-    'list',
-  )
-  useKeyboardShortcut(
-    'e',
-    'Dismiss focused item',
-    () => {
-      if (!focused) return
-      if ((focused.kind === 'failed_run' || focused.kind === 'review_run') && focused.runId != null) {
-        void runAction(focused.id, () => dismissRunInbox(workspaceSlug, focused.runId!))
-      } else if (focused.kind === 'mention' && focused.notificationId != null) {
-        void runAction(focused.id, () => dismissMentionInbox(workspaceSlug, focused.notificationId!))
-      } else if (focused.kind === 'channel_mention' && focused.channelMessageId != null) {
-        void runAction(focused.id, () => markChannelMentionRead(workspaceSlug, focused.channelMessageId!))
-      }
-    },
-    'list',
-  )
-
+export function InboxList({
+  items,
+  selectedId,
+  onSelect,
+  handlersFor,
+}: {
+  items: InboxItem[]
+  selectedId: string | null
+  onSelect: (id: string) => void
+  /** Bound per-item action callbacks, built once per render by the workspace
+   * (which is the one place that knows how to turn an id into a server call
+   * with optimistic removal + rollback). Kept as a function rather than a
+   * pre-built map so a row never carries a closure it does not use. */
+  handlersFor: (item: InboxItem) => RowHandlers
+}) {
   if (items.length === 0) {
     return (
       <EmptyState
@@ -200,53 +125,39 @@ export function InboxList({ items: initialItems, workspaceSlug }: { items: Inbox
   }
 
   return (
-    <div className="flex flex-col gap-1">
-      {errorMessage && (
-        <p className="rounded-md bg-destructive/10 px-3 py-1.5 text-xs text-destructive">{errorMessage}</p>
-      )}
-      <ul className="flex flex-col gap-1">
-        {items.map((item) => (
-          <InboxRow
-            key={item.id}
-            item={item}
-            isFocused={item.id === focusedId}
-            isPending={pendingIds.has(item.id)}
-            onFocus={() => setFocusedId(item.id)}
-            onApprove={(optionId) => runAction(item.id, () => approveApprovalInbox(workspaceSlug, item.approvalId!, optionId))}
-            onDeny={() => runAction(item.id, () => denyApprovalInbox(workspaceSlug, item.approvalId!))}
-            onRetry={() => runAction(item.id, () => retryRunInbox(workspaceSlug, item.runId!))}
-            onDismissRun={() => runAction(item.id, () => dismissRunInbox(workspaceSlug, item.runId!))}
-            onDismissMention={() => runAction(item.id, () => dismissMentionInbox(workspaceSlug, item.notificationId!))}
-            onMarkChannelRead={() => runAction(item.id, () => markChannelMentionRead(workspaceSlug, item.channelMessageId!))}
-          />
-        ))}
-      </ul>
-    </div>
+    <ul className="flex flex-col gap-1">
+      {items.map((item) => (
+        <InboxRow
+          key={item.id}
+          item={item}
+          isSelected={item.id === selectedId}
+          onSelect={() => onSelect(item.id)}
+          handlers={handlersFor(item)}
+        />
+      ))}
+    </ul>
   )
 }
 
-function InboxRow({
-  item,
-  isFocused,
-  isPending,
-  onFocus,
-  onApprove,
-  onDeny,
-  onRetry,
-  onDismissRun,
-  onDismissMention,
-  onMarkChannelRead,
-}: {
-  item: InboxItem
-  isFocused: boolean
-  isPending: boolean
-  onFocus: () => void
+export interface RowHandlers {
   onApprove: (optionId?: string) => void
   onDeny: () => void
   onRetry: () => void
   onDismissRun: () => void
   onDismissMention: () => void
   onMarkChannelRead: () => void
+}
+
+function InboxRow({
+  item,
+  isSelected,
+  onSelect,
+  handlers,
+}: {
+  item: InboxItem
+  isSelected: boolean
+  onSelect: () => void
+  handlers: RowHandlers
 }) {
   const meta = KIND_META[item.kind]
   const Icon = meta.icon
@@ -255,10 +166,10 @@ function InboxRow({
   return (
     <li
       data-inbox-row={item.id}
-      onClick={onFocus}
+      onClick={onSelect}
       className={`flex items-start justify-between gap-3 rounded-md border px-3 py-2 transition-colors ${
-        isFocused ? 'border-border bg-muted' : 'border-transparent hover:bg-muted/50'
-      } ${isPending ? 'opacity-50' : ''}`}
+        isSelected ? 'border-border bg-muted' : 'border-transparent hover:bg-muted/50'
+      }`}
     >
       <div className="flex min-w-0 flex-1 items-start gap-2">
         <Badge variant="outline" className="mt-0.5 shrink-0 gap-1">
@@ -266,21 +177,20 @@ function InboxRow({
           {meta.label}
         </Badge>
         <div className="min-w-0 flex-1">
-          {item.href ? (
-            <Link
-              href={item.href}
-              onClick={() => {
-                if (item.kind === 'review_run') onDismissRun()
-                if (item.kind === 'mention') onDismissMention()
-                if (item.kind === 'channel_mention') onMarkChannelRead()
-              }}
-              className="truncate text-sm font-medium text-foreground hover:underline"
-            >
-              {item.headline}
-            </Link>
-          ) : (
-            <p className="truncate text-sm font-medium text-foreground">{item.headline}</p>
-          )}
+          {/* The relationship, before the content — "Thread in #general"
+              ahead of the headline it belongs to, never folded into it. */}
+          <p className="truncate text-[11px] font-medium text-muted-foreground">{relationshipLabel(item)}</p>
+          {/* A button, not a `<Link>` — selecting a row is a state change
+              (which item the right pane shows), never a navigation. The
+              detail pane's own "Open" action is the only place this feature
+              calls `router.push`. */}
+          <button
+            type="button"
+            onClick={onSelect}
+            className="truncate text-left text-sm font-medium text-foreground hover:underline"
+          >
+            {item.headline}
+          </button>
           {item.subline && <p className="truncate text-xs text-muted-foreground">{item.subline}</p>}
         </div>
       </div>
@@ -290,10 +200,10 @@ function InboxRow({
 
         {item.kind === 'approval' && (
           <>
-            <Button type="button" size="xs" disabled={isPending} onClick={() => onApprove(allowOption?.optionId)}>
+            <Button type="button" size="xs" onClick={() => handlers.onApprove(allowOption?.optionId)}>
               <Check /> Approve (y)
             </Button>
-            <Button type="button" size="xs" variant="destructive" disabled={isPending} onClick={onDeny}>
+            <Button type="button" size="xs" variant="destructive" onClick={handlers.onDeny}>
               <X /> Deny (n)
             </Button>
           </>
@@ -302,24 +212,24 @@ function InboxRow({
         {item.kind === 'failed_run' && (
           <>
             {item.canRetry && (
-              <Button type="button" size="xs" disabled={isPending} onClick={onRetry}>
+              <Button type="button" size="xs" onClick={handlers.onRetry}>
                 <RotateCcw /> Retry (r)
               </Button>
             )}
-            <Button type="button" size="xs" variant="outline" disabled={isPending} onClick={onDismissRun}>
+            <Button type="button" size="xs" variant="outline" onClick={handlers.onDismissRun}>
               Dismiss (e)
             </Button>
           </>
         )}
 
         {item.kind === 'review_run' && (
-          <Button type="button" size="xs" variant="outline" disabled={isPending} onClick={onDismissRun}>
+          <Button type="button" size="xs" variant="outline" onClick={handlers.onDismissRun}>
             Dismiss (e)
           </Button>
         )}
 
         {item.kind === 'mention' && (
-          <Button type="button" size="xs" variant="outline" disabled={isPending} onClick={onDismissMention}>
+          <Button type="button" size="xs" variant="outline" onClick={handlers.onDismissMention}>
             Dismiss (e)
           </Button>
         )}
@@ -329,7 +239,7 @@ function InboxRow({
             channel through this message rather than hiding one row. The label
             has to say what actually happens — see the action's own note. */}
         {item.kind === 'channel_mention' && (
-          <Button type="button" size="xs" variant="outline" disabled={isPending} onClick={onMarkChannelRead}>
+          <Button type="button" size="xs" variant="outline" onClick={handlers.onMarkChannelRead}>
             Mark read (e)
           </Button>
         )}

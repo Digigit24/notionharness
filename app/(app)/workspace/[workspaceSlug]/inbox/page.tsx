@@ -8,7 +8,8 @@ import { listPendingApprovalsForUser, type ApprovalDoc } from '@/lib/hermes/appr
 import { getRun, listFailedRuns, listReviewReadyRuns, listUserMentions } from '@/lib/broker'
 import type { Run, UserMention } from '@/lib/broker'
 import type { Activity, Notification } from '@/payload-types'
-import { InboxList, type InboxItem } from '@/components/inbox/inbox-list'
+import { type InboxItem } from '@/components/inbox/inbox-list'
+import { InboxWorkspace } from '@/components/inbox/inbox-workspace'
 
 // ROADMAP B5.2 (Batch B-5 "Attention") — the Inbox home screen, rebuilt to
 // meet the plan's own bar: "Chronological, keyboard-navigable, dismissible,
@@ -145,8 +146,8 @@ export default async function InboxPage({
   ].sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime())
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-      <div className="flex w-full flex-col gap-4 px-5 py-8">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div className="flex w-full shrink-0 flex-col gap-4 px-5 pt-8 pb-4">
         <header className="flex items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold text-foreground">Inbox</h1>
@@ -173,8 +174,14 @@ export default async function InboxPage({
             Notification settings
           </Link>
         </header>
+      </div>
 
-        <InboxList items={items} workspaceSlug={workspaceSlug} />
+      {/* R14-P0.9 — the split pane. The list stays on the left; the right
+          pane renders whichever row is selected, in place, with no
+          navigation. See `InboxWorkspace` for why the list and its preview
+          share one piece of state rather than two. */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-5 pb-8">
+        <InboxWorkspace items={items} workspaceSlug={workspaceSlug} />
       </div>
     </div>
   )
@@ -198,6 +205,11 @@ async function approvalToItem(
     href,
     approvalId: approval.id,
     approvalOptions: approval.options,
+    // R14-P0.9 — the detail pane's `PermissionCard` needs the ACP request id
+    // to decide, not the `approvals` row's own numeric id. See
+    // `inbox-list.tsx`'s field comment for why the two cannot be folded
+    // into one.
+    externalId: approval.externalId,
   }
 }
 
@@ -230,6 +242,9 @@ async function runToItem(
     href,
     runId: run.id,
     canRetry: kind === 'failed_run' && run.agentId != null,
+    // R14-P0.9 — lets the detail pane offer "See full run" with no extra
+    // fetch: this `Run` row already carries it.
+    sessionId: run.sessionId,
   }
 }
 
@@ -289,6 +304,11 @@ function channelMentionToItem(mention: UserMention, workspaceSlug: string): Inbo
     time: mention.createdAt,
     href: `/workspace/${workspaceSlug}/teams/${mention.teamId}`,
     channelMessageId: mention.messageId,
+    // R14-P0.9 — drives the row's and the detail pane's relationship label
+    // ("Thread in #general" / "Mentioned in #eng"), structured rather than
+    // re-parsed out of `headline`'s free text.
+    channelName: mention.channelName,
+    inThread,
   }
 }
 
