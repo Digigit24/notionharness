@@ -27,6 +27,10 @@ export type Agent = {
   /** Which Hermes profile this agent runs as — the real per-agent model
    * selector. Empty/absent = the install default. */
   hermesProfile?: string | null
+  /** Values for the settings this agent's RUNTIME declares about itself
+   * (`{ [optionId]: value }`). Opaque on purpose — the ids come from the
+   * runtime's own `session/new` response, not from anything we maintain. */
+  runtimeConfig?: unknown
   thinkingLevel?: string | null
   instructions?: string | null
   customEnv?: unknown

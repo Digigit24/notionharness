@@ -16,7 +16,24 @@ export const Agents: CollectionConfig = {
     // not a relationship, because the Hermes install on disk is the
     // authority for which profiles exist; mirroring that into this database
     // would only create a second copy to desynchronise.
+    // Hermes-specific: a Hermes profile directory is a complete alternate
+    // HERMES_HOME, so choosing one chooses that agent's model, provider and
+    // credentials. Meaningless for any other runtime, which is why the
+    // settings form only offers it when the selected runtime uses the Hermes
+    // home strategy.
     { name: 'hermesProfile', type: 'text' },
+    /**
+     * Values for the settings this agent's RUNTIME declares about itself.
+     *
+     * `{ [optionId]: value }`, applied with `session/set_config_option` after
+     * the session opens. Deliberately opaque: the option ids, their types and
+     * their allowed values all come from the runtime's own `session/new`
+     * response, so a new runtime's settings need no schema change and no new
+     * screen here. Storing a typed field per known option would put us back
+     * in the business of maintaining a capability matrix, which D2 exists to
+     * avoid.
+     */
+    { name: 'runtimeConfig', type: 'json', defaultValue: {} },
     { name: 'thinkingLevel', type: 'select', defaultValue: 'medium', options: [{ label: 'Low', value: 'low' }, { label: 'Medium', value: 'medium' }, { label: 'High', value: 'high' }] },
     { name: 'instructions', type: 'textarea' },
     { name: 'customEnv', type: 'json', defaultValue: {} },

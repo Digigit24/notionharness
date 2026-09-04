@@ -7,6 +7,8 @@ import { Button } from '@/components/ui/button'
 import type { Agent } from '@/components/agents/agent-editor'
 import type { ActiveModelConfig } from '@/lib/runtimes/hermes/providers'
 import type { HermesProfileSummary } from '@/lib/runtimes/hermes/profiles'
+import { sessionConfigOptions, type AgentHandshake } from '@/lib/runtimes/handshake'
+import { RuntimeConfigFields } from '@/components/runtimes/runtime-config-fields'
 
 // Extracted out of the old list-page inline editor (agent-editor.tsx) so the
 // same save-a-draft form can be mounted from two places: the "New agent"
@@ -20,6 +22,12 @@ export type AgentProfile = {
   id: number
   name: string
   commandName: string
+  /** Which runtime home strategy this profile uses. 'hermes' is the only one
+   * for which a Hermes profile means anything. */
+  homeStrategy?: string | null
+  /** What the runtime said about itself when it was last probed. The source
+   * of truth for which settings this agent can be given. */
+  handshake?: AgentHandshake | null
 }
 
 type Draft = {
@@ -35,6 +43,7 @@ type Draft = {
   permissionMode: string
   enabled: boolean
   hermesProfile: string
+  runtimeConfig: Record<string, unknown>
 }
 
 function buildDraft(agent: Agent | null, profiles: AgentProfile[]): Draft {
@@ -54,6 +63,10 @@ function buildDraft(agent: Agent | null, profiles: AgentProfile[]): Draft {
     permissionMode: agent?.permissionMode ?? 'ask',
     enabled: agent?.enabled ?? true,
     hermesProfile: agent?.hermesProfile ?? '',
+    runtimeConfig:
+      agent?.runtimeConfig && typeof agent.runtimeConfig === 'object'
+        ? (agent.runtimeConfig as Record<string, unknown>)
+        : {},
   }
 }
 
@@ -78,6 +91,15 @@ export function AgentSettingsForm({
   onSaved: (agent: Agent) => void
 }) {
   const [draft, setDraft] = useState<Draft>(() => buildDraft(agent, profiles))
+  // Which runtime this agent will actually run on decides what can be
+  // configured for it. This form used to show the Hermes profile picker
+  // unconditionally, so an agent on Claude Code was offered a list of Hermes
+  // profiles that had no bearing on it whatsoever — and no way to choose the
+  // model the runtime genuinely does offer.
+  const selectedRuntime = profiles.find((entry) => entry.id === draft.runtimeProfile) ?? null
+  const usesHermesHome = (selectedRuntime?.homeStrategy ?? 'hermes') === 'hermes'
+  const runtimeOptions = sessionConfigOptions(selectedRuntime?.handshake ?? null)
+
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   // Loaded from the server rather than passed in, because the authority for
@@ -86,6 +108,10 @@ export function AgentSettingsForm({
   // someone edits the Hermes install itself.
   const [hermesProfiles, setHermesProfiles] = useState<HermesProfileSummary[]>([])
   useEffect(() => {
+    // Not fetched at all for a non-Hermes runtime: it reaches into the Hermes
+    // install on this machine, which is both irrelevant and a wasted round
+    // trip when the selected runtime is something else.
+    if (!usesHermesHome) return
     let cancelled = false
     void listAgentHermesProfiles()
       .then((list) => {
@@ -97,7 +123,7 @@ export function AgentSettingsForm({
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [usesHermesHome])
   const selectedProfile = hermesProfiles.find((entry) => entry.name === draft.hermesProfile) ?? null
 
   const hasProfiles = profiles.length > 0
@@ -191,53 +217,92 @@ export function AgentSettingsForm({
         </select>
       </label>
 
-      {/* Was: "Hermes has one active model for the whole install, not one per
-          agent." That was wrong. `hermes-acp` genuinely has no --model flag,
-          which is what the old copy was reasoning from — but a Hermes PROFILE
-          directory is a complete HERMES_HOME with its own config.yaml, so
-          selecting a profile selects a model. Verified on this machine: four
-          real profiles pinning three different models. */}
-      <label className="block text-xs">
-        Hermes profile
-        <select
-          value={draft.hermesProfile}
-          onChange={(event) => setDraft({ ...draft, hermesProfile: event.target.value })}
-          className="mt-1 w-full rounded border border-black/15 px-2 py-1.5 text-sm dark:border-white/15 dark:bg-white/[.04]"
-        >
-          {hermesProfiles.length === 0 && <option value="">Loading profiles…</option>}
-          {hermesProfiles.map((profile) => (
-            <option key={profile.name || '__root__'} value={profile.name}>
-              {profile.name || 'Install default'}
-              {profile.model ? ` — ${profile.provider}/${profile.model}` : ' — no model configured'}
-            </option>
-          ))}
-        </select>
-        <p className="mt-1 text-[11px] font-normal text-black/45 dark:text-white/45">
-          The profile decides which model, provider and credentials this agent uses. Its skills, memories and
-          per-conversation state stay scoped to this agent either way.
-        </p>
-      </label>
+      {/* What can be configured here depends on the runtime, and until now it
+          did not: the Hermes profile picker rendered for every agent, so an
+          agent on Claude Code was offered Hermes profiles that had no bearing
+          on it and no way to pick the model Claude actually offers. */}
+      {usesHermesHome ? (
+        <>
+          {/* Was: "Hermes has one active model for the whole install, not one
+              per agent." That was wrong. `hermes-acp` genuinely has no --model
+              flag, which is what the old copy reasoned from — but a Hermes
+              PROFILE directory is a complete HERMES_HOME with its own
+              config.yaml, so selecting a profile selects a model. Verified on
+              this machine: four real profiles pinning three different models. */}
+          <label className="block text-xs">
+            Hermes profile
+            <select
+              value={draft.hermesProfile}
+              onChange={(event) => setDraft({ ...draft, hermesProfile: event.target.value })}
+              className="mt-1 w-full rounded border border-black/15 px-2 py-1.5 text-sm dark:border-white/15 dark:bg-white/[.04]"
+            >
+              {hermesProfiles.length === 0 && <option value="">Loading profiles…</option>}
+              {hermesProfiles.map((profile) => (
+                <option key={profile.name || '__root__'} value={profile.name}>
+                  {profile.name || 'Install default'}
+                  {profile.model ? ` — ${profile.provider}/${profile.model}` : ' — no model configured'}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-[11px] font-normal text-black/45 dark:text-white/45">
+              The profile decides which model, provider and credentials this agent uses. Its skills, memories and
+              per-conversation state stay scoped to this agent either way.
+            </p>
+          </label>
 
-      <div className="block text-xs">
-        Model for this agent
-        <div className="mt-1 flex items-center justify-between gap-2 rounded border border-black/15 bg-black/[.02] px-2 py-1.5 text-sm dark:border-white/15 dark:bg-white/[.03]">
-          <span>
-            {selectedProfile
-              ? selectedProfile.model
-                ? `${selectedProfile.provider} / ${selectedProfile.model}`
-                : 'No model configured in this profile'
-              : activeModel
-                ? `${activeModel.provider} / ${activeModel.model}`
-                : 'Unknown'}
-          </span>
+          <div className="block text-xs">
+            Model for this agent
+            <div className="mt-1 flex items-center justify-between gap-2 rounded border border-black/15 bg-black/[.02] px-2 py-1.5 text-sm dark:border-white/15 dark:bg-white/[.03]">
+              <span>
+                {selectedProfile
+                  ? selectedProfile.model
+                    ? `${selectedProfile.provider} / ${selectedProfile.model}`
+                    : 'No model configured in this profile'
+                  : activeModel
+                    ? `${activeModel.provider} / ${activeModel.model}`
+                    : 'Unknown'}
+              </span>
+              <Link
+                href={`/workspace/${workspaceSlug}/settings/providers`}
+                className="shrink-0 text-xs font-medium text-primary underline-offset-2 hover:underline"
+              >
+                Manage in Providers →
+              </Link>
+            </div>
+          </div>
+        </>
+      ) : runtimeOptions === undefined ? (
+        <p className="rounded border border-black/10 bg-black/[.02] px-2 py-1.5 text-[11px] text-black/50 dark:border-white/10 dark:bg-white/[.03] dark:text-white/50">
+          This runtime has not been probed yet, so its settings are unknown. Probe it on the{' '}
           <Link
-            href={`/workspace/${workspaceSlug}/settings/providers`}
-            className="shrink-0 text-xs font-medium text-primary underline-offset-2 hover:underline"
+            href={`/workspace/${workspaceSlug}/settings/runtimes`}
+            className="font-medium text-primary underline-offset-2 hover:underline"
           >
-            Manage in Providers →
-          </Link>
+            Runtimes page
+          </Link>{' '}
+          and its own model and options will appear here. Not knowing is different from there being nothing.
+        </p>
+      ) : runtimeOptions.length === 0 ? (
+        <p className="rounded border border-black/10 bg-black/[.02] px-2 py-1.5 text-[11px] text-black/50 dark:border-white/10 dark:bg-white/[.03] dark:text-white/50">
+          {selectedRuntime?.name ?? 'This runtime'} declares no settings of its own, so it chooses its own model
+          and behaviour. Nothing to configure here.
+        </p>
+      ) : (
+        <div className="flex flex-col gap-3 rounded border border-black/10 p-3 dark:border-white/10">
+          <p className="text-[11px] font-medium uppercase tracking-wide text-black/40 dark:text-white/40">
+            {selectedRuntime?.name ?? 'Runtime'} settings
+          </p>
+          {/* Every one of these came from the runtime's own `session/new`
+              response at probe time. Nothing here is a list this app
+              maintains, which is why a new model needs no release from us. */}
+          <RuntimeConfigFields
+            options={runtimeOptions}
+            values={draft.runtimeConfig}
+            disabled={busy}
+            onChange={(runtimeConfig) => setDraft({ ...draft, runtimeConfig })}
+          />
         </div>
-      </div>
+      )}
 
       <label className="block text-xs">
         Thinking level

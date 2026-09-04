@@ -67,6 +67,7 @@ import type { ApprovalOutcome, PermissionOption, RunEvent, RunEventEnvelope } fr
 import { TerminalBuffer } from './terminal-buffer'
 import { buildSpawnEnv } from './spawn-env'
 import { unifiedDiff } from './unified-diff'
+import { resolveSpawnCommand } from '@/lib/runtimes/spawn-command'
 import { redactError, redactSecrets } from '@/lib/redact'
 
 // ---------------------------------------------------------------------------
@@ -156,6 +157,17 @@ export interface SendTurnOptions {
    * the new id so the caller can store it.
    */
   resumeSessionId?: string | null
+  /**
+   * Values for the settings the RUNTIME declared about itself, as
+   * `{ [optionId]: value }`.
+   *
+   * Applied with `session/set_config_option` once the session exists. The ids
+   * and their allowed values come from that runtime's own `session/new`
+   * response (captured at probe time), so this carries no knowledge of any
+   * particular CLI — which is the point. An id the agent does not recognise
+   * is reported and skipped rather than failing the turn.
+   */
+  sessionConfig?: Record<string, unknown>
 }
 
 export interface SendTurnResult {
@@ -208,12 +220,24 @@ function childStdioToStreams(child: ChildProcessWithoutNullStreams): {
   return { readable, writable }
 }
 
-function spawnBinary(opts: SendTurnOptions): {
+function spawnBinary(
+  opts: SendTurnOptions,
+  /**
+   * The command as `spawn` can actually run it.
+   *
+   * Resolved by the caller through the same code the probe uses. It used to
+   * spawn `opts.binaryPath` verbatim, which meant a runtime installed as a
+   * Windows `.cmd` shim — which is every npm-installed CLI — probed green and
+   * then died with ENOENT the first time anyone used it. A green light that
+   * does not predict a working run is worse than no light.
+   */
+  resolved: { command: string; args: string[] },
+): {
   child: ChildProcessWithoutNullStreams
   readable: ReadableStream<Uint8Array>
   writable: WritableStream<Uint8Array>
 } {
-  const child = spawn(opts.binaryPath, opts.args ?? [], {
+  const child = spawn(resolved.command, resolved.args, {
     cwd: opts.cwd,
     // `node:child_process`'s `SpawnOptions.env` is typed as `NodeJS.
     // ProcessEnv`, which (unlike our own `Record<string, string>`) requires
@@ -992,7 +1016,10 @@ export async function sendTurn(opts: SendTurnOptions): Promise<SendTurnResult> {
   const touch = () => {
     lastActivityAt = Date.now()
   }
-  const { child, readable, writable } = spawnBinary(opts)
+  // Resolved before spawning, with the same logic the probe uses, so "it
+  // probed ok" and "it runs" cannot disagree.
+  const resolvedCommand = await resolveSpawnCommand(opts.binaryPath, opts.args ?? [])
+  const { child, readable, writable } = spawnBinary(opts, resolvedCommand)
   const envelopes: RunEventEnvelope[] = []
   let seq = 0
   const allocSeq = () => {
@@ -1181,6 +1208,37 @@ export async function sendTurn(opts: SendTurnOptions): Promise<SendTurnResult> {
               }, CANCEL_ESCALATION_MS).unref?.()
             },
           })
+
+          // Apply this agent's runtime settings before prompting, so the
+          // turn actually runs on the chosen model rather than the runtime's
+          // default. Sequential rather than parallel: these mutate one
+          // session's state, and a runtime is entitled to reject a
+          // combination that only makes sense in order.
+          const configEntries = Object.entries(opts.sessionConfig ?? {}).filter(
+            ([, value]) => value !== undefined && value !== null && value !== '',
+          )
+          for (const [configId, value] of configEntries) {
+            try {
+              // `configId`, not `optionId` — and a boolean must declare its
+              // own type, per the request's discriminated union. Both taken
+              // from the SDK's schema after the agent rejected the obvious
+              // guess with "Invalid params".
+              await ctx.request('session/set_config_option', {
+                sessionId,
+                configId,
+                ...(typeof value === 'boolean' ? { type: 'boolean' as const, value } : { value: String(value) }),
+              })
+            } catch (err) {
+              // A rejected setting is worth saying out loud — an agent quietly
+              // running on a different model than the one selected is exactly
+              // the kind of wrong that goes unnoticed for weeks.
+              pushEvent({
+                type: 'message',
+                role: 'system',
+                text: `The runtime rejected the setting "${configId}" = ${String(value)} (${redactError(err)}). This turn runs with its default instead.`,
+              })
+            }
+          }
 
           const promptPromise = ctx.request('session/prompt', {
             sessionId,

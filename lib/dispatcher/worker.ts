@@ -570,6 +570,13 @@ async function executeClaimedRun(
       homeStrategy: typeof runtimeProfile.homeStrategy === 'string' ? runtimeProfile.homeStrategy : 'hermes',
       resumeSessionId,
       mcpServers: plugins.servers,
+      // Per-agent values for whatever settings this runtime declares about
+      // itself — its model, its effort level, whatever it offers. Ids come
+      // from the runtime's own probe, so nothing here names a specific CLI.
+      sessionConfig:
+        agent.runtimeConfig && typeof agent.runtimeConfig === 'object'
+          ? (agent.runtimeConfig as Record<string, unknown>)
+          : undefined,
       // P5.4: when permissionMode is 'ask', wire the callback that creates a
       // real pending approval and waits for the user to resolve it. Also raise
       // timeouts significantly — the turn can now be blocked waiting for a human.

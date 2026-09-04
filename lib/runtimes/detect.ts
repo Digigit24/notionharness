@@ -16,6 +16,22 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildSpawnEnv } from '@/lib/hermes/spawn-env'
+import { resolveCommandPath, resolveSpawnCommand, splitCommand } from './spawn-command'
+import type { AgentHandshake } from './handshake'
+
+// Re-exported so every existing server-side import of these keeps resolving
+// from here. They live in `./handshake.ts` because this file spawns processes
+// and a client component that imported one helper from it would drag
+// `node:child_process` into the browser bundle — which is not hypothetical:
+// it broke the build exactly once, which is why the split exists.
+export type { AgentHandshake, SessionConfigOption } from './handshake'
+export {
+  modelOption,
+  sessionConfigOptions,
+  supportedMcpTransports,
+  supportsModelSelection,
+  supportsSessionLoad,
+} from './handshake'
 
 /**
  * Machine-readable, translation-independent. A UI can map these to sentences
@@ -27,30 +43,6 @@ export type RuntimeProbeCode =
   | 'spawn_failed'
   | 'acp_init_failed'
   | 'acp_init_timeout'
-
-/**
- * What the agent told us about itself during `initialize`.
- *
- * Stored verbatim rather than mapped into flags we maintain. A capability
- * matrix in our own code goes stale the moment a CLI ships a release, and
- * every entry in it is a claim we cannot verify. The handshake is the
- * agent's own answer, so it is right by construction.
- */
-export interface AgentHandshake {
-  agentName: string | null
-  agentVersion: string | null
-  protocolVersion: number | null
-  /** Raw `agentCapabilities` from the response. Shape varies by agent. */
-  capabilities: Record<string, unknown> | null
-  authMethods: unknown[] | null
-  /** Present on agents that expose selectable models. Absent means "cannot
-   * choose", which is different from "we did not ask". */
-  availableModels: unknown[] | null
-  availableModes: unknown[] | null
-  availableCommands: unknown[] | null
-  /** When the probe ran, so staleness is visible. */
-  probedAt: string
-}
 
 export interface RuntimeProbeResult {
   code: RuntimeProbeCode
@@ -65,6 +57,10 @@ export interface RuntimeProbeResult {
  * does not hang the request. AionUi's equivalent probe has no timeout at all
  * and their own docs record that it hangs forever when a CLI hangs. */
 const PROBE_TIMEOUT_MS = 20_000
+
+/** The follow-up `session/new` is optional detail, not the probe's verdict, so
+ * it gets a much shorter budget than the handshake itself. */
+const SESSION_PROBE_TIMEOUT_MS = 8_000
 
 /** Must match the version `acp-client.ts` negotiates, or a successful probe
  * would not predict a successful run. */
@@ -82,82 +78,11 @@ function jsonRpcLine(id: number, method: string, params: unknown): string {
  * protocol" without the SDK's session machinery, retries or event plumbing
  * getting involved. It is a probe, not a client.
  */
-/**
- * Splits a stored command that carries its own arguments.
- *
- * Runtime profiles in the wild hold things like
- * `claude --dangerously-skip-permissions` in a single field, and spawning
- * that verbatim fails with ENOENT — reported as "not installed", which is the
- * wrong diagnosis entirely.
- *
- * Deliberately NOT a naive split on whitespace: Windows paths contain spaces
- * (`C:\Program Files\...`), and every real runtime on this machine is an
- * absolute path. So an existing file is always taken whole, and only a
- * non-existent path is treated as a command line.
- */
-export function splitCommand(commandName: string, extraArgs: string[] = []): { command: string; args: string[] } {
-  const trimmed = commandName.trim()
-  if (!trimmed.includes(' ') || existsSync(trimmed)) return { command: trimmed, args: extraArgs }
-  const [command, ...inline] = trimmed.split(/\s+/)
-  return { command, args: [...inline, ...extraArgs] }
-}
-
-/**
- * Step one on its own: is this command actually runnable here?
- *
- * `spawn` without a shell does not consult PATHEXT on Windows, so a bare
- * `claude` fails with ENOENT even when `claude.cmd` sits on PATH — which the
- * probe would then report as "not installed", the wrong diagnosis for a
- * perfectly good install. Asking `where` (or `which`) first resolves that,
- * and it is also the honest shape of step one: presence is a separate
- * question from protocol.
- *
- * Returns the absolute path to spawn, or null when the command genuinely is
- * not here.
- */
-export async function resolveCommandPath(command: string): Promise<string | null> {
-  if (existsSync(command)) return command
-  const finder = process.platform === 'win32' ? 'where' : 'which'
-  return new Promise((resolve) => {
-    let out = ''
-    const child = spawn(finder, [command], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
-    child.stdout?.on('data', (c: Buffer) => {
-      out += c.toString('utf8')
-    })
-    child.on('error', () => resolve(null))
-    child.on('exit', (code) => {
-      // `where` prints every match, one per line; the first is what would run.
-      // `where` prints every match, and on Windows the FIRST is often an
-      // extensionless shim that is not a real file (npm writes `claude`,
-      // `claude.cmd` and `claude.ps1` side by side). Take the first line that
-      // actually exists, or the probe reports a perfectly good install as
-      // missing.
-      const candidates = out
-        .split(String.fromCharCode(10))
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .filter((line) => existsSync(line))
-      // On Windows, npm installs three shims side by side — `claude`,
-      // `claude.cmd` and `claude.ps1` — and `where` lists the extensionless
-      // one first. That one is a shell script Node cannot execute, so taking
-      // it verbatim produced ENOENT and a false "not installed" verdict on a
-      // working install. Prefer a real executable, then a batch shim (which
-      // the spawn below routes through the command processor), and only then
-      // whatever is left.
-      const rank = (path: string) => (/\.exe$/i.test(path) ? 0 : /\.(cmd|bat)$/i.test(path) ? 1 : 2)
-      const best = candidates.sort((a, b) => rank(a) - rank(b))[0]
-      resolve(code === 0 && best ? best : null)
-    })
-    setTimeout(() => {
-      try {
-        child.kill()
-      } catch {
-        // Already gone.
-      }
-      resolve(null)
-    }, 5_000)
-  })
-}
+// Command resolution is shared with the run path — see
+// `./spawn-command.ts` for why that matters (the probe used to resolve
+// correctly while `acp-client.ts` spawned the raw string, so a runtime could
+// probe green and fail at ENOENT the first time it was used).
+export { resolveCommandPath, resolveSpawnCommand, splitCommand } from './spawn-command'
 
 export async function probeAcpRuntime(
   rawCommand: string,
@@ -250,6 +175,21 @@ export async function probeAcpRuntime(
       )
     })
 
+    // Held between the two round trips: `initialize` fills it, `session/new`
+    // enriches it, and either path can be the one that finishes the probe.
+    let pendingHandshake: AgentHandshake | null = null
+    let sessionTimer: ReturnType<typeof setTimeout> | null = null
+    const finishWithHandshake = () => {
+      if (sessionTimer) {
+        clearTimeout(sessionTimer)
+        sessionTimer = null
+      }
+      if (!pendingHandshake) return
+      const handshake = pendingHandshake
+      pendingHandshake = null
+      done(finish('ok', `Handshake complete with ${handshake.agentName ?? 'an ACP agent'}.`, handshake))
+    }
+
     let stderr = ''
     child.stderr?.on('data', (chunk: Buffer) => {
       stderr = (stderr + chunk.toString('utf8')).slice(-2000)
@@ -273,35 +213,78 @@ export async function probeAcpRuntime(
         } catch {
           continue
         }
-        if (message.id !== 1) continue
-        if (message.error) {
-          done(finish('acp_init_failed', message.error.message ?? 'The agent rejected initialize.'))
-          return
-        }
-        const result = message.result ?? {}
-        const agentInfo = (result.agentInfo ?? null) as { name?: string; version?: string } | null
-        done(
-          finish('ok', `Handshake complete with ${agentInfo?.name ?? 'an ACP agent'}.`, {
+        if (message.id === 1) {
+          if (message.error) {
+            done(finish('acp_init_failed', message.error.message ?? 'The agent rejected initialize.'))
+            return
+          }
+          const result = message.result ?? {}
+          const agentInfo = (result.agentInfo ?? null) as { name?: string; version?: string } | null
+          pendingHandshake = {
             agentName: agentInfo?.name ?? null,
             agentVersion: agentInfo?.version ?? null,
-            protocolVersion:
-              typeof result.protocolVersion === 'number' ? result.protocolVersion : null,
+            protocolVersion: typeof result.protocolVersion === 'number' ? result.protocolVersion : null,
             capabilities:
               result.agentCapabilities && typeof result.agentCapabilities === 'object'
                 ? (result.agentCapabilities as Record<string, unknown>)
                 : null,
             authMethods: Array.isArray(result.authMethods) ? result.authMethods : null,
-            availableModels: Array.isArray(result.availableModels) ? result.availableModels : null,
-            availableModes: Array.isArray(result.availableModes) ? result.availableModes : null,
+            sessionConfigOptions: null,
+            availableModes: null,
+            currentModeId: null,
             availableCommands: Array.isArray(result.availableCommands) ? result.availableCommands : null,
             probedAt: new Date().toISOString(),
-          }),
-        )
-        return
+          }
+          // A handshake alone cannot answer "which models does this runtime
+          // offer", because ACP does not put that on `initialize` at all. It
+          // arrives on `session/new`, so the probe opens one throwaway session
+          // in its own temp directory to ask.
+          //
+          // Best-effort by design: a runtime that will not open a session here
+          // is still a working runtime, and failing the probe because an
+          // optional question went unanswered would repeat exactly the mistake
+          // this replaced — reporting a capability from an assumption rather
+          // than from the agent.
+          child.stdin?.write(jsonRpcLine(2, 'session/new', { cwd, mcpServers: [] }))
+          sessionTimer = setTimeout(finishWithHandshake, SESSION_PROBE_TIMEOUT_MS)
+          sessionTimer.unref?.()
+          continue
+        }
+
+        if (message.id === 2) {
+          // An error here is ordinary — the agent may need auth, or may not
+          // allow a session in an empty directory. The handshake still stands.
+          if (!message.error && pendingHandshake) {
+            const result = message.result ?? {}
+            const modes = (result.modes ?? null) as
+              | { currentModeId?: string; availableModes?: unknown[] }
+              | null
+            pendingHandshake = {
+              ...pendingHandshake,
+              // The session answered, so this is a real answer even when it
+              // is empty: `[]` means "asked, declares none" (Hermes, whose
+              // model comes from its profile's config.yaml) and `null` means
+              // "never got that far". Collapsing the two would make a runtime
+              // that genuinely offers no model choice indistinguishable from
+              // one nobody has probed.
+              sessionConfigOptions: Array.isArray(result.configOptions) ? result.configOptions : [],
+              availableModes: Array.isArray(modes?.availableModes) ? modes.availableModes : null,
+              currentModeId: typeof modes?.currentModeId === 'string' ? modes.currentModeId : null,
+            }
+          }
+          finishWithHandshake()
+        }
       }
     })
 
     child.on('exit', (code) => {
+      // A process that exits after answering `initialize` but before answering
+      // `session/new` still probed fine — take what we have rather than
+      // reporting a working runtime as broken.
+      if (pendingHandshake) {
+        finishWithHandshake()
+        return
+      }
       // Exited before answering. The stderr tail is usually the real reason.
       done(
         finish(
@@ -321,31 +304,4 @@ export async function probeAcpRuntime(
       }),
     )
   })
-}
-
-/**
- * Capability questions the UI asks, answered from the handshake.
- *
- * Each returns `undefined` for "the agent has not been probed", which is a
- * genuinely different answer from `false` ("it told us it cannot"). A control
- * hidden because nobody asked yet is a lie; a control hidden because the
- * agent said no is correct.
- */
-export function supportsModelSelection(h: AgentHandshake | null): boolean | undefined {
-  if (!h) return undefined
-  return Array.isArray(h.availableModels) ? h.availableModels.length > 0 : undefined
-}
-
-export function supportsSessionLoad(h: AgentHandshake | null): boolean | undefined {
-  if (!h?.capabilities) return undefined
-  const value = (h.capabilities as { loadSession?: unknown }).loadSession
-  return typeof value === 'boolean' ? value : undefined
-}
-
-export function supportedMcpTransports(
-  h: AgentHandshake | null,
-): { stdio?: boolean; http?: boolean; sse?: boolean } | undefined {
-  if (!h?.capabilities) return undefined
-  const mcp = (h.capabilities as { mcpCapabilities?: unknown }).mcpCapabilities
-  return mcp && typeof mcp === 'object' ? (mcp as { stdio?: boolean; http?: boolean; sse?: boolean }) : undefined
 }

@@ -426,6 +426,15 @@ export interface Agent {
   runtimeProfile: number | RuntimeProfile;
   model?: string | null;
   hermesProfile?: string | null;
+  runtimeConfig?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
   thinkingLevel?: ('low' | 'medium' | 'high') | null;
   instructions?: string | null;
   customEnv?:
@@ -1282,6 +1291,7 @@ export interface AgentsSelect<T extends boolean = true> {
   runtimeProfile?: T;
   model?: T;
   hermesProfile?: T;
+  runtimeConfig?: T;
   thinkingLevel?: T;
   instructions?: T;
   customEnv?: T;

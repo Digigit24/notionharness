@@ -41,3 +41,19 @@ CREATE TABLE IF NOT EXISTS plugins_rels (
 
 CREATE INDEX IF NOT EXISTS plugins_rels_parent_idx ON plugins_rels (parent_id);
 CREATE INDEX IF NOT EXISTS plugins_rels_agents_idx ON plugins_rels (agents_id);
+
+-- Registering a collection is not only its own table. Payload keeps two
+-- internal join tables with one `<collection>_id` column per collection, and a
+-- collection missing from them breaks every admin read that touches document
+-- locking or preferences — which is how this surfaced: an unrelated
+-- `runtime_profiles` update failed with "column ...plugins_id does not exist",
+-- because Payload joins across all of them.
+ALTER TABLE payload_locked_documents_rels ADD COLUMN IF NOT EXISTS plugins_id INTEGER
+  REFERENCES plugins(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS payload_locked_documents_rels_plugins_idx
+  ON payload_locked_documents_rels (plugins_id);
+
+ALTER TABLE payload_preferences_rels ADD COLUMN IF NOT EXISTS plugins_id INTEGER
+  REFERENCES plugins(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS payload_preferences_rels_plugins_idx
+  ON payload_preferences_rels (plugins_id);

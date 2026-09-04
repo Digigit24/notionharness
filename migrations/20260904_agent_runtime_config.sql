@@ -1,0 +1,11 @@
+-- Per-agent values for the settings a runtime declares about itself.
+--
+-- Additive and idempotent, applied directly rather than through `payload
+-- migrate` for the same reason as every other schema change here: this
+-- database was created by dev-mode push and the migration runner refuses it.
+--
+-- Deliberately one JSON column rather than a column per known setting. The
+-- option ids come from the runtime's own session/new response, so a typed
+-- column per option would mean a migration every time a CLI adds a setting --
+-- exactly the capability matrix D2 exists to avoid.
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS runtime_config JSONB DEFAULT '{}'::jsonb;

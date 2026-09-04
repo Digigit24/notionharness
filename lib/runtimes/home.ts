@@ -19,7 +19,7 @@
 // per-agent files, so isolating agents there means a whole home per agent
 // instead of selective links. That is a different strategy, not a broken one,
 // which is exactly why this is an interface.
-import type { AgentHandshake } from './detect'
+import { supportsModelSelection, type AgentHandshake } from './detect'
 
 export interface RuntimeHomeRequest {
   /** Disambiguates this run's disposable directory. */
@@ -87,21 +87,29 @@ export function getRuntimeHomeStrategy(id: string | null | undefined): RuntimeHo
 }
 
 /**
- * Whether this runtime lets us choose a model, answered from its own
- * handshake rather than from a matrix we maintain.
+ * Whether this runtime lets us choose a model, answered from its own probe
+ * rather than from a matrix we maintain.
  *
- * Three answers, not two. `undefined` means the runtime has not been probed,
+ * Three answers, not two. `unknown` means the runtime has not been probed,
  * which is genuinely different from "it told us it cannot" — a control hidden
- * because nobody asked yet is a lie, and Hermes is exactly this case: it
- * offers no `availableModels` over ACP because its model comes from config,
- * so the truthful answer there is "ask the runtime's own settings panel".
+ * because nobody asked yet is a lie.
+ *
+ * This used to read `availableModels` off the `initialize` response. That
+ * field does not exist in the ACP schema, so it was always absent and this
+ * function always said `runtime-settings` — including for runtimes that
+ * offer a perfectly good model picker. Model choice lives in `session/new`'s
+ * self-describing `configOptions`, which the probe now collects.
+ *
+ * - `protocol`: the runtime declares a model option we can set over ACP.
+ * - `runtime-settings`: probed, but it chooses its own model (Hermes, whose
+ *   model comes from the profile's config.yaml).
+ * - `unknown`: not probed yet.
  */
 export function modelSelectionSupport(
   handshake: AgentHandshake | null | undefined,
 ): 'protocol' | 'runtime-settings' | 'none' | 'unknown' {
   if (!handshake) return 'unknown'
-  if (Array.isArray(handshake.availableModels) && handshake.availableModels.length > 0) return 'protocol'
-  // A runtime that speaks the protocol but offers no model list may still
-  // have its own settings surface. The caller decides whether one exists.
-  return 'runtime-settings'
+  const supported = supportsModelSelection(handshake)
+  if (supported === undefined) return 'unknown'
+  return supported ? 'protocol' : 'runtime-settings'
 }
