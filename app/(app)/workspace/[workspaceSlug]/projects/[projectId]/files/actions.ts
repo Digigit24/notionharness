@@ -251,9 +251,14 @@ async function readRepoViewInner(request: RepoViewRequest): Promise<RepoViewPayl
     ])
 
     const lower = path.toLowerCase()
-    const isMarkdown = /\.(md|markdown)$/.test(lower)
-    const isHtml = /\.(html?)$/.test(lower)
-    const renderable = blob.text !== null && blob.size <= MAX_PREVIEW_BYTES
+    // P5.5 — a symlink's "text" is its target path, not markup: a `link.md`
+    // pointing at `../README.md` must never render its OWN target string as
+    // if it were the README's content. `renderable` is false for one whole
+    // class of blob rather than checked per-preview-type, so a third preview
+    // type added later inherits the same exclusion for free.
+    const isMarkdown = blob.symlinkTarget === null && /\.(md|markdown)$/.test(lower)
+    const isHtml = blob.symlinkTarget === null && /\.(html?)$/.test(lower)
+    const renderable = blob.symlinkTarget === null && blob.text !== null && blob.size <= MAX_PREVIEW_BYTES
 
     return {
       kind: 'file',
@@ -263,8 +268,9 @@ async function readRepoViewInner(request: RepoViewRequest): Promise<RepoViewPayl
       // Highlighted even for a file that will open in preview, because the
       // Source tab beside it must not cost a second round trip. Both come off
       // one blob read, and the blob is cached by oid, so the marginal cost is
-      // the tokenise and nothing else.
-      code: blob.text !== null ? await highlightFile(blob.text, path) : null,
+      // the tokenise and nothing else. Skipped for a symlink — its "source"
+      // is a path, not a language, and the client shows a dedicated notice.
+      code: blob.text !== null && blob.symlinkTarget === null ? await highlightFile(blob.text, path) : null,
       markdownHtml: isMarkdown && renderable && blob.text ? renderMarkdown(blob.text) : null,
       htmlPreview: isHtml && renderable && blob.text ? blob.text : null,
       refs,

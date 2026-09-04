@@ -7,7 +7,7 @@
 // reason is not aesthetic: a persistent tree has to decide what to load and
 // when, and gets it wrong on a repository with a large `node_modules`. A flat
 // table of the directory you asked for cannot.
-import { ChevronRight, File, Folder, GitCommitHorizontal } from 'lucide-react'
+import { ChevronRight, File, FileSymlink, Folder, GitCommitHorizontal } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { RepoEntry, RepoEntryStatus } from '@/lib/git/tree'
 
@@ -80,7 +80,7 @@ export function RepoDirectoryTable({
             </tr>
           )}
           {entries.map((entry) => {
-            const isDir = entry.type !== 'blob'
+            const isDir = entry.type === 'tree'
             return (
               <tr key={entry.path} className={cn(busyPath === entry.path && 'opacity-50')}>
                 <td className="p-0">
@@ -94,13 +94,15 @@ export function RepoDirectoryTable({
                   >
                     {entry.type === 'commit' ? (
                       <GitCommitHorizontal className="h-4 w-4 shrink-0 text-black/40 dark:text-white/40" />
+                    ) : entry.type === 'symlink' ? (
+                      <FileSymlink className="h-4 w-4 shrink-0 text-violet-600/70 dark:text-violet-400/70" />
                     ) : isDir ? (
                       <Folder className="h-4 w-4 shrink-0 text-sky-600/70 dark:text-sky-400/70" />
                     ) : (
                       <File className="h-4 w-4 shrink-0 text-black/35 dark:text-white/35" />
                     )}
                     <span className="truncate font-mono text-[13px]">{entry.name}</span>
-                    {isDir && entry.type === 'tree' && (
+                    {isDir && (
                       <ChevronRight className="ml-auto h-3.5 w-3.5 shrink-0 text-black/25 dark:text-white/25" />
                     )}
                   </button>
@@ -111,7 +113,13 @@ export function RepoDirectoryTable({
                   )}
                 </td>
                 <td className="w-20 whitespace-nowrap px-3 text-right font-mono text-xs text-black/40 dark:text-white/40">
-                  {entry.type === 'blob' ? formatBytes(entry.size) : entry.type === 'commit' ? 'submodule' : ''}
+                  {entry.type === 'blob'
+                    ? formatBytes(entry.size)
+                    : entry.type === 'commit'
+                      ? 'submodule'
+                      : entry.type === 'symlink'
+                        ? 'symlink'
+                        : ''}
                 </td>
               </tr>
             )
