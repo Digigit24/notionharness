@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { updateSpendCap } from '@/app/(app)/workspace/[workspaceSlug]/settings/actions'
 import { toast } from '@/hooks/use-toast'
+import { useUnsavedChangesGuard } from '@/hooks/use-unsaved-changes-guard'
 
 // ROADMAP B7.2 (Batch B-6 "Finish") — real save path now that
 // `spendCapCents` exists on `collections/Workspaces.ts` (paired with
@@ -25,8 +26,17 @@ export function SpendCapForm({
   workspaceName: string
   initialSpendCapCents: number | null
 }) {
-  const [value, setValue] = useState(initialSpendCapCents != null ? (initialSpendCapCents / 100).toFixed(2) : '')
+  const initialValue = initialSpendCapCents != null ? (initialSpendCapCents / 100).toFixed(2) : ''
+  const [value, setValue] = useState(initialValue)
   const [saving, setSaving] = useState(false)
+  // R12-P4.6 — what a successful save reset `value` TO, not what the page
+  // opened with. `initialValue` is derived from a server prop that never
+  // changes after this component mounts (a save here does not re-render the
+  // parent), so comparing against it forever would leave the guard thinking
+  // the form was dirty for the rest of the visit, one save after it last
+  // actually was.
+  const [savedValue, setSavedValue] = useState(initialValue)
+  useUnsavedChangesGuard(value !== savedValue)
 
   async function save() {
     setSaving(true)
@@ -39,7 +49,9 @@ export function SpendCapForm({
     }
     try {
       const result = await updateSpendCap({ workspaceId, workspaceSlug, spendCapCents: cents })
-      setValue(result.spendCapCents != null ? (result.spendCapCents / 100).toFixed(2) : '')
+      const saved = result.spendCapCents != null ? (result.spendCapCents / 100).toFixed(2) : ''
+      setValue(saved)
+      setSavedValue(saved)
       toast({ title: result.spendCapCents != null ? `Spend cap set to $${(result.spendCapCents / 100).toFixed(2)}/mo` : 'Spend cap removed — uncapped' })
     } catch (error) {
       toast({ title: 'Could not save spend cap', description: error instanceof Error ? error.message : undefined, variant: 'destructive' })

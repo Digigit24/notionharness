@@ -11,6 +11,7 @@ import {
   type SafetySettings,
 } from '@/app/(app)/workspace/[workspaceSlug]/settings/safety/actions'
 import { unwrap } from '@/lib/failures'
+import { useUnsavedChangesGuard } from '@/hooks/use-unsaved-changes-guard'
 
 function asBool(value: unknown, fallback = true): boolean {
   return typeof value === 'boolean' ? value : fallback
@@ -29,9 +30,16 @@ export function SafetySettingsView({
   settings: SafetySettings
 }) {
   const [values, setValues] = useState<Partial<Record<SafetyPath, unknown>>>(settings.values)
+  // R12-P4.6 — snapshotted separately from `settings.values` (the server
+  // prop) for the same reason the runtime defaults form's `savedValues` is:
+  // a save here does not re-render this component with a fresh prop, so
+  // comparing against the prop forever would leave the guard permanently
+  // tripped after the first edit, saved or not.
+  const [savedValues, setSavedValues] = useState<Partial<Record<SafetyPath, unknown>>>(settings.values)
   const [error, setError] = useState<string | null>(settings.error)
   const [saved, setSaved] = useState(false)
   const [busy, startTransition] = useTransition()
+  useUnsavedChangesGuard(JSON.stringify(values) !== JSON.stringify(savedValues))
 
   const set = (path: SafetyPath, value: unknown) => {
     setValues((current) => ({ ...current, [path]: value }))
@@ -43,6 +51,7 @@ export function SafetySettingsView({
     startTransition(async () => {
       try {
         unwrap(await saveSafetySettings({ workspaceSlug, profile: settings.profile, values }))
+        setSavedValues(values)
         setSaved(true)
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Could not save.')

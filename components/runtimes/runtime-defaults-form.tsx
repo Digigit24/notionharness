@@ -5,6 +5,7 @@ import { Settings2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/hooks/use-toast'
 import { unwrap } from '@/lib/failures'
+import { useUnsavedChangesGuard } from '@/hooks/use-unsaved-changes-guard'
 import { sessionConfigOptions, type AgentHandshake } from '@/lib/runtimes/handshake'
 import { RuntimeConfigFields } from '@/components/runtimes/runtime-config-fields'
 import { saveRuntimeDefaults } from '@/app/(app)/workspace/[workspaceSlug]/settings/runtimes/actions'
@@ -46,8 +47,19 @@ export function RuntimeDefaultsForm({
 }) {
   const [open, setOpen] = useState(false)
   const [values, setValues] = useState<Record<string, unknown>>(initialValues)
+  // R12-P4.6 — what the last successful save actually wrote, so the guard
+  // below stops thinking the form is dirty the moment a save succeeds. Kept
+  // separate from the `initialValues` PROP for the same reason the spend cap
+  // form's `savedValue` is: this component never re-renders with a fresh
+  // prop after its own save, so comparing against the prop forever would
+  // leave the guard permanently tripped after the first edit.
+  const [savedValues, setSavedValues] = useState<Record<string, unknown>>(initialValues)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  // Before the early returns below: hooks cannot be conditional, and a
+  // runtime that has not been probed yet can still, in principle, have this
+  // form mounted before its handshake arrives.
+  useUnsavedChangesGuard(JSON.stringify(values) !== JSON.stringify(savedValues))
 
   const options = sessionConfigOptions(handshake)
 
@@ -71,6 +83,7 @@ export function RuntimeDefaultsForm({
     setSaved(false)
     try {
       unwrap(await saveRuntimeDefaults({ workspaceSlug, profileId, defaults: next }))
+      setSavedValues(next)
       setSaved(true)
     } catch (error) {
       toast({

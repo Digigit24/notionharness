@@ -1,5 +1,6 @@
 'use client'
 
+import { useMemo, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import type { LucideIcon } from 'lucide-react'
@@ -13,12 +14,14 @@ import {
   KeyRound,
   Plug,
   Puzzle,
+  Search,
   Server,
   Settings2,
   Sparkles,
   UserCog,
   Users,
   Wrench,
+  X,
 } from 'lucide-react'
 
 /**
@@ -127,7 +130,29 @@ export function SettingsRail({
 }) {
   const pathname = usePathname()
   const base = `/workspace/${workspaceSlug}/settings`
-  const groups = GROUPS.filter((group) => !group.hermesOnly || hasHermesRuntime)
+  const [query, setQuery] = useState('')
+
+  // R12-P4.6 — fifteen items across four groups is past the point where
+  // scanning the list beats typing a few letters of what you want. Filtered
+  // client-side against data already in memory: every label, hint and group
+  // title lives in the `GROUPS` array above, so this is a pure array filter
+  // with nothing to fetch and nothing D0 would object to.
+  const groups = useMemo(() => {
+    const visible = GROUPS.filter((group) => !group.hermesOnly || hasHermesRuntime)
+    const needle = query.trim().toLowerCase()
+    if (!needle) return visible
+    return visible
+      .map((group) => ({
+        ...group,
+        items: group.items.filter(
+          (item) =>
+            item.label.toLowerCase().includes(needle) ||
+            item.hint?.toLowerCase().includes(needle) ||
+            group.title.toLowerCase().includes(needle),
+        ),
+      }))
+      .filter((group) => group.items.length > 0)
+  }, [hasHermesRuntime, query])
 
   return (
     <nav className="w-56 shrink-0 border-r border-black/10 px-2 py-4 dark:border-white/10">
@@ -135,6 +160,33 @@ export function SettingsRail({
         <Gauge size={12} className="mr-1 inline" />
         Settings
       </h2>
+
+      <div className="relative mb-3 px-1">
+        <Search size={12} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-black/30 dark:text-white/30" />
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search settings…"
+          aria-label="Search settings"
+          className="w-full rounded-md border border-black/10 bg-transparent py-1.5 pl-8 pr-7 text-xs outline-none placeholder:text-black/30 focus:border-black/25 dark:border-white/10 dark:placeholder:text-white/30 dark:focus:border-white/25"
+        />
+        {query && (
+          <button
+            type="button"
+            onClick={() => setQuery('')}
+            aria-label="Clear search"
+            className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-black/30 hover:bg-black/[0.06] hover:text-black/60 dark:text-white/30 dark:hover:bg-white/[0.09] dark:hover:text-white/60"
+          >
+            <X size={11} />
+          </button>
+        )}
+      </div>
+
+      {query && groups.length === 0 && (
+        <p className="px-2 py-1 text-xs text-black/40 dark:text-white/40">Nothing matches &ldquo;{query}&rdquo;.</p>
+      )}
+
       {groups.map((group) => (
         <section key={group.title} className="mb-3">
           <h3 className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-black/30 dark:text-white/30">
