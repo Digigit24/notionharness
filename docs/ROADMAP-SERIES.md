@@ -924,6 +924,160 @@ that walks more than the directory it was asked for.
 
 ---
 
+## R10 — First run: the gap between signing up and anything working
+
+Not an insert into an existing pillar. It cuts across runtimes, models, the
+dispatcher and Work, and it is the one path every user takes exactly once,
+badly.
+
+### R10.0 What a new signup hits today
+
+Walked end to end: sign up, land on a workspace picker with nothing to pick,
+create a workspace, arrive in an empty one with a three-step checklist. Step
+one reads *"Add a runtime profile pointing at a real ACP or MCP command, and
+enable it."*
+
+That sentence is the entire onboarding, and it assumes the reader knows what
+an ACP command is, which binary provides one, and where it lives.
+
+We know exactly how hard that step is, because it was done by hand on this
+machine and took: knowing Claude Code does not speak ACP natively, finding the
+adapter, discovering the obvious package is **deprecated and renamed**,
+installing it, knowing `homeStrategy` had to change from `hermes` to `none`,
+and knowing the probe was telling the truth when it said `acp_init_timeout`.
+A new user hits `command_not_found` or a twenty-second timeout with no way to
+tell whether the product is broken or they are.
+
+And with every one of those correct, **nothing runs** until the dispatcher
+loop is started — which nothing starts, deliberately (R3.3).
+
+### R10.1 The principle: detect, do not instruct
+
+Onboarding should tell the user what their machine already has, not ask them
+to describe it. Everything needed for this already exists — `probeAcpRuntime`
+and `resolveSpawnCommand` (R1, hardened when Claude Code was added) — and
+nothing has ever pointed them at the empty-workspace case.
+
+Honest by construction: every row on the screen is a real handshake, not a
+capability list we maintain.
+
+### R10.2 The flow
+
+- **R10.2a Signup creates the workspace.** A first user lands on a picker with
+  nothing to pick and then a create form. Collapse it: signup makes the
+  workspace and goes straight in. The picker stays for people with several.
+- **R10.2b Scan.** On first load of an empty workspace, probe a short list of
+  known agent commands (`hermes-acp`, `claude-agent-acp`, `claude`, `codex`,
+  `gemini`, `opencode`) through the resolver that already handles Windows
+  `.cmd` shims. Three groups: **ready** (handshake ok, with the agent's own
+  self-reported name), **needs one step** (binary present, no ACP — the Claude
+  Code case, naming the exact adapter), and **not installed** (named, with a
+  link, never hidden).
+- **R10.2c Confirm one runtime.** Clicking a ready row creates the profile
+  with the right `homeStrategy` — `hermes` for Hermes, `none` for everything
+  else — which is precisely the thing that had to be corrected by hand.
+- **R10.2d Model.** Runtime-aware, reusing R7: a Hermes runtime shows its
+  profiles, a protocol-native one shows the models it declared in its own
+  `session/new`. A runtime with no credentials says *that* and links to its own
+  login. We hold no provider tokens and must not start.
+- **R10.2e The dispatcher, stated plainly.** A checklist item reading the R3.3
+  heartbeat: nothing will run until the loop is started, with the command.
+  Green when the heartbeat is fresh.
+- **R10.2f First turn inside the product**, not a tour. Pre-fill the Work
+  composer with a real prompt and let them press Enter. Success is a streamed
+  reply, which proves every step above end to end.
+
+### R10.3 Decisions taken
+
+- **Installing the adapter: show the command, offer the click, never silent.**
+  A copyable command by default, with a one-click install behind an explicit
+  confirmation that names the package. Running `npm install -g` on someone's
+  machine without them reading what it installs is not something this product
+  does, however convenient.
+- **The starter workspace is offered, not seeded.** It creates a project, a
+  disabled agent, a sample page and a queued run. A workspace that arrives
+  pre-populated with things you did not make is noise for anyone who already
+  knows what they want. The button stays; the default is empty.
+- **The dispatcher gets a banner, not a whisper**, plus a combined script that
+  starts the server and the loop together. "Queued forever with no signal" is
+  the worst possible first-run experience and it is currently invisible. Still
+  nothing auto-starts it from a render — R3.3's reasoning stands.
+
+### R10.4 What this costs
+
+Mostly assembly. Already built: the runtime probe and handshake, Windows
+command resolution, the runtime-aware model picker, the dispatcher heartbeat,
+and starter-workspace seeding (behind a button nobody finds). Genuinely new:
+the scan screen, the adapter-install action, and collapsing signup into
+workspace creation.
+
+---
+
+## R11 — GitHub-backed projects — DEFERRED BY DECISION, reasoning kept
+
+A project bound to a git repo could show its issues, pull requests, commits
+and files, and its tasks could **be** its issues. This was designed and then
+deliberately deferred; the design is recorded so whoever picks it up does not
+rediscover the trap.
+
+**Decision taken: tasks stay local and are NOT mirrored from GitHub issues.**
+Task management remains simple and local. Using GitHub issues as tasks by
+default for a git-backed repo is a real feature and a later one — not this
+pass.
+
+### R11.1 The rule that would make it work
+
+If it is ever built, **every field has exactly one owner.** Not "we reconcile
+conflicts" — there are no conflicts, because nothing is owned twice.
+
+- **GitHub owns** issue title, body, open/closed, labels, assignees, comments,
+  pull requests, commits, files.
+- **We own** which agent is on it, its runs, its worktree, its transcripts and
+  its pages.
+
+Store a pointer (`issue_number`) and the agent layer beside it. Never copy
+issue *content* into this database. That is the same decision R9 already makes
+for files — **read through git, never mirror** — extended to **read through
+`gh`, never mirror**. The moment an issue body is cached here and editable
+here, the project has signed up for conflict resolution, webhooks, drift and
+rate limits. All of it is avoided by never owning a field twice.
+
+The one genuinely lossy mapping is the board: GitHub has open/closed, this app
+has Backlog/To do/In Progress/Done. Column position would be ours (local,
+instant, no API call); open/closed would be GitHub's, with a closed issue
+landing in Done regardless of column.
+
+### R11.2 What is NOT deferred
+
+**Files and Commits are local git and need no GitHub at all**, which is
+exactly why R9 sequences them first. They stay in R9 unchanged: `git ls-tree`
+and `git show` for files, `readCommits` for history, blob content cached by
+oid forever because a content-addressed key cannot go stale.
+
+Issues and Pull Requests are the parts needing `gh`, an auth story and a
+cache, and those are what R11 defers.
+
+### R11.3 If it is built later
+
+- Tabs appear **conditionally** — only when the project is bound to a repo,
+  and Issues/PRs only when that repo has a GitHub remote. A local-only project
+  must not grow empty tabs. (Note the tension with R7.4, which cut this page
+  from eight tabs to four: those were small forms that belong in a rail, these
+  would be surfaces you work in. Conditional rendering is what keeps both
+  true.)
+- Never `await gh` in a server component. Paint from cache, refresh after.
+  `git log` is local and fast; `gh` is a process spawn and a network call, and
+  they must not be treated the same way.
+- An unauthenticated `gh` renders an explicit "not connected to GitHub" state,
+  never an empty board — an empty list where data should be looks like data
+  loss. Same honesty rule the R7 runtime-health fix applied.
+- The differentiator is not showing GitHub state; GitHub already does that
+  better. It is that every row is a launch point: a failing PR hands its logs
+  to an agent (R5.6), an issue starts a session in a worktree on its branch, a
+  commit opens in the review surface.
+
+---
+
 ## Known blockers, stated plainly
 
 1. **Extraction has to precede the second runtime.** Doing it afterwards means
@@ -960,7 +1114,16 @@ that walks more than the directory it was asked for.
     asks for it — BlockSuite does. Promote and pin it before any of our code
     imports it directly, or a BlockSuite bump changes our rendering silently
     and a duplicate copy ships in the bundle.
-12. **Three diff renderers will exist, and that is the intent.** The thread's
+12. **First run is the one path every user takes exactly once, badly.**
+    R10 exists because the current empty-workspace checklist assumes the
+    reader already knows what an ACP command is. Everything it needs is
+    built; none of it is pointed at that moment.
+13. **Do not build GitHub issue sync without the single-owner rule.** R11
+    is deferred by decision, not by oversight, and its whole value is the
+    rule recorded there: every field has exactly one owner, so there is
+    nothing to reconcile. A bidirectional tasks-to-issues sync is the
+    failure mode that rule exists to prevent.
+14. **Three diff renderers will exist, and that is the intent.** The thread's
     non-throwing `DiffBlock`, the review surface's `@git-diff-view/react`,
     and R8.5's `affine:diff` block are three implementations of one concept
     serving three different densities. Anyone who tries to unify them will
