@@ -328,6 +328,66 @@ function buildPromptText(
 // care about reached a terminal state. Fire-and-forget from every call
 // site's perspective: a push failure must never affect the settle it's
 // reporting on.
+/**
+ * Puts a mention-run's answer back in the thread it came from.
+ *
+ * Reads the run's own transcript rather than asking the agent again: the
+ * assistant text is already there, and a second model call to summarise what
+ * was just said would cost money to produce a worse version of it.
+ *
+ * A failed run posts too, saying so. Silence after a mention is the failure
+ * this whole path exists to remove, and "it broke" is information; nothing at
+ * all is not.
+ */
+async function postMentionReply(
+  run: Run,
+  envelopes: Array<{ event: RunEvent }>,
+  status: 'completed' | 'failed',
+): Promise<void> {
+  const messageId = run.channelMessageId
+  if (!messageId) return
+
+  const { getChannelMessage, listThread, postChannelMessage } = await import('@/lib/broker/channels')
+  const { getTeamBindingForSession } = await import('@/lib/broker')
+
+  const source = await getChannelMessage(messageId)
+  if (!source) return
+  if (!run.sessionId) return
+  const binding = await getTeamBindingForSession(run.sessionId)
+  if (!binding) return
+
+  const threadRootId = source.threadRootId ?? source.id
+
+  // Did the agent already answer with its own tool? If so, leave it alone —
+  // double-posting a good citizen is worse than not backstopping a bad one.
+  const thread = await listThread(threadRootId).catch(() => [])
+  const alreadyReplied = thread.some(
+    (message) => message.fromSlotId === binding.slotId && message.id > source.id,
+  )
+  if (alreadyReplied) return
+
+  const answer = envelopes
+    .map((envelope) => envelope.event)
+    .filter((event): event is Extract<RunEvent, { type: 'message' }> => event.type === 'message')
+    .filter((event) => event.role === 'assistant')
+    .map((event) => event.text)
+    .join('')
+    .trim()
+
+  const body =
+    status === 'completed'
+      ? answer || 'I finished, but produced no text to report.'
+      : `I could not finish that. ${answer || 'The run failed before producing an answer.'}`.trim()
+
+  await postChannelMessage({
+    teamId: binding.teamId,
+    fromSlotId: binding.slotId,
+    kind: status === 'completed' ? 'answer' : 'status',
+    body: body.slice(0, 20_000),
+    threadRootId,
+  })
+}
+
 function notifyRunSettled(
   payload: Awaited<ReturnType<typeof getPayloadClient>>,
   run: Run,
@@ -979,6 +1039,23 @@ async function executeClaimedRun(
   // this run from the database like any other history.
   clearRunBacklog(run.id)
   notifyRunSettled(payload, run, task, finalStatus)
+
+  // A run started by a channel mention owes that thread an answer.
+  //
+  // The agent is asked in its prompt to reply with `team_send_message`, and a
+  // well-behaved one does. This is the backstop for when it does not — and it
+  // matters more than a backstop usually would, because the failure it
+  // prevents is the exact one being fixed: you mention an agent and nothing
+  // visibly happens. An agent that answered in its own transcript and never
+  // posted is indistinguishable, from the channel, from one that ignored you.
+  //
+  // Skipped when the agent DID post in the thread itself, so a good citizen is
+  // never double-posted.
+  if (run.channelMessageId) {
+    await postMentionReply(run, result.envelopes, finalStatus).catch((err) => {
+      console.warn(`[dispatcher] Could not post the channel reply for run ${run.id}.`, err)
+    })
+  }
 
   return { status: finalStatus, error: failureReason }
 }

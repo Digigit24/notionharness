@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { getCurrentPayloadUser } from '@/lib/current-user'
 import { getPayloadClient } from '@/lib/payload'
+import { dispatchMentions } from '@/lib/teams/mention-dispatch'
 import {
   claimTeamTask,
   claimableTasks,
@@ -581,6 +582,13 @@ export async function deleteTeamAction(input: {
 // --- The channel feed -------------------------------------------------------
 
 export interface PostMessageResult {
+  /** Agents woken by a mention in this message, so the UI can say "Claude Code
+   * is replying…" instead of leaving the sender wondering. */
+  dispatched?: Array<{ slotId: number; displayName: string; runId: number }>
+  /** Mentioned slots deliberately not woken, with the reason. Surfaced rather
+   * than swallowed: a mention that quietly does nothing is the bug this whole
+   * path exists to fix. */
+  mentionsSkipped?: Array<{ slotId: number; displayName: string; reason: string }>
   message: RoomFeedMessage
   /** The slot the message was attributed to, so the composer can stop offering
    * "join to react" the moment somebody's first post creates their slot. */
@@ -631,12 +639,31 @@ export async function postChannelMessageAction(input: {
   // Posting is reading: you have seen everything up to your own message.
   if (mine) await markChannelRead(mine.id, message.id).catch(() => undefined)
 
+  // MENTIONING AN AGENT WAKES IT. Until this existed, naming an agent wrote a
+  // mention row and nothing else happened at all — the message looked sent to
+  // someone and reached no one.
+  //
+  // Awaited rather than fired and forgotten, because the caller needs to know
+  // whether anything was actually started: a mention that was deliberately
+  // skipped (a person, a slot mid-turn) must be reported, and silence is the
+  // exact failure being fixed here. Enqueueing is a single INSERT; the turn
+  // itself runs in the dispatcher, so this does not hold the post open.
+  const dispatch = await dispatchMentions({
+    message,
+    channelName: team.name,
+    roster,
+    authorName: mine?.displayName ?? user.name ?? user.email,
+    accountableUserId: user.id,
+  }).catch(() => ({ dispatched: [], skipped: [] }))
+
   // No revalidatePath: the channel appends the returned row locally.
   // Re-rendering the whole room to show a message we already hold is exactly
   // the round trip on a UI action D0 forbids.
   return {
     message: { ...message, systemKind: null, undeliverableAt: null, addresseeMissing: false },
     mySlotId: mine?.id ?? null,
+    dispatched: dispatch.dispatched,
+    mentionsSkipped: dispatch.skipped,
   }
 }
 

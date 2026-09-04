@@ -40,6 +40,8 @@ export interface Run {
   /** Per-turn overrides for the runtime's own declared settings, merged over
    * the agent's defaults. Null when the turn used the agent as configured. */
   runtimeConfig: Record<string, unknown> | null
+  /** The channel message this run answers, when a mention started it. */
+  channelMessageId: number | null
   nextSeq: number
   leaseExpiresAt: string | null
   startedAt: string | null

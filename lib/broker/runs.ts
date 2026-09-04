@@ -23,6 +23,7 @@ interface RunRow {
   suggestion_status: SuggestionStatus
   prompt: string | null
   runtime_config?: Record<string, unknown> | null
+  channel_message_id?: string | number | null
   next_seq: string | number
   // node-postgres's default type parser returns `timestamp`/`timestamptz`
   // columns as `Date` objects, not strings — this pool has no custom OID
@@ -71,6 +72,10 @@ export function rowToRun(row: RunRow): Run {
       row.runtime_config && typeof row.runtime_config === 'object'
         ? (row.runtime_config as Record<string, unknown>)
         : null,
+    channelMessageId:
+      row.channel_message_id === null || row.channel_message_id === undefined
+        ? null
+        : Number(row.channel_message_id),
     nextSeq: Number(row.next_seq),
     leaseExpiresAt: toISOStringOrNull(row.lease_expires_at),
     startedAt: toISOStringOrNull(row.started_at),
@@ -108,11 +113,14 @@ export async function enqueueRun(input: {
    * the worker, so a single message can be answered with more effort without
    * changing the agent. */
   runtimeConfig?: Record<string, unknown> | null
+  /** The channel message this run answers, when it was started by a mention.
+   * Lets the settle path put the reply in that message's thread. */
+  channelMessageId?: number | null
 }): Promise<Run> {
   const pool = getBrokerPool()
   const res = await pool.query<RunRow>(
-    `INSERT INTO runs (task_id, agent_id, status, originator_user, accountable_user, priority, max_attempts, prompt, page_id, session_id, runtime_config)
-     VALUES ($1, $2, 'queued', $3, $4, $5, $6, $7, $8, $9, $10)
+    `INSERT INTO runs (task_id, agent_id, status, originator_user, accountable_user, priority, max_attempts, prompt, page_id, session_id, runtime_config, channel_message_id)
+     VALUES ($1, $2, 'queued', $3, $4, $5, $6, $7, $8, $9, $10, $11)
      RETURNING *`,
     [
       input.taskId ?? null,
@@ -127,6 +135,7 @@ export async function enqueueRun(input: {
       input.runtimeConfig && Object.keys(input.runtimeConfig).length > 0
         ? JSON.stringify(input.runtimeConfig)
         : null,
+      input.channelMessageId ?? null,
     ],
   )
   return rowToRun(res.rows[0])
@@ -608,4 +617,22 @@ export async function isRunCancellationRequested(runId: number): Promise<boolean
     [runId],
   )
   return rows[0]?.requested === true
+}
+
+
+/**
+ * Whether a channel message already has a run answering it.
+ *
+ * Guards the one failure a mention loop makes worst: a duplicate dispatch
+ * posting the same reply into a thread twice. Terminal runs still count — a
+ * message that was answered and failed should not be silently retried into a
+ * second answer without somebody asking for it.
+ */
+export async function channelMessageHasRun(messageId: number): Promise<boolean> {
+  const pool = getBrokerPool()
+  const { rows } = await pool.query(
+    `SELECT 1 FROM runs WHERE channel_message_id = $1 LIMIT 1`,
+    [messageId],
+  )
+  return rows.length > 0
 }

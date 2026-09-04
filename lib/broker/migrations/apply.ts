@@ -24,13 +24,14 @@ async function main() {
     fs.readFileSync(path.join(import.meta.dirname, '0011_run_runtime_config.sql'), 'utf8'),
     fs.readFileSync(path.join(import.meta.dirname, '0012_team_reliability.sql'), 'utf8'),
     fs.readFileSync(path.join(import.meta.dirname, '0013_channels.sql'), 'utf8'),
+    fs.readFileSync(path.join(import.meta.dirname, '0014_channel_mention_runs.sql'), 'utf8'),
   ].join('\n')
 
   const pool = new Pool({ connectionString: process.env.DATABASE_URI || '', max: 1 })
   try {
     await pool.query(sql)
     console.log(
-      'Broker schema applied: runs, run_messages, run_usage, run page context, NULL-safe active-run index, run suggestion status, run dismissed_at, sessions + worktrees, dispatcher heartbeat, teams, run cancel requests, per-run runtime config, team reliability (slot heartbeats, dead letters, tool idempotency, room stop), channels (threads, mentions, per-member unread, reactions, human members).',
+      'Broker schema applied: runs, run_messages, run_usage, run page context, NULL-safe active-run index, run suggestion status, run dismissed_at, sessions + worktrees, dispatcher heartbeat, teams, run cancel requests, per-run runtime config, team reliability (slot heartbeats, dead letters, tool idempotency, room stop), channels (threads, mentions, per-member unread, reactions, human members), channel mention runs.',
     )
   } finally {
     await pool.end()
