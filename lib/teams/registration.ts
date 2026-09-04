@@ -15,6 +15,18 @@
 // run token out of the row (see `lib/plugins/resolve.ts`).
 import { getPayloadClient } from '@/lib/payload'
 
+/**
+ * The plugin row's name, and therefore the prefix an agent sees on these tools
+ * (`mcp__Team__team_send_message`).
+ *
+ * Exported because the dispatcher matches on it to auto-approve these calls:
+ * they are ours, already authorised per run and permissioned per role, so a
+ * human approval adds nothing and — verified live — deadlocks an unattended
+ * team when nobody is there to answer. A literal in two files would let that
+ * safety property break silently on a rename.
+ */
+export const TEAM_PLUGIN_NAME = 'Team'
+
 /** The path the team MCP server is served at. Also the identity of the row:
  * a plugin in this workspace whose URL ends here IS the team plugin, whatever
  * somebody later renamed it to. */
@@ -95,7 +107,7 @@ export async function ensureTeamMcpPlugin(workspaceId: number): Promise<TeamPlug
     collection: 'plugins',
     data: {
       workspace: workspaceId,
-      name: 'Team',
+      name: TEAM_PLUGIN_NAME,
       description:
         'Talk to your teammates and work the team board: send and read messages, list, claim and finish tasks. ' +
         'Only ever active for a run that occupies a team slot.',

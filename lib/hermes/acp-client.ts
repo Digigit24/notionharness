@@ -168,6 +168,25 @@ export interface SendTurnOptions {
    * is reported and skipped rather than failing the turn.
    */
   sessionConfig?: Record<string, unknown>
+  /**
+   * Tool-name prefixes to approve automatically, without asking a human.
+   *
+   * This exists for one specific, well-bounded case: tools served by THIS
+   * app's own MCP endpoints. A team member calling `team_list_tasks` is
+   * reading a board we own, over an endpoint authorised by that run's own
+   * token, scoped to that run's slot, and permissioned by role server-side.
+   * A human approval on top adds no security whatsoever — every check that
+   * matters has already run — and it costs everything: verified live, a
+   * leader agent asked permission to read its own team board, nobody was
+   * watching, and the turn wedged and died. An unattended team cannot have a
+   * human in the loop of every message between its own members.
+   *
+   * Deliberately a prefix list supplied by the caller, not a hardcoded rule:
+   * the dispatcher knows which servers are ours because it injected them.
+   * This must never be widened to a runtime's own tools — those touch the
+   * user's machine and are exactly what approvals are for.
+   */
+  autoAllowToolPrefixes?: string[]
 }
 
 export interface SendTurnResult {
@@ -624,6 +643,7 @@ function buildClientApp(
   pushEvent: (event: RunEvent) => void,
   touch: () => void,
   onSessionUpdate: (notification: { sessionId?: string; update?: unknown }) => void,
+  autoAllowToolPrefixes: string[],
 ) {
   return (
     client({ name: 'notionforge-harness' })
@@ -693,6 +713,23 @@ function buildClientApp(
             reason: outcome.outcome === 'cancelled' ? outcome.reason : undefined,
           })
           return { outcome }
+        }
+
+        // Our own tools, approved without a human, and SAID SO in the
+        // transcript rather than silently — the record should show that a
+        // decision was made and why, not simply that nothing was asked.
+        if (autoAllowToolPrefixes.length > 0 && autoAllowToolPrefixes.some((prefix) => title.startsWith(prefix))) {
+          const allow =
+            options.find((option) => option.kind === 'allow_once') ??
+            options.find((option) => option.kind === 'allow_always')
+          if (allow?.optionId) {
+            pushEvent({
+              type: 'message',
+              role: 'system',
+              text: `Allowed "${title}" automatically — this app's own tool, already authorised for this run.`,
+            })
+            return settle({ outcome: 'selected', optionId: allow.optionId })
+          }
         }
 
         if (permissionMode === 'auto') {
@@ -1153,6 +1190,7 @@ export async function sendTurn(opts: SendTurnOptions): Promise<SendTurnResult> {
     pushEvent,
     touch,
     routeUpdate,
+    opts.autoAllowToolPrefixes ?? [],
   )
 
     const turnPromise = new Promise<void>((resolve, reject) => {

@@ -74,6 +74,7 @@ export async function sendTurnWithIdentity(opts: SendTurnWithIdentityOptions): P
       onControl: opts.onControl,
       resumeSessionId: opts.resumeSessionId,
       sessionConfig: opts.sessionConfig,
+      autoAllowToolPrefixes: opts.autoAllowToolPrefixes,
       // Not `{ ...process.env, ...opts.env }` — `spawnBinary` (via
       // `buildSpawnEnv`) is the one place that decides what of the
       // server's own environment a spawned process inherits; passing a

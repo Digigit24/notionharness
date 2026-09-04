@@ -34,6 +34,8 @@ import {
   getWorktree,
   touchWorktree,
   getTeamBindingForSession,
+  getTeam,
+  listTeamMembers,
   type Run,
   type TeamRunBinding,
 } from '@/lib/broker'
@@ -50,9 +52,22 @@ import { sendPushToUser } from '@/lib/push/send'
 import type { RunEvent } from '@/lib/run-events'
 import { redactError } from '@/lib/redact'
 import { resolvePluginsForRun } from '@/lib/plugins/resolve'
+import { TEAM_PLUGIN_NAME } from '@/lib/teams/registration'
 import type { Agent, Task } from '@/payload-types'
 import type { ApprovalOption } from '@/collections/Approvals'
 import type { ApprovalOutcome } from '@/lib/run-events'
+
+/** Newline, without an escape sequence that a source-rewriting tool can eat. */
+const NEWLINE = String.fromCharCode(10)
+
+/** What an agent needs to know about the team it is acting for. */
+interface TeamPromptContext {
+  teamName: string
+  slotId: number
+  displayName: string
+  role: 'leader' | 'member'
+  members: Array<{ slotId: number; displayName: string; role: 'leader' | 'member' }>
+}
 
 export interface DispatchOutcome {
   claimed: boolean
@@ -249,9 +264,45 @@ function stringEnv(raw: unknown): Record<string, string> | undefined {
   return env
 }
 
-function buildPromptText(task: Task | null, agent: Agent, run: Run): string {
+function buildPromptText(
+  task: Task | null,
+  agent: Agent,
+  run: Run,
+  team: TeamPromptContext | null,
+): string {
   const parts: string[] = []
   if (agent.instructions) parts.push(agent.instructions)
+
+  // Who this agent is on this team, and who else is on it.
+  //
+  // Without this an agent in a slot receives seven team tools and nothing
+  // else — no idea it is on a team, that it leads one, or who the members
+  // are. Verified live before this existed: a leader given a delegation
+  // objective went looking for its own tools with a search, called
+  // `team_list_tasks` to orient itself, and could not have assigned anything
+  // to anyone because slot ids appear nowhere it can see. Tools without
+  // context are not a capability, they are a puzzle.
+  //
+  // The roster carries SLOT IDS because that is what the tools take. A slot
+  // is not an agent — the same agent can hold two — so naming teammates
+  // without their slot ids would leave the ambiguity the slot model exists to
+  // remove.
+  if (team) {
+    const roster = team.members
+      .map((m) => `  - slot ${m.slotId}: ${m.displayName}${m.role === 'leader' ? ' (leader)' : ''}${m.slotId === team.slotId ? ' — you' : ''}`)
+      .join(NEWLINE)
+    parts.push(
+      [
+        `You are "${team.displayName}", ${team.role === 'leader' ? 'the leader' : 'a member'} of the team "${team.teamName}".`,
+        'Team roster:',
+        roster,
+        '',
+        team.role === 'leader'
+          ? 'You have team tools. Use team_create_task to break work down, assign each task to a teammate by their slot id, and team_send_message to tell them. Do not do the work yourself that you have assigned to someone else.'
+          : 'You have team tools. Use team_read_inbox to see what you have been asked to do, team_claim_task to take work off the board, and team_report_done when a task is finished.',
+      ].join(NEWLINE),
+    )
+  }
   // Tasks have no description/body field yet (P2.1) — title is the only
   // task-authored content available to hand the agent today. Richer prompt
   // construction (task description, linked page content, thread context)
@@ -391,9 +442,31 @@ async function executeClaimedRun(
   }
   const agentId = run.agentId
 
-  const agent = await payload
-    .findByID({ collection: 'agents', id: agentId, overrideAccess: true, disableErrors: true })
-    .catch(() => null)
+  // Two different failures, two different answers.
+  //
+  // This used to be one `.catch(() => null)` feeding a single "Agent missing or
+  // disabled" that settled the run NON-RETRYABLE. Verified live: a transient
+  // Postgres pool exhaustion made this lookup throw, and a perfectly good run
+  // against a perfectly good agent was permanently killed with an explanation
+  // that was simply untrue — the worst combination, because the message sends
+  // whoever reads it to look at the agent instead of the database.
+  //
+  // `disableErrors` already turns "not found" into null, so anything thrown
+  // here is infrastructure, and infrastructure failures are retryable.
+  let agent: Agent | null
+  try {
+    agent = (await payload.findByID({
+      collection: 'agents',
+      id: agentId,
+      overrideAccess: true,
+      disableErrors: true,
+    })) as Agent | null
+  } catch (err) {
+    const message = `Could not load agent ${agentId}: ${redactError(err)}`
+    console.error(`[dispatcher] ${message}`)
+    await settleRun(run.id, 'failed', { error: message, retryable: true })
+    return { status: 'failed', error: message }
+  }
   if (!agent || agent.enabled === false) {
     await settleRun(run.id, 'failed', { error: 'Agent missing or disabled.', retryable: false })
     return { status: 'failed', error: 'agent missing or disabled' }
@@ -642,6 +715,26 @@ async function executeClaimedRun(
   // leaving someone to wonder why their agent is answering with the wrong
   // model. `resolveProfileHome` also validates the name before it becomes a
   // filesystem path.
+  // The roster, resolved once. One query, and only for a run that is actually
+  // on a team — a solo run pays nothing.
+  let teamPrompt: TeamPromptContext | null = null
+  if (teamBinding) {
+    try {
+      const members = await listTeamMembers(teamBinding.teamId)
+      const team = await getTeam(teamBinding.teamId)
+      teamPrompt = {
+        teamName: team?.name ?? 'this team',
+        slotId: teamBinding.slotId,
+        displayName: teamBinding.displayName,
+        role: teamBinding.role,
+        members: members.map((m) => ({ slotId: m.id, displayName: m.displayName, role: m.role })),
+      }
+    } catch (err) {
+      // A roster we cannot read is a worse prompt, not a failed run.
+      console.warn(`[dispatcher] Could not build team context for run ${run.id}.`, err)
+    }
+  }
+
   let agentProfileHome: string | undefined
   const configuredProfile = typeof agent.hermesProfile === 'string' ? agent.hermesProfile.trim() : ''
   if (configuredProfile) {
@@ -665,7 +758,7 @@ async function executeClaimedRun(
     result = await sendTurnWithIdentity({
       binaryPath: runtimeProfile.commandName,
       cwd: runCwd,
-      text: buildPromptText(task, agent, run),
+      text: buildPromptText(task, agent, run, teamPrompt),
       runId: String(run.id),
       agentId: run.agentId,
       // Roadmap 3.4: state.db is sharded per CONVERSATION, not per run — a
@@ -719,6 +812,11 @@ async function executeClaimedRun(
       // The agent's defaults, with this turn's own overrides on top. Merged
       // rather than replaced: choosing "high effort" for one message should
       // not silently drop the model that agent is configured to use.
+      // Our own team tools need no human approval: the endpoint is ours, the
+      // run token authorises it, and role permissions are enforced server-side.
+      // Without this a team deadlocks — verified live, a leader asked
+      // permission to read its own board and the turn wedged and died.
+      autoAllowToolPrefixes: teamBinding ? [`mcp__${TEAM_PLUGIN_NAME}__`] : undefined,
       sessionConfig: (() => {
         const base =
           agent.runtimeConfig && typeof agent.runtimeConfig === 'object'
