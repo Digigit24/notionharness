@@ -1,0 +1,749 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Notionharness — Stack Architecture</title>
+<style>
+  :root {
+    --bg: #fafbfc;
+    --bg-2: #ffffff;
+    --bg-3: #f3f5f8;
+    --line: #e2e6ed;
+    --line-soft: #eef1f6;
+    --ink: #1a1f2c;
+    --ink-dim: #4a5468;
+    --ink-mute: #6b7689;
+    --accent: #2e6cf0;
+    --accent-2: #7c4ddb;
+    --good: #1e9a6c;
+    --warn: #c4720f;
+    --bad: #d63d3d;
+    --notion: #e15a4a;
+    --slack: #1f8fd1;
+    --cursor: #7c4ddb;
+    --us: #b5860a;
+    --human: #1e9a6c;
+  }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--ink); margin: 0; }
+  body {
+    font: 14px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  header {
+    padding: 28px 40px 16px;
+    border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, #0e1119 0%, #0b0d12 100%);
+  }
+  header h1 { margin: 0 0 6px; font-size: 22px; letter-spacing: -0.01em; }
+  header .sub { color: var(--ink-dim); font-size: 13px; }
+  header .tag {
+    display: inline-block; margin-left: 8px; padding: 2px 8px; border: 1px solid var(--line);
+    border-radius: 999px; font-size: 11px; color: var(--ink-dim); vertical-align: middle;
+  }
+  nav.toc {
+    padding: 14px 40px; border-bottom: 1px solid var(--line-soft);
+    display: flex; flex-wrap: wrap; gap: 14px; font-size: 12.5px;
+    background: var(--bg-2); position: sticky; top: 0; z-index: 10;
+  }
+  nav.toc a {
+    color: var(--ink-dim); text-decoration: none; padding: 4px 10px;
+    border-radius: 6px; border: 1px solid transparent;
+  }
+  nav.toc a:hover { color: var(--ink); border-color: var(--line); background: var(--bg-3); }
+  main { max-width: 1280px; margin: 0 auto; padding: 8px 40px 80px; }
+  section { padding: 28px 0; border-bottom: 1px solid var(--line-soft); }
+  section:last-child { border-bottom: none; }
+  h2 { margin: 0 0 4px; font-size: 17px; letter-spacing: -0.005em; }
+  h2 .n { color: var(--ink-mute); font-weight: 500; font-size: 12px; margin-right: 10px; }
+  h3 { margin: 18px 0 8px; font-size: 13.5px; color: var(--ink-dim); font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; }
+  p { margin: 8px 0; color: var(--ink-dim); }
+  p strong { color: var(--ink); }
+  code, .mono { font-family: ui-monospace, "JetBrains Mono", "Fira Code", Consolas, monospace; font-size: 12.5px; }
+  .card {
+    background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px 18px; margin: 12px 0;
+  }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  @media (max-width: 900px) { .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; } }
+  .pill {
+    display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px;
+    border: 1px solid var(--line); color: var(--ink-dim); background: var(--bg-3); margin-right: 4px;
+  }
+  .pill.good { color: var(--good); border-color: rgba(90,214,164,0.35); }
+  .pill.warn { color: var(--warn); border-color: rgba(255,180,84,0.35); }
+  .pill.bad  { color: var(--bad);  border-color: rgba(255,107,107,0.35); }
+  .pill.acc  { color: var(--accent); border-color: rgba(122,162,255,0.4); }
+
+  /* Stack diagram */
+  .stack-wrap {
+    background: radial-gradient(1200px 600px at 50% -100px, rgba(122,162,255,0.06), transparent 70%), var(--bg-2);
+    border: 1px solid var(--line); border-radius: 12px; padding: 22px; margin-top: 12px;
+  }
+  .stack-row {
+    display: flex; gap: 8px; align-items: stretch; margin: 6px 0;
+  }
+  .layer-label {
+    width: 110px; flex: 0 0 110px; color: var(--ink-mute); font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.08em; padding-top: 14px; text-align: right; padding-right: 12px;
+  }
+  .layer {
+    flex: 1; border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px;
+    background: var(--bg-3); min-height: 64px; position: relative;
+  }
+  .layer.tier-1 { border-color: rgba(122,162,255,0.45); background: linear-gradient(180deg, rgba(122,162,255,0.07), transparent); }
+  .layer.tier-2 { border-color: rgba(157,122,255,0.4); background: linear-gradient(180deg, rgba(157,122,255,0.06), transparent); }
+  .layer.tier-3 { border-color: rgba(90,214,164,0.4); background: linear-gradient(180deg, rgba(90,214,164,0.06), transparent); }
+  .layer.tier-4 { border-color: rgba(255,180,84,0.4); background: linear-gradient(180deg, rgba(255,180,84,0.05), transparent); }
+  .layer.tier-5 { border-color: rgba(255,107,107,0.4); background: linear-gradient(180deg, rgba(255,107,107,0.05), transparent); }
+  .layer h4 { margin: 0 0 8px; font-size: 12.5px; letter-spacing: 0.02em; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    padding: 4px 10px; border-radius: 6px; font-size: 11.5px; background: rgba(255,255,255,0.04);
+    border: 1px solid var(--line-soft); color: var(--ink);
+  }
+  .chip b { color: var(--ink); }
+  .chip .src { color: var(--ink-mute); margin-left: 4px; font-size: 10.5px; }
+  .arrow-down {
+    width: 1px; height: 18px; background: linear-gradient(180deg, transparent, var(--accent) 40%, transparent);
+    margin: 0 auto;
+  }
+
+  /* Venn */
+  .venn-wrap { display: flex; justify-content: center; align-items: center; padding: 18px 0; }
+  svg { display: block; }
+  .venn-cap { text-align: center; color: var(--ink-dim); margin-top: 8px; font-size: 12.5px; }
+
+  /* Sequence */
+  .seq {
+    background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; padding: 18px;
+    overflow-x: auto;
+  }
+  .seq table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .seq th, .seq td { border-bottom: 1px solid var(--line-soft); padding: 8px 10px; vertical-align: top; }
+  .seq th { color: var(--ink-mute); font-weight: 600; text-align: left; text-transform: uppercase; font-size: 11px; letter-spacing: 0.06em; }
+  .seq td.actor { color: var(--accent); font-weight: 600; white-space: nowrap; }
+  .seq td.arrow { color: var(--good); font-family: ui-monospace, monospace; }
+  .seq td.note { color: var(--ink-dim); }
+
+  /* Data model */
+  table.collections {
+    width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 10px;
+  }
+  table.collections th, table.collections td {
+    border-bottom: 1px solid var(--line-soft); padding: 8px 10px; text-align: left;
+  }
+  table.collections th { color: var(--ink-mute); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+  table.collections td.kind { font-family: ui-monospace, monospace; color: var(--accent); }
+  table.collections tr:hover td { background: var(--bg-3); }
+
+  /* Legend */
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; padding: 10px 0; font-size: 12px; color: var(--ink-dim); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 12px; height: 12px; border-radius: 3px; border: 1px solid var(--line); }
+
+  /* Inline diagram (capabilities) */
+  .cap-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 12px;
+  }
+  .cap {
+    border: 1px solid var(--line); border-radius: 10px; padding: 14px; background: var(--bg-2);
+  }
+  .cap h4 { margin: 0 0 6px; font-size: 13px; display: flex; align-items: center; gap: 8px; }
+  .cap .dot { width: 9px; height: 9px; border-radius: 50%; }
+  .cap p { font-size: 12.5px; margin: 4px 0; }
+
+  /* Annotation note */
+  .note {
+    border-left: 2px solid var(--accent); padding: 8px 14px; margin: 12px 0;
+    background: rgba(122,162,255,0.04); border-radius: 0 6px 6px 0;
+    color: var(--ink-dim); font-size: 12.5px;
+  }
+  .note b { color: var(--ink); }
+
+  .kbd {
+    font-family: ui-monospace, monospace; background: var(--bg-3); padding: 1px 6px;
+    border-radius: 4px; border: 1px solid var(--line); font-size: 11.5px; color: var(--ink);
+  }
+
+  footer { padding: 24px 40px 40px; color: var(--ink-mute); font-size: 12px; }
+  footer code { color: var(--ink-dim); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Notionharness — System Architecture <span class="tag">docs/STACK-ARCHITECTURE.html</span></h1>
+  <div class="sub">A single-page map of every layer, every dependency, and every seam. Reads top→bottom as data falls toward the agent, bottom→top as events rise toward the UI.</div>
+</header>
+
+<nav class="toc">
+  <a href="#positioning">1. Positioning</a>
+  <a href="#stack">2. The Stack (layers)</a>
+  <a href="#venn">3. The Seam (Venn)</a>
+  <a href="#data">4. Data Model</a>
+  <a href="#plugins">5. Plugin System</a>
+  <a href="#runtimes">6. Runtime Layer</a>
+  <a href="#dispatch">7. Dispatch &amp; Execution</a>
+  <a href="#flow">8. End-to-end Flow</a>
+  <a href="#latency">9. Latency budget</a>
+  <a href="#deps">10. Dependencies</a>
+  <a href="#deploy">11. Deployment topology</a>
+</nav>
+
+<main>
+
+<section id="positioning">
+  <h2><span class="n">1.</span>Positioning — what this thing is</h2>
+  <div class="card">
+    <p>Notionharness is <b>Notion + Slack + an agent harness</b> in one Next.js app, with a plugin system that lets teams plug their own tools in. Every other product assumes the other two don't exist — that is the seam we sit in.</p>
+    <div class="cap-grid">
+      <div class="cap">
+        <h4><span class="dot" style="background:var(--notion)"></span> Knowledge (Notion-shaped)</h4>
+        <p>BlockSuite pages with custom blocks: agent-session, run-card, task, suggestion-marks. Pages are first-class; an artifact is a pointer to a page.</p>
+        <p><span class="pill">collections/Pages.ts</span> <span class="pill">collections/Databases.ts</span> <span class="pill">lib/blocksuite-doc.ts</span></p>
+      </div>
+      <div class="cap">
+        <h4><span class="dot" style="background:var(--slack)"></span> Communication (Slack-shaped)</h4>
+        <p>Channels, threads, mentions, reactions, unread, approvals. Agents are slots in the same channel as humans.</p>
+        <p><span class="pill">lib/broker/channels.ts</span> <span class="pill">components/teams/*</span> <span class="pill">lib/broker/messages.ts</span></p>
+      </div>
+      <div class="cap">
+        <h4><span class="dot" style="background:var(--cursor)"></span> Execution (Cursor-shaped)</h4>
+        <p>ACP runtimes (Hermes, Claude Code, Codex…), per-run worktrees, tool cards, terminals, streaming with the RunEvent contract.</p>
+        <p><span class="pill">lib/runtimes/*</span> <span class="pill">lib/dispatcher/worker.ts</span> <span class="pill">lib/run-worktrees/*</span></p>
+      </div>
+    </div>
+    <div class="note"><b>The seam:</b> pages can carry agent transcripts as a block; channels can carry pages as cards; runs can cite pages and channels. Three systems with one data model underneath, not three products glued together.</div>
+  </div>
+</section>
+
+<section id="stack">
+  <h2><span class="n">2.</span>The Stack — layers top to bottom</h2>
+  <p>Every chip is a real directory or a real external dependency. Where a chip cites a path, that's where the code lives.</p>
+
+  <div class="legend">
+    <span><span class="swatch" style="background:rgba(122,162,255,0.45)"></span> UI / presentation</span>
+    <span><span class="swatch" style="background:rgba(157,122,255,0.4)"></span> App logic</span>
+    <span><span class="swatch" style="background:rgba(90,214,164,0.4)"></span> Broker / state</span>
+    <span><span class="swatch" style="background:rgba(255,180,84,0.4)"></span> Runtime / agents</span>
+    <span><span class="swatch" style="background:rgba(255,107,107,0.4)"></span> Infra</span>
+  </div>
+
+  <div class="stack-wrap">
+
+    <div class="stack-row">
+      <div class="layer-label">Browser</div>
+      <div class="layer tier-1">
+        <h4>Client UI — Next.js 15 / React 19</h4>
+        <div class="chips">
+          <div class="chip"><b>Pages &amp; routing</b> <span class="src">app/(app)/workspace/[workspaceSlug]/</span></div>
+          <div class="chip"><b>Sidebar</b> <span class="src">components/sidebar/</span></div>
+          <div class="chip"><b>Teams / lanes / board</b> <span class="src">components/teams/</span></div>
+          <div class="chip"><b>Work (composer + thread)</b> <span class="src">components/hermes/</span></div>
+          <div class="chip"><b>Review &amp; git rail</b> <span class="src">components/review/ + components/work/git-rail.tsx</span></div>
+          <div class="chip"><b>BlockSuite editor</b> <span class="src">components/editor/</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="arrow-down"></div>
+
+    <div class="stack-row">
+      <div class="layer-label">UI contract</div>
+      <div class="layer tier-1">
+        <h4>Server components + Server actions + <code>useOptimistic</code></h4>
+        <div class="chips">
+          <div class="chip">app/(app)/actions.ts</div>
+          <div class="chip">app/(app)/workspace/.../actions.ts</div>
+          <div class="chip">lib/optimistic.ts</div>
+          <div class="chip"><b>SSE for live</b> <span class="src">app/api/runs/[id]/events/stream/route.ts</span></div>
+          <div class="chip"><b>Push subscriptions</b> <span class="src">app/api/notifications/subscribe/</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="arrow-down"></div>
+
+    <div class="stack-row">
+      <div class="layer-label">Domain</div>
+      <div class="layer tier-2">
+        <h4>Payload CMS + collections (Postgres via Drizzle/Payload)</h4>
+        <div class="chips">
+          <div class="chip"><b>29 collections</b> <span class="src">collections/</span></div>
+          <div class="chip">Workspaces · WorkspaceMembers · Users</div>
+          <div class="chip">Projects · Tasks · Pages · Databases · DatabaseRows</div>
+          <div class="chip">Agents · Runtimes · RuntimeProfiles</div>
+          <div class="chip">Plugins · Connectors · Connections</div>
+          <div class="chip">Teams · Channels · Messages (lib/broker)</div>
+          <div class="chip">Approvals · Comments · Notifications · Activity</div>
+          <div class="chip">Artifacts · SavedViews</div>
+        </div>
+      </div>
+    </div>
+    <div class="arrow-down"></div>
+
+    <div class="stack-row">
+      <div class="layer-label">Broker</div>
+      <div class="layer tier-3">
+        <h4>Broker — Postgres-native queue, leases, push, NOTIFY</h4>
+        <div class="chips">
+          <div class="chip"><b>lib/broker/index.ts</b> <span class="src">one entry, many modules</span></div>
+          <div class="chip">lib/broker/runs.ts <span class="src">run lifecycle</span></div>
+          <div class="chip">lib/broker/sessions.ts <span class="src">ACP session resume</span></div>
+          <div class="chip">lib/broker/channels.ts <span class="src">messages + reactions</span></div>
+          <div class="chip">lib/broker/messages.ts</div>
+          <div class="chip">lib/broker/teams.ts</div>
+          <div class="chip">lib/broker/notify.ts <span class="src">pg LISTEN/NOTIFY</span></div>
+          <div class="chip">lib/broker/dispatcher-health.ts <span class="src">heartbeat row</span></div>
+          <div class="chip">lib/broker/usage.ts</div>
+          <div class="chip">lib/broker/worktrees.ts</div>
+          <div class="chip">lib/broker/types.ts</div>
+          <div class="chip">lib/broker/migrations/apply.ts</div>
+        </div>
+      </div>
+    </div>
+    <div class="arrow-down"></div>
+
+    <div class="stack-row">
+      <div class="layer-label">Dispatch</div>
+      <div class="layer tier-4">
+        <h4>Dispatcher — picks runs, calls runtimes, settles</h4>
+        <div class="chips">
+          <div class="chip"><b>app/api/dispatcher/tick/route.ts</b> <span class="src">heartbeat tick</span></div>
+          <div class="chip"><b>lib/dispatcher/worker.ts</b> <span class="src">the actual loop</span></div>
+          <div class="chip"><b>scripts/run-dispatcher-loop.ts</b> <span class="src">stand-alone loop process</span></div>
+          <div class="chip">lib/dispatcher/classify-failure.ts <span class="src">retry vs terminal</span></div>
+          <div class="chip">lib/failures.ts <span class="src">typed error spine</span></div>
+          <div class="chip">lib/run-events.ts <span class="src">typed envelope</span></div>
+          <div class="chip">lib/redact.ts <span class="src">secret stripping</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="arrow-down"></div>
+
+    <div class="stack-row">
+      <div class="layer-label">Runtime</div>
+      <div class="layer tier-4">
+        <h4>Runtime layer — abstract ACP, concrete Hermes</h4>
+        <div class="chips">
+          <div class="chip"><b>lib/runtimes/handshake.ts</b></div>
+          <div class="chip">lib/runtimes/detect.ts</div>
+          <div class="chip">lib/runtimes/spawn-command.ts <span class="src">Windows .cmd aware</span></div>
+          <div class="chip">lib/runtimes/home.ts + lib/runtimes/hermes/home-overlay.ts</div>
+          <div class="chip">lib/runtimes/probe-codes.ts</div>
+          <div class="chip"><b>lib/runtimes/hermes/*</b> <span class="src">concrete runtime</span></div>
+          <div class="chip">lib/runtimes/hermes/profiles.ts · providers.ts · personas.ts</div>
+          <div class="chip">lib/runtimes/hermes/skills · mcp-catalog · install-checks</div>
+          <div class="chip">lib/runtimes/hermes/serve-supervisor.ts · serve-client.ts</div>
+          <div class="chip">lib/runtimes/hermes/runtime-health.ts · ping.ts</div>
+          <div class="chip">lib/runtimes/hermes/run-with-identity.ts · agent-memory.ts</div>
+          <div class="chip"><b>lib/hermes/acp-client.ts</b> <span class="src">ACP stdio transport</span></div>
+          <div class="chip">lib/hermes/classify-run-error.ts · runEvent-adapter.ts · unified-diff.ts</div>
+        </div>
+      </div>
+    </div>
+    <div class="arrow-down"></div>
+
+    <div class="stack-row">
+      <div class="layer-label">External</div>
+      <div class="layer tier-5">
+        <h4>External — the things this app spawns or talks to</h4>
+        <div class="chips">
+          <div class="chip"><b>Hermes</b> <span class="src">C:\Users\vaibh\AppData\Local\hermes</span></div>
+          <div class="chip">Claude Code (via ACP adapter)</div>
+          <div class="chip">Codex · OpenCode · Gemini · Goose <span class="src">all ACP</span></div>
+          <div class="chip"><b>Postgres</b> <span class="src">lib/broker, collections</span></div>
+          <div class="chip"><b>Git</b> <span class="src">lib/git/, lib/run-worktrees/</span></div>
+          <div class="chip"><b>gh</b> <span class="src">GitHub binding</span></div>
+          <div class="chip"><b>Composio</b> <span class="src">plugin-level MCP over HTTP</span></div>
+          <div class="chip"><b>Web Push</b> <span class="src">app/api/notifications/subscribe/</span></div>
+          <div class="chip">Shiki <span class="src">transitive via BlockSuite, R9 plans to promote</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <b>Reading direction.</b> A user types in the composer → the server action writes to a collection row → a broker row appears → the dispatcher tick picks it up → the runtime is spawned via ACP → events stream back over SSE → the UI updates optimistically. Latency budget lives in <span class="kbd">docs/performance-budget.md</span>.
+  </div>
+</section>
+
+<section id="venn">
+  <h2><span class="n">3.</span>The Seam — where the three products overlap</h2>
+  <p>This Venn is the strategic claim. Each circle is a market; the overlap is the surface area this product owns alone.</p>
+
+  <div class="venn-wrap">
+    <svg viewBox="0 0 720 480" width="100%" height="auto" style="max-width:720px;">
+      <defs>
+        <radialGradient id="gNotion" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="rgba(255,125,107,0.55)" />
+          <stop offset="100%" stop-color="rgba(255,125,107,0.15)" />
+        </radialGradient>
+        <radialGradient id="gSlack" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="rgba(107,199,255,0.55)" />
+          <stop offset="100%" stop-color="rgba(107,199,255,0.15)" />
+        </radialGradient>
+        <radialGradient id="gCursor" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="rgba(157,122,255,0.55)" />
+          <stop offset="100%" stop-color="rgba(157,122,255,0.15)" />
+        </radialGradient>
+      </defs>
+
+      <!-- Three overlapping circles -->
+      <circle cx="240" cy="200" r="170" fill="url(#gNotion)" stroke="rgba(255,125,107,0.7)" stroke-width="1.2" />
+      <circle cx="480" cy="200" r="170" fill="url(#gSlack)" stroke="rgba(107,199,255,0.7)" stroke-width="1.2" />
+      <circle cx="360" cy="360" r="170" fill="url(#gCursor)" stroke="rgba(157,122,255,0.7)" stroke-width="1.2" />
+
+      <!-- Labels in non-overlap regions -->
+      <text x="160" y="135" fill="#ff9b8c" font-size="14" font-weight="600">Knowledge</text>
+      <text x="160" y="153" fill="#ff9b8c" font-size="11">BlockSuite pages · databases ·</text>
+      <text x="160" y="167" fill="#ff9b8c" font-size="11">provenance · history</text>
+
+      <text x="555" y="135" fill="#8fd2ff" font-size="14" font-weight="600">Communication</text>
+      <text x="555" y="153" fill="#8fd2ff" font-size="11">channels · threads ·</text>
+      <text x="555" y="167" fill="#8fd2ff" font-size="11">mentions · approvals</text>
+
+      <text x="305" y="445" fill="#c5a8ff" font-size="14" font-weight="600">Execution</text>
+      <text x="305" y="463" fill="#c5a8ff" font-size="11">ACP run · worktree ·</text>
+      <text x="320" y="477" fill="#c5a8ff" font-size="11">streaming · tool cards</text>
+
+      <!-- Two-way overlaps -->
+      <text x="355" y="170" fill="#e7ecf3" font-size="11.5" font-weight="600" text-anchor="middle">page ↔ message</text>
+      <text x="355" y="184" fill="#9aa4b6" font-size="10" text-anchor="middle">agent-session block inside a page</text>
+
+      <text x="265" y="305" fill="#e7ecf3" font-size="11.5" font-weight="600" text-anchor="middle">page ↔ run</text>
+      <text x="265" y="319" fill="#9aa4b6" font-size="10" text-anchor="middle">run-card · task · artifacts</text>
+
+      <text x="455" y="305" fill="#e7ecf3" font-size="11.5" font-weight="600" text-anchor="middle">channel ↔ run</text>
+      <text x="455" y="319" fill="#9aa4b6" font-size="10" text-anchor="middle">agent slot · inbox · approvals</text>
+
+      <!-- Centre triple overlap — ours -->
+      <circle cx="360" cy="270" r="48" fill="rgba(245,215,110,0.18)" stroke="rgba(245,215,110,0.7)" stroke-dasharray="3 3" />
+      <text x="360" y="265" fill="#f5d76e" font-size="12" font-weight="700" text-anchor="middle">the seam</text>
+      <text x="360" y="282" fill="#f5d76e" font-size="10" text-anchor="middle">page + channel + run</text>
+      <text x="360" y="296" fill="#f5d76e" font-size="10" text-anchor="middle">one data model</text>
+    </svg>
+  </div>
+  <div class="venn-cap">Triple overlap = <span class="pill acc">ours</span>. The dashed circle is what competitors have to build to match.</div>
+
+  <div class="grid-3">
+    <div class="card">
+      <h3>Knowledge ∩ Communication</h3>
+      <p>A page embedded inside a channel as a card; a message with a "convert to page" action that reuses the transcript-to-blocks path in <span class="kbd">lib/transcript/to-page.ts</span>. Cited at the message level so an edit to the page shows through.</p>
+    </div>
+    <div class="card">
+      <h3>Knowledge ∩ Execution</h3>
+      <p>An <span class="kbd">affine:embed-run-card</span>, <span class="kbd">affine:embed-task</span>, <span class="kbd">affine:embed-agent-session</span> block in a page carries the run's state live. R8 takes this further — the artifact is the page.</p>
+    </div>
+    <div class="card">
+      <h3>Communication ∩ Execution</h3>
+      <p>An agent is a slot in the channel (<span class="kbd">team_members</span>), with presence, inbox, approvals, and a thread of its own. The same agent card appears in the roster.</p>
+    </div>
+  </div>
+</section>
+
+<section id="data">
+  <h2><span class="n">4.</span>Data Model — 29 collections, one Postgres</h2>
+  <p>All persistence lives under <span class="kbd">collections/</span> as Payload collections, persisted to one Postgres database. The broker is the same database with hand-written tables for runs, sessions and messages.</p>
+
+  <table class="collections">
+    <thead>
+      <tr><th>Collection</th><th>Kind</th><th>Used by</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Workspaces</td><td class="kind">tenant root</td><td>everything; tenancy boundary</td></tr>
+      <tr><td>WorkspaceMembers</td><td class="kind">join</td><td>permissions, invites, runtime-access</td></tr>
+      <tr><td>Users</td><td class="kind">identity</td><td>auth (better-auth 1.4.22), profiles</td></tr>
+      <tr><td>Invitations</td><td class="kind">link</td><td>app/invite/[token] route</td></tr>
+      <tr><td>Agents</td><td class="kind">persona</td><td>Work composer · teams · settings</td></tr>
+      <tr><td>Runtimes + RuntimeProfiles</td><td class="kind">runtime</td><td>settings/runtimes · dispatcher · probe</td></tr>
+      <tr><td>Projects</td><td class="kind">container</td><td>projects page · files tab · binding</td></tr>
+      <tr><td>Tasks + TaskStatuses + TaskLinks</td><td class="kind">work</td><td>board · drawer · mentions</td></tr>
+      <tr><td>Pages + Databases + DatabaseRows + SavedViews</td><td class="kind">knowledge</td><td>editor · search · record pages</td></tr>
+      <tr><td>Plugins</td><td class="kind">extension</td><td>/api/mcp · dispatcher resolve</td></tr>
+      <tr><td>Connectors + Connections</td><td class="kind">external</td><td>Composio · OAuth callbacks</td></tr>
+      <tr><td>Approvals</td><td class="kind">gate</td><td>channels · review · dispatcher</td></tr>
+      <tr><td>Comments · Followers · Activity · Notifications · NotificationPreferences · PushSubscriptions</td><td class="kind">engagement</td><td>review · inbox · push</td></tr>
+      <tr><td>Artifacts</td><td class="kind">output</td><td>artifacts inbox · pages · runs</td></tr>
+      <tr><td>AccessGrants + access</td><td class="kind">acl</td><td>lib/permissions/</td></tr>
+      <tr><td>ProjectResources</td><td class="kind">attach</td><td>project detail</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Broker tables (same Postgres, hand-written)</h3>
+  <p>The broker keeps the high-throughput, low-latency state that doesn't belong in Payload:</p>
+  <div class="grid-4">
+    <div class="card"><b>runs</b><br/><span class="pill">broker/runs.ts</span><br/>lifecycle, leases, costs, worktree binding</div>
+    <div class="card"><b>chat_sessions</b><br/><span class="pill">broker/sessions.ts</span><br/>ACP session id, resume, replay count</div>
+    <div class="card"><b>teams / team_members</b><br/><span class="pill">broker/teams.ts</span><br/>rooms, slots, leaders</div>
+    <div class="card"><b>team_messages</b><br/><span class="pill">broker/messages.ts</span><br/>mailbox, threads, mentions</div>
+    <div class="card"><b>team_tasks</b><br/><span class="pill">broker/teams.ts</span><br/>dependency graph, status</div>
+    <div class="card"><b>dispatcher_heartbeat</b><br/><span class="pill">broker/dispatcher-health.ts</span><br/>one row, ever</div>
+    <div class="card"><b>usage / spend</b><br/><span class="pill">broker/usage.ts</span><br/>tokens, $ — 7d / 30d</div>
+    <div class="card"><b>run_worktrees</b><br/><span class="pill">broker/worktrees.ts</span><br/>git worktree per run</div>
+  </div>
+</section>
+
+<section id="plugins">
+  <h2><span class="n">5.</span>Plugin System — two levels of MCP, by ownership</h2>
+  <p>The hardest design choice in the whole app, made once and recorded in <span class="kbd">docs/ROADMAP-SERIES.md</span> as D4. The principle is ownership, not transport.</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <h3>Runtime-level MCP — <span class="pill warn">mirror, not owned</span></h3>
+      <p>Whatever the agent CLI has already configured. We read it, toggle it, write no ownership into it. <span class="kbd">hermes mcp add</span> edits behind our back and the mirror reflects that on the next read.</p>
+      <p>Why mirror-only: storing a copy would be wrong the first time someone ran <span class="kbd">hermes mcp add</span> on the host.</p>
+    </div>
+    <div class="card">
+      <h3>Plugin-level MCP — <span class="pill good">owned, in our DB</span></h3>
+      <p>Workspace row, scoped to specific agents, injected at <span class="kbd">session/new</span>, gone when the turn ends. Served over <b>HTTP and SSE</b> from this app (not stdio — server processes aren't co-located).</p>
+      <p>Per-run short-lived credentials via <span class="kbd">{{RUN_TOKEN}}</span> / <span class="kbd">{{RUN_ID}}</span> substitution at resolve time. Composio reaches us as a plugin row, no SDK integration written.</p>
+    </div>
+  </div>
+
+  <h3>Where the pieces live</h3>
+  <div class="seq">
+    <table>
+      <tr><th>What</th><th>Where</th><th>What it does</th></tr>
+      <tr><td class="actor">Plugin row</td><td><span class="kbd">collections/Plugins.ts</span></td><td>name, kind, scope (selected agents, empty by default), config map, transport</td></tr>
+      <tr><td class="actor">Resolve</td><td><span class="kbd">lib/plugins/resolve.ts</span></td><td>one function called per run: returns the array of MCP servers to inject</td></tr>
+      <tr><td class="actor">HTTP MCP transport</td><td><span class="kbd">app/api/mcp/route.ts</span> + <span class="kbd">app/api/mcp/teams/route.ts</span></td><td>served by us, scoped per run via <span class="kbd">run_token</span></td></tr>
+      <tr><td class="actor">Artifact server</td><td><span class="kbd">app/api/mcp/artifacts/route.ts</span></td><td><span class="kbd">get_page</span>, <span class="kbd">append_block</span>; reuses daemon page-writes auth</td></tr>
+      <tr><td class="actor">Config UI</td><td><span class="kbd">components/settings/plugin-config-fields.tsx</span></td><td>self-describing: renders <span class="kbd">{id,label,type,options}</span></td></tr>
+      <tr><td class="actor">Generic renderer</td><td><span class="kbd">components/runtimes/runtime-config-fields.tsx</span></td><td>used by agent settings — R1.A.2 says mount it on the runtime profile</td></tr>
+    </table>
+  </div>
+
+  <div class="note"><b>Safety note.</b> Scope defaults to "selected agents" with an empty list, so a new plugin reaches nobody until someone says who. A disabled plugin is absent from the session, not present-and-refusing — an agent that sees a tool it can't use keeps trying and narrates the failure.</div>
+</section>
+
+<section id="runtimes">
+  <h2><span class="n">6.</span>Runtime Layer — runtime-neutral by design (R1)</h2>
+  <p>The whole layer was extracted so adding a second ACP CLI is data, not code. R1 is not finished — Claude Code was added by hand and the "register a second runtime from the UI" test is not yet green.</p>
+
+  <div class="seq">
+    <table>
+      <tr><th>Stage</th><th>Where</th><th>What it does</th></tr>
+      <tr><td class="actor">Detection</td><td><span class="kbd">lib/runtimes/detect.ts</span></td><td>binary exists? command resolves on Windows .cmd shims?</td></tr>
+      <tr><td class="actor">Probe</td><td><span class="kbd">lib/runtimes/handshake.ts</span></td><td>runs ACP <span class="kbd">initialize</span> in a temp dir, with timeout</td></tr>
+      <tr><td class="actor">Codes</td><td><span class="kbd">lib/runtimes/probe-codes.ts</span></td><td>machine-readable: <span class="kbd">command_not_found</span>, <span class="kbd">acp_init_failed</span>, <span class="kbd">auth_required</span>, <span class="kbd">version_drift</span>, <span class="kbd">acp_init_timeout</span></td></tr>
+      <tr><td class="actor">Spawn</td><td><span class="kbd">lib/runtimes/spawn-command.ts</span></td><td>platform-correct; 1.7 Windows .cmd behaviour handled</td></tr>
+      <tr><td class="actor">Handshake record</td><td><span class="kbd">collections/RuntimeProfiles.ts</span></td><td>stores agent_capabilities, auth_methods, config_options, modes, models, commands verbatim</td></tr>
+      <tr><td class="actor">Hermes concrete</td><td><span class="kbd">lib/runtimes/hermes/*</span> + <span class="kbd">lib/hermes/*</span></td><td>profiles, providers, personas, skills, mcp-catalog, install-checks, serve-supervisor/client, run-with-identity, agent-memory, home-overlay</td></tr>
+      <tr><td class="actor">Health</td><td><span class="kbd">app/api/runtimes/health-check/route.ts</span></td><td>probes cached 10 min (D0 — no spawning every 30 s)</td></tr>
+    </table>
+  </div>
+
+  <h3>ACP, the only interface</h3>
+  <p>There are no adapter classes. <span class="kbd">lib/hermes/acp-client.ts</span> is the ACP stdio transport. Capabilities, modes, models and config options come from the <span class="kbd">initialize</span> response and are stored verbatim. Tri-state "unknown / supported / not" is the right call — see R1.A.3.</p>
+
+  <div class="note"><b>R1 status.</b> The 12-files extraction is partial. Latent import cycle (<span class="kbd">worker.ts</span> ← <span class="kbd">acp-client</span>) and the client-bundle audit (R1.5) are flagged in the roadmap as "find out before moving". Until R1 is done, registering a second runtime from the UI is not a thing.</div>
+</section>
+
+<section id="dispatch">
+  <h2><span class="n">7.</span>Dispatch &amp; Execution</h2>
+  <p>A run is a row, a lease, a heartbeat, and a stream of typed events. Nothing more.</p>
+
+  <div class="seq">
+    <table>
+      <tr><th>Step</th><th>Module</th><th>What happens</th></tr>
+      <tr><td class="actor">1. Send</td><td><span class="kbd">app/(app)/workspace/.../work/actions.ts</span></td><td>composer → server action → run row in broker</td></tr>
+      <tr><td class="actor">2. Heartbeat tick</td><td><span class="kbd">app/api/dispatcher/tick/route.ts</span></td><td>writes <span class="kbd">dispatcher_heartbeat</span> once</td></tr>
+      <tr><td class="actor">3. Pick</td><td><span class="kbd">lib/dispatcher/worker.ts</span></td><td>leases oldest runnable, checks agent enabled, no spend cap hit</td></tr>
+      <tr><td class="actor">4. Resolve</td><td><span class="kbd">lib/plugins/resolve.ts</span></td><td>returns MCP servers to inject for this run</td></tr>
+      <tr><td class="actor">5. Home overlay</td><td><span class="kbd">lib/runtimes/hermes/home-overlay.ts</span></td><td>disposable <span class="kbd">HERMES_HOME</span> with persona's memory + skills</td></tr>
+      <tr><td class="actor">6. Spawn</td><td><span class="kbd">lib/runtimes/spawn-command.ts</span> + <span class="kbd">lib/hermes/acp-client.ts</span></td><td>ACP stdio; <span class="kbd">session/new</span> with config_options from agent</td></tr>
+      <tr><td class="actor">7. Stream</td><td><span class="kbd">app/api/runs/[id]/events/stream/route.ts</span> + <span class="kbd">lib/run-events.ts</span></td><td>typed <span class="kbd">RunEvent</span> envelope over SSE; UI adapts via <span class="kbd">lib/hermes/runEvent-adapter.ts</span></td></tr>
+      <tr><td class="actor">8. Watchdog</td><td><span class="kbd">lib/dispatcher/worker.ts</span></td><td>wall clock + inactivity watchdog — silence is the wedge signal</td></tr>
+      <tr><td class="actor">9. Settle</td><td><span class="kbd">lib/dispatcher/classify-failure.ts</span> + <span class="kbd">lib/failures.ts</span></td><td>retry vs terminal; one classifier, one test per row (R12-P1.4)</td></tr>
+      <tr><td class="actor">10. Cleanup</td><td><span class="kbd">lib/run-worktrees/retention.ts</span></td><td>keep checkout if: unfinished, review open, in last-N settled</td></tr>
+    </table>
+  </div>
+
+  <h3>Worktree lifecycle</h3>
+  <p>Per-run disposable worktree under <span class="kbd">lib/run-worktrees/</span>. Retention is armed manually via <span class="kbd">RUN_WORKTREE_AUTO_RECLAIM=true</span> — deleting a run's diff is irreversible and only the machine's owner knows which old run still matters. Measured on this box: 79 checkouts, 59 reclaimable, 184 MB.</p>
+</section>
+
+<section id="flow">
+  <h2><span class="n">8.</span>End-to-end Flow — a message becomes a run becomes a thread becomes a page</h2>
+  <p>This is the seam, walked end to end. Every arrow is a real file or call.</p>
+
+  <div class="seq">
+    <table>
+      <tr>
+        <th style="width:130px">#</th>
+        <th style="width:160px">Actor</th>
+        <th style="width:160px">Where</th>
+        <th>What</th>
+      </tr>
+      <tr><td>1</td><td class="actor">User</td><td>Work composer</td><td>Types, hits Enter. <span class="kbd">useOptimistic</span> paints immediately (R6.A.1 is the violation; R12-P2.3 the fix).</td></tr>
+      <tr><td>2</td><td class="arrow">→</td><td>app/.../work/actions.ts</td><td>Server action creates a run row in <span class="kbd">broker/runs.ts</span>, a session row in <span class="kbd">broker/sessions.ts</span>.</td></tr>
+      <tr><td>3</td><td class="arrow">→</td><td>lib/dispatcher/worker.ts</td><td>Next tick leases the run, picks the agent's runtime profile, resolves plugins.</td></tr>
+      <tr><td>4</td><td class="arrow">→</td><td>lib/runtimes/hermes/home-overlay.ts</td><td>Builds disposable <span class="kbd">HERMES_HOME</span> with persona's memory + skills + enabled MCP.</td></tr>
+      <tr><td>5</td><td class="arrow">→</td><td>lib/hermes/acp-client.ts</td><td>Spawns Hermes via ACP stdio, sends <span class="kbd">session/new</span> with config_options from agent + profile defaults (R1.A.1).</td></tr>
+      <tr><td>6</td><td class="arrow">→</td><td>app/api/mcp/*</td><td>Any tool call goes through our HTTP MCP — authenticated by <span class="kbd">run_token</span>, scoped per run, loggable.</td></tr>
+      <tr><td>7</td><td class="arrow">→</td><td>app/api/runs/[id]/events/stream/route.ts</td><td>Stream of typed <span class="kbd">RunEvent</span> envelopes over SSE. UI adapts via <span class="kbd">runEvent-adapter.ts</span>.</td></tr>
+      <tr><td>8</td><td class="actor">Agent</td><td>tools</td><td>Tool calls may write a <span class="kbd">affine:embed-run-card</span>, <span class="kbd">affine:embed-task</span>, or (R8) an artifact via <span class="kbd">app/api/mcp/artifacts</span>.</td></tr>
+      <tr><td>9</td><td class="actor">Approval</td><td>app/.../approvals + UI</td><td>If the tool needs a gate, the broker raises an approval and pauses the run. Approve in any pane.</td></tr>
+      <tr><td>10</td><td class="actor">Settle</td><td>broker/runs.ts</td><td>Final assistant text stored. Artifacts recorded. Cost rollup updated. Run review page available.</td></tr>
+      <tr><td>11</td><td class="actor">Provenance</td><td>collections/Pages.ts</td><td>Any message can convert to a page (<span class="kbd">lib/transcript/to-page.ts</span>). Page carries a back-link to the session.</td></tr>
+      <tr><td>12</td><td class="actor">Channel</td><td>lib/broker/channels.ts</td><td>Team members — including this agent as a slot — see the run's summary if it touched a room.</td></tr>
+    </table>
+  </div>
+</section>
+
+<section id="latency">
+  <h2><span class="n">9.</span>Latency Budget — D0 outranks every other decision</h2>
+  <p>D0 is recorded at the top of <span class="kbd">docs/ROADMAP-SERIES.md</span>. The rules and what they cost:</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <h3>What is forbidden</h3>
+      <p><span class="pill bad">No CRDT on the streaming path.</span> Feeds are virtualised React lists over the typed <span class="kbd">RunEvent</span> stream. Per-block CRDT is correct and cheap; per-token is catastrophic.</p>
+      <p><span class="pill bad">No round trip on the send path.</span> Pressing Enter paints immediately.</p>
+      <p><span class="pill bad">No polling where a push exists.</span> The broker has LISTEN/NOTIFY and SSE.</p>
+      <p><span class="pill bad">No blocking first render on an external process.</span></p>
+      <p><span class="pill bad">No unbounded lists.</span></p>
+    </div>
+    <div class="card">
+      <h3>Known debt, carried openly</h3>
+      <p><span class="kbd">getSidebarPages</span> — second query on every workspace render to exclude task documents. Fold in.</p>
+      <p><span class="kbd">readConfigSubset</span> — fetches whole config from runtime, projects down. Cache per profile.</p>
+      <p>Runtime dashboard server cold-starts ~3 s. Warm in background, show "warming" not blank.</p>
+      <p>Work session rail 5 s interval. Should ride the event stream.</p>
+      <p>Reveal buffer spreads large chunks over a few frames. Keep bounded, no-op under reduced motion.</p>
+    </div>
+  </div>
+
+  <h3>Free UI wins already on the slate</h3>
+  <div class="grid-3">
+    <div class="card"><span class="pill warn">R1.A.1</span><br/><b>Runtime default config</b><br/>one column, one line in the existing merge — Claude Code model set once for the workspace.</div>
+    <div class="card"><span class="pill warn">R1.A.2</span><br/><b>Mount generic config renderer on runtime profile</b><br/>Settings → Runtimes becomes a real editor with no runtime-specific screen.</div>
+    <div class="card"><span class="pill warn">R3.A.1</span><br/><b>Per-pane error boundaries</b><br/>one file per segment; channel/editor/review survive a single failure.</div>
+    <div class="card"><span class="pill warn">R6.A.4</span><br/><b>Dynamic BlockSuiteEditor in teams route</b><br/><span class="kbd">canvas-pane.tsx</span> imports editor statically; canvas is closed by default. <span class="kbd">next/dynamic</span> drops 560 kB first load.</div>
+    <div class="card"><span class="pill warn">R6.A.5</span><br/><b>Team messages → NOTIFY</b><br/>6 s poll drops to ~60 s reconciliation sweep.</div>
+    <div class="card"><span class="pill warn">R7.A.1</span><br/><b>Loading states for 31 routes</b><br/>only 4 have <span class="kbd">loading.tsx</span> today.</div>
+  </div>
+</section>
+
+<section id="deps">
+  <h2><span class="n">10.</span>Dependencies — what's pinned, what is transitive</h2>
+  <p>Cited from <span class="kbd">package.json</span> comments and the codebase, not from a fresh <span class="kbd">npm ls</span>.</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <h3>Direct</h3>
+      <ul>
+        <li><b>Next.js 15</b> — App Router, server actions, server components</li>
+        <li><b>React 19</b></li>
+        <li><b>Payload CMS</b> — collection schema + admin at <span class="kbd">/admin</span></li>
+        <li><b>better-auth 1.4.22</b> — sessions, passwords, OAuth</li>
+        <li><b>BlockSuite 0.19.5</b> — editor, custom blocks (run-card, task, agent-session, native database)</li>
+        <li><b>@tanstack/react-virtual</b> — virtualised lists</li>
+        <li><b>@git-diff-view/react</b> — review diff viewer (planned, not yet added per R5)</li>
+        <li><b>unified + remark-parse</b> — markdown path (R9)</li>
+        <li><b>Postgres</b> via Payload + Drizzle</li>
+        <li><b>web-push</b> — push notifications</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Transitive (and the trap)</h3>
+      <p><b>Shiki 1.29.2</b> rides along via BlockSuite. <span class="kbd">lib/git/highlight.ts</span> warns: promote and pin before importing directly, or a BlockSuite bump silently changes our rendering and a duplicate copy ships in the bundle.</p>
+      <p><b>ACP SDK</b> — the zod union (<span class="kbd">McpServer = http | sse | acp | stdio</span>) is the reason HTTP MCP is the default, not stdio.</p>
+      <p><b>Composio</b> — reachable as a plugin row over HTTP MCP. No SDK integration written; R11's defer-by-decision rule applies.</p>
+      <p><b>Hermes</b> at <span class="kbd">C:\Users\vaibh\AppData\Local\hermes</span> — external process spawned via ACP.</p>
+      <p><b>gh</b> — for the GitHub binding; no GitHub token ever passes through this app.</p>
+      <p><b>git</b> — via <span class="kbd">execFile</span> in <span class="kbd">lib/git/*</span> and <span class="kbd">lib/run-worktrees/manager.ts</span>. R12-P5.1 wants one hardened helper.</p>
+    </div>
+  </div>
+</section>
+
+<section id="deploy">
+  <h2><span class="n">11.</span>Deployment topology — VPS for your SaaS</h2>
+  <p>Three boxes for one customer; each box has a clear job and a clear failure mode.</p>
+
+  <div class="stack-wrap">
+    <div class="stack-row">
+      <div class="layer-label">Edge</div>
+      <div class="layer tier-1">
+        <h4>Reverse proxy + TLS</h4>
+        <div class="chips">
+          <div class="chip">nginx / Caddy</div>
+          <div class="chip">TLS via Let's Encrypt</div>
+          <div class="chip">WebSocket upgrade for SSE</div>
+        </div>
+      </div>
+    </div>
+    <div class="arrow-down"></div>
+
+    <div class="stack-row">
+      <div class="layer-label">App</div>
+      <div class="layer tier-2">
+        <h4>Next.js (Node)</h4>
+        <div class="chips">
+          <div class="chip">next start :3000</div>
+          <div class="chip">server actions</div>
+          <div class="chip">SSE route handlers</div>
+          <div class="chip">/admin (Payload)</div>
+        </div>
+      </div>
+    </div>
+    <div class="arrow-down"></div>
+
+    <div class="stack-row">
+      <div class="layer-label">Workers</div>
+      <div class="layer tier-4">
+        <h4>Dispatcher + health</h4>
+        <div class="chips">
+          <div class="chip"><b>scripts/run-dispatcher-loop.ts</b> <span class="src">the actual loop</span></div>
+          <div class="chip"><b>scripts/run-runtime-health-loop.ts</b></div>
+          <div class="chip">retention worker (hourly, gated)</div>
+        </div>
+      </div>
+    </div>
+    <div class="arrow-down"></div>
+
+    <div class="stack-row">
+      <div class="layer-label">Runtimes</div>
+      <div class="layer tier-4">
+        <h4>ACP runtimes — spawned per run</h4>
+        <div class="chips">
+          <div class="chip"><b>Hermes</b> <span class="src">~/.local/bin/hermes</span></div>
+          <div class="chip">claude-agent-acp</div>
+          <div class="chip">codex</div>
+          <div class="chip">opencode · gemini · goose</div>
+          <div class="chip">isolated <span class="kbd">HERMES_HOME</span> per run via home-overlay</div>
+        </div>
+      </div>
+    </div>
+    <div class="arrow-down"></div>
+
+    <div class="stack-row">
+      <div class="layer-label">Data</div>
+      <div class="layer tier-5">
+        <h4>Postgres + git + object store</h4>
+        <div class="chips">
+          <div class="chip"><b>Postgres 16</b> <span class="src">Payload + broker tables</span></div>
+          <div class="chip">worktrees on local disk (or EBS)</div>
+          <div class="chip">S3-compatible blob for page doc-state backups</div>
+          <div class="chip">Redis optional <span class="src">for cross-worker ephemeral</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <b>Single-host constraint (today).</b> <span class="kbd">lib/run-worktrees/manager.ts</span> says "the mutex is in-process by design." That is correct only while exactly one Node process touches a bare clone. R12-P5.3 wants either a Postgres advisory lock keyed on the bare path, or the invariant explicit and enforced at boot. For a single-tenant VPS, this is fine; for multi-worker or multi-host, it is broken.
+  </div>
+</section>
+
+</main>
+
+<footer>
+  Generated from the repo at <code>E:/Digitech/softwares/notionharness</code>. Numbers cited (560 kB / 562 kB, 79 / 59 / 184 MB, 0.12 ms / 4000 events, etc.) are from the roadmap's own measurements — re-measure before trusting them. Open the file directly in a browser, no server needed.
+</footer>
+
+</body>
+</html>

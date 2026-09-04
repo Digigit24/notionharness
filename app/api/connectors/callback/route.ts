@@ -2,7 +2,10 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getPayloadClient } from '@/lib/payload'
 import { getCurrentPayloadUser } from '@/lib/current-user'
 import { syncConnection } from '@/lib/connectors/sync'
-import { reportFailure } from '@/lib/failures'
+import { bestEffort, reportFailure } from '@/lib/failures'
+import { resolveApproval } from '@/lib/hermes/approval-helpers'
+import { connectionIdFromRequest, connectRequestPrefix } from '@/lib/hermes/connect-request'
+import type { ApprovalStatus } from '@/collections/Approvals'
 import type { Connection, Workspace } from '@/payload-types'
 
 /**
@@ -79,8 +82,74 @@ export async function GET(req: NextRequest) {
     outcome = 'failed'
   }
 
+  // A run may be parked on this exact connection (`connect_app` in
+  // `lib/teams/tools.ts`). Settling its approval here is what makes the turn
+  // resume by itself — the person finishes at the third party, the browser
+  // lands back on this route, and the agent carries on without anybody
+  // pressing anything. The wait may be held in another process entirely, which
+  // is why `resolveApproval` announces over LISTEN/NOTIFY rather than only
+  // resolving an in-memory waiter.
+  //
+  // `pending` is deliberately NOT settled: Composio's INITIALIZING/INITIATED
+  // means the person is still going, and waking the run to tell it "not
+  // connected" while the consent screen is still open would end the flow that
+  // was about to succeed.
+  if (outcome !== 'pending') {
+    await settleParkedConnectRequest(connectionId, user.id, outcome === 'connected')
+  }
+
   const destination = workspace?.slug
     ? `/workspace/${workspace.slug}/settings/connectors?connection=${connectionId}&result=${outcome}`
     : '/'
   return NextResponse.redirect(new URL(destination, req.nextUrl.origin))
+}
+
+/**
+ * Ends the wait of whatever run asked for this connection.
+ *
+ * Scoped three ways, and each one is load-bearing. To `pending`, so a refresh
+ * of this URL cannot reopen and re-settle a request that already resolved. To
+ * the signed-in user, because the approval belongs to the person it was raised
+ * against and this route is reachable by anyone holding the link. And the
+ * parsed connection id is re-checked in code rather than trusted to the `like`
+ * match, because a prefix search is a substring search and reasoning about
+ * which ids it cannot also match is exactly the kind of argument that stops
+ * being true when the id format changes.
+ *
+ * Best-effort: the connection itself is already reconciled and stored by the
+ * time this runs. A failure here costs the parked run its fast resume — it
+ * falls back to the ten-second poll in `waitForApproval` — and must not turn
+ * a completed authorisation into an error page for somebody mid-redirect.
+ */
+async function settleParkedConnectRequest(connectionId: number, userId: number, connected: boolean): Promise<void> {
+  await bestEffort(
+    async () => {
+      const payload = await getPayloadClient()
+      const pending: ApprovalStatus = 'pending'
+      const found = await payload.find({
+        collection: 'approvals',
+        where: {
+          and: [
+            { externalId: { like: connectRequestPrefix(connectionId) } },
+            { status: { equals: pending } },
+            { requestedUser: { equals: userId } },
+          ],
+        },
+        limit: 10,
+        depth: 0,
+        overrideAccess: true,
+      })
+      for (const row of found.docs) {
+        const externalId = String((row as { externalId?: unknown }).externalId ?? '')
+        if (connectionIdFromRequest(externalId) !== connectionId) continue
+        await resolveApproval(row.id as number, {
+          approved: connected,
+          selectedOptionId: connected ? 'connected' : undefined,
+          reason: connected ? undefined : 'connection_failed',
+        })
+      }
+    },
+    'the connection is already reconciled; a parked run falls back to its own poll',
+    { connectionId },
+  )
 }

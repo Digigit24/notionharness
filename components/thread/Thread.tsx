@@ -9,11 +9,13 @@ import { TypingIndicator } from './Marker'
 import { getToolRenderer } from './tool-renderers'
 import type { ChatThread, ChatContent, ChatMessage, TurnStats, UsageData } from '@/lib/hermes/runEvent-adapter'
 import { ThinkingBlock } from './ThinkingBlock'
+import { ConnectCard } from './ConnectCard'
 import { PermissionCard } from './PermissionCard'
 import { DiffBlock } from './DiffBlock'
 import { StreamingText } from './StreamingText'
 import { durationBetween, formatDuration } from './format-duration'
 import { classifyRunError, looksLikeAgentError } from '@/lib/hermes/classify-run-error'
+import { isConnectRequest } from '@/lib/hermes/connect-request'
 import { AlertTriangle, ChevronRight } from 'lucide-react'
 import { formatCount } from '@/lib/relative-time'
 
@@ -322,7 +324,22 @@ function renderContent(
       )
 
     case 'permission':
-      return (
+      // A connect request and a tool permission are the same event and the
+      // same parked run (see `lib/hermes/connect-request.ts` for why they
+      // share a spine); only what the reader has to DO differs, so the card
+      // is chosen here rather than branching inside one component.
+      return isConnectRequest(content.requestId) ? (
+        <ConnectCard
+          key={key}
+          requestId={content.requestId}
+          title={content.title}
+          detail={content.detail}
+          options={content.options}
+          outcome={content.outcome}
+          selectedOptionId={content.selectedOptionId}
+          reason={content.reason}
+        />
+      ) : (
         <PermissionCard
           key={key}
           requestId={content.requestId}

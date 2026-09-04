@@ -23,6 +23,8 @@ import {
 } from './shared'
 import { PaneDivider, useResizablePane } from '@/components/ui/resizable-pane'
 import { ApprovalStrip } from './approval-strip'
+import { ConnectStrip } from './connect-strip'
+import { isConnectRequest } from '@/lib/hermes/connect-request'
 import { MessageRow } from './message-row'
 import { MessageComposer } from './message-composer'
 import { PendingReplyRow } from './pending-reply-row'
@@ -278,9 +280,11 @@ export function ThreadPane({
                 .filter((row) => row.rootMessageId === rootId)
                 .map((row) => {
                   const slot = slotById(slots, row.slotId)
+                  // Same row, same poll, same endpoint — see channel-view.
+                  const Strip = isConnectRequest(row.externalId) ? ConnectStrip : ApprovalStrip
                   return (
                     <li key={`approval-${row.externalId}`} className="px-3">
-                      <ApprovalStrip
+                      <Strip
                         approval={row}
                         slotName={slot?.displayName ?? null}
                         canDecide={row.requestedUserId === currentUserId}

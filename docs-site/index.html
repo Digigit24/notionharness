@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NotionForge Engineering Dossier</title>
+<link rel="stylesheet" href="assets/docs.css">
+<style>
+  html, body { height: 100%; }
+  body { display: flex; flex-direction: column; overflow: hidden; }
+  .mast { background: var(--paper); border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+  .mast-in { max-width: var(--content-max); margin: 0 auto; padding: 0 32px; }
+  .brand { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 14px 0 0; }
+  .brand .name { font-family: var(--font-display); font-weight: 800; font-size: 20px; letter-spacing: -0.01em; display: flex; align-items: center; gap: 10px; }
+  .brand .name .mark { width: 26px; height: 26px; border-radius: 6px; background: linear-gradient(135deg, var(--accent) 0%, #0e8a93 100%); display: inline-grid; place-items: center; color: #fff; font-size: 13px; font-family: var(--font-mono); }
+  .brand .meta { font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); text-align: right; line-height: 1.5; }
+  .tabs { display: flex; gap: 4px; margin-top: 10px; }
+  .tab { appearance: none; background: none; border: 0; border-bottom: 3px solid transparent; padding: 10px 16px 12px; font: 600 15px var(--font-display); color: var(--muted); cursor: pointer; display: flex; align-items: center; gap: 10px; }
+  .tab .n { font-family: var(--font-mono); font-size: 11px; font-weight: 500; color: var(--faint); border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; }
+  .tab:hover { color: var(--ink); }
+  .tab[aria-selected="true"] { color: var(--accent-ink); border-bottom-color: var(--accent); }
+  .tab[aria-selected="true"] .n { color: var(--accent-ink); border-color: var(--accent-soft); background: var(--accent-soft); }
+  .sub { background: var(--paper-2); border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+  .sub-in { max-width: var(--content-max); margin: 0 auto; padding: 0 32px; display: flex; gap: 2px; overflow-x: auto; scrollbar-width: thin; }
+  .sub a { white-space: nowrap; padding: 9px 12px; font-size: 13.5px; color: var(--ink-2); text-decoration: none; border-bottom: 2px solid transparent; }
+  .sub a:hover { color: var(--accent-ink); }
+  .sub a.on { color: var(--accent-ink); border-bottom-color: var(--accent); font-weight: 500; }
+  .sub .grp { align-self: center; font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); padding: 0 6px 0 14px; border-left: 1px solid var(--line); margin-left: 6px; }
+  .sub .grp:first-child { border-left: 0; margin-left: 0; padding-left: 0; }
+  .frame { flex: 1 1 auto; min-height: 0; position: relative; }
+  .frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: var(--ground); }
+  .frame .empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 14px; }
+  @media (max-width: 720px) { .mast-in, .sub-in { padding: 0 14px; } .brand .meta { display: none; } .tab { padding: 8px 10px 10px; font-size: 14px; } }
+</style>
+</head>
+<body>
+<header class="mast">
+  <div class="mast-in">
+    <div class="brand">
+      <div class="name"><span class="mark">NF</span> NotionForge Engineering Dossier</div>
+      <div class="meta" id="meta">architecture · audit · developer reference<br>generated from source, 2026-09-04</div>
+    </div>
+    <nav class="tabs" role="tablist" id="tabs"></nav>
+  </div>
+</header>
+<nav class="sub" aria-label="Pages"><div class="sub-in" id="sub"></div></nav>
+<div class="frame">
+  <iframe id="pane" title="Dossier page"></iframe>
+</div>
+<script src="assets/manifest.js"></script>
+<script>
+(function () {
+  'use strict';
+  var M = window.NF_MANIFEST;
+  var tabsEl = document.getElementById('tabs'), subEl = document.getElementById('sub'), pane = document.getElementById('pane');
+  var state = { tab: null, page: null, anchor: '' };
+
+  function parse() {
+    var h = location.hash.replace(/^#\/?/, '');
+    var parts = h.split('/');
+    var tab = M.tabs.find(function (t) { return t.id === parts[0]; }) || M.tabs[0];
+    var page = tab.pages.find(function (p) { return p.id === parts[1]; }) || tab.pages.find(function (p) { return !p.group; }) || tab.pages[0];
+    return { tab: tab, page: page, anchor: parts.slice(2).join('/') };
+  }
+  function go(tab, page, anchor) { location.hash = '#/' + tab + '/' + page + (anchor ? '/' + anchor : ''); }
+  function renderTabs() {
+    tabsEl.innerHTML = '';
+    M.tabs.forEach(function (t, i) {
+      var b = document.createElement('button');
+      b.className = 'tab'; b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(t === state.tab));
+      b.innerHTML = '<span class="n">' + (i + 1) + '</span>' + t.label;
+      b.addEventListener('click', function () { go(t.id, (t.pages.find(function (p) { return !p.group; }) || t.pages[0]).id, ''); });
+      tabsEl.appendChild(b);
+    });
+  }
+  function renderSub() {
+    subEl.innerHTML = '';
+    var lastGroup = null;
+    state.tab.pages.forEach(function (p) {
+      if (p.group && p.group !== lastGroup) { var g = document.createElement('span'); g.className = 'grp'; g.textContent = p.group; subEl.appendChild(g); lastGroup = p.group; }
+      var a = document.createElement('a');
+      a.href = '#/' + state.tab.id + '/' + p.id; a.textContent = p.label; a.className = p === state.page ? 'on' : '';
+      subEl.appendChild(a);
+    });
+    var on = subEl.querySelector('a.on'); if (on) on.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+  function route() {
+    var s = parse();
+    var pageChanged = s.page !== state.page;
+    state = s;
+    renderTabs(); renderSub();
+    var src = state.page.file + (state.anchor ? '#' + state.anchor : '');
+    if (pageChanged || !pane.getAttribute('src')) pane.setAttribute('src', src);
+    else if (state.anchor) { try { pane.contentWindow.location.hash = state.anchor; } catch (e) { pane.setAttribute('src', src); } }
+    document.title = state.page.label + ' · NotionForge Dossier';
+  }
+  window.addEventListener('hashchange', route);
+  window.addEventListener('message', function (e) {
+    var d = e.data || {};
+    if (d.type === 'nf-route' && d.route) { location.hash = '#/' + d.route.replace(/^#?\/?/, ''); }
+    if (d.type === 'nf-hash') { var base = '#/' + state.tab.id + '/' + state.page.id; history.replaceState(null, '', base + (d.hash ? '/' + d.hash : '')); }
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.altKey && /^[1-3]$/.test(e.key)) { var t = M.tabs[Number(e.key) - 1]; if (t) go(t.id, t.pages[0].id, ''); }
+  });
+  route();
+})();
+</script>
+</body>
+</html>

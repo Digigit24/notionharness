@@ -17,9 +17,10 @@ export default async function Home() {
   //
   // PHASE 0 — now read from `workspace-members` rather than the legacy
   // `workspaces.owner`/`workspaces.members` pair, for the reason
-  // `app/(app)/workspace/[workspaceSlug]/layout.tsx` states at its own check:
-  // the two tables had diverged, and this picker was the surface where that
-  // showed up as "you have no workspaces" for somebody who plainly did.
+  // `app/(app)/workspace/[workspaceSlug]/layout.tsx` sets out at its own check:
+  // membership has two representations kept in step by hand, and this picker is
+  // the surface where a missed second write shows up as "you have no
+  // workspaces" for somebody who plainly does.
   const memberWorkspaceIds =
     user != null
       ? (

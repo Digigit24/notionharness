@@ -11,16 +11,27 @@ import { Sidebar } from '@/components/sidebar/sidebar'
 import { KeyboardProvider } from '@/components/keyboard/keyboard-provider'
 import { HermesNotConfiguredBanner } from '@/components/thread/hermes-not-configured-banner'
 import { HERMES_BASE_URL } from '@/lib/runtimes/hermes/api-proxy'
-import { can, loadAccess } from '@/lib/permissions'
+import { workspaceRoleAllows, type WorkspaceRole } from '@/lib/permissions'
 
-/** Every workspace this person is a member of, from `workspace-members`.
- * Duplicated in `app/(app)/page.tsx` rather than shared: both are two lines
- * over one indexed table, and a `lib/` module for it would be a third place to
- * look for an answer these two already state plainly. */
-async function memberWorkspaceIds(
+/**
+ * Every workspace this person belongs to, with their role in each.
+ *
+ * ONE query on the layout that renders on every page in the product, which is
+ * why this is not `lib/permissions`'s `loadAccess`: that answers about a single
+ * workspace and costs two queries (membership plus per-object grants), and this
+ * layout needs the whole list anyway for the workspace switcher. Asking once
+ * and reading both answers out of the result is the difference between one
+ * round trip and three on the hottest path in the app (D0).
+ *
+ * The grants half of `loadAccess` is genuinely not needed here: the gate below
+ * is `read` on the WORKSPACE, and `can()` resolves that to
+ * `workspaceRoleAllows(role, verb)` with no grant lookup at all — a per-object
+ * grant can raise access to a project, never to the workspace shell.
+ */
+async function membershipsOf(
   payload: Awaited<ReturnType<typeof getPayloadClient>>,
   userId: number,
-): Promise<number[]> {
+): Promise<{ ids: number[]; roleByWorkspace: Map<number, WorkspaceRole> }> {
   const members = await payload.find({
     collection: 'workspace-members',
     where: { user: { equals: userId } },
@@ -28,9 +39,12 @@ async function memberWorkspaceIds(
     depth: 0,
     overrideAccess: true,
   })
-  return members.docs
-    .map((doc) => (typeof doc.workspace === 'object' && doc.workspace ? doc.workspace.id : doc.workspace))
-    .filter((id): id is number => typeof id === 'number')
+  const roleByWorkspace = new Map<number, WorkspaceRole>()
+  for (const doc of members.docs) {
+    const id = typeof doc.workspace === 'object' && doc.workspace ? doc.workspace.id : doc.workspace
+    if (typeof id === 'number') roleByWorkspace.set(id, doc.role as WorkspaceRole)
+  }
+  return { ids: [...roleByWorkspace.keys()], roleByWorkspace }
 }
 
 export default async function WorkspaceLayout({
@@ -61,28 +75,38 @@ export default async function WorkspaceLayout({
   // nonexistent slug: neither case should confirm to an unauthorized caller
   // that the slug does or doesn't exist.
   //
-  // PHASE 0 — the check now reads `workspace-members` through `lib/permissions`
-  // instead of the legacy `workspaces.owner`/`workspaces.members` pair, because
-  // the two had silently diverged: this database has one row in the legacy
-  // `members` array and eight in `workspace_members`, so everybody invited
-  // through the new members screen was being sent to a 404 by this line while
-  // every other surface treated them as a member. One source of truth, and it
-  // is the one the invitation flow writes to.
+  // PHASE 0 — the check now reads `workspace-members`, the table the whole
+  // permission layer reads, instead of the legacy `workspaces.owner`/
+  // `workspaces.members` pair.
   //
-  // Strictly wider, never narrower: the backfill was verified against this
-  // database — every legacy `owner`/`members` pair has a `workspace_members`
-  // row — so nobody who could open a workspace before loses it here.
+  // Membership lives in two representations, and `lib/invitations.ts` keeps
+  // them in step by writing both on every add and remove — its own commit
+  // message names this line as the reason it must. That works and is not being
+  // undone; what it cannot do is make the duplication safe, because any future
+  // writer that forgets the second write produces a person who holds a role,
+  // appears in the members screen, and gets a 404 here. Observed live during
+  // this session, not hypothesised: two rows existed in `workspace_members`
+  // (roles `viewer` and `admin` in workspace 1) with no counterpart in the
+  // legacy array, and this line would have refused both. Reading the
+  // authoritative table removes the whole class.
+  //
+  // Strictly wider, never narrower — measured against this database: every
+  // legacy `owner`/`members` pair has a `workspace_members` row, so nobody who
+  // could open a workspace before loses it here. It is also the first version
+  // of this check that can tell roles apart at all; `read` is deliberately the
+  // verb, so a `viewer` still gets the shell.
   if (!currentUser) notFound()
-  const access = await loadAccess(currentUser.id, workspace.id)
-  if (!can(access, 'read', 'workspace')) notFound()
+  const { ids: memberWorkspaceIds, roleByWorkspace } = await membershipsOf(payload, currentUser.id)
+  const role = roleByWorkspace.get(workspace.id)
+  if (!role || !workspaceRoleAllows(role, 'read')) notFound()
 
   const [workspaces, pages, ambientStatus, unreadNotificationCount, channels] = await Promise.all([
     payload.find({
       collection: 'workspaces',
-      // The workspace switcher's list, from the same table the check above
-      // uses — a switcher that offers a workspace the layout then 404s is
-      // worse than one that omits it.
-      where: { id: { in: await memberWorkspaceIds(payload, currentUser.id) } },
+      // The workspace switcher's list, out of the same query the check above
+      // already made — a switcher that offers a workspace the layout then 404s
+      // is worse than one that omits it, and this costs nothing extra.
+      where: { id: { in: memberWorkspaceIds } },
       limit: 100,
       sort: 'name',
       overrideAccess: true,

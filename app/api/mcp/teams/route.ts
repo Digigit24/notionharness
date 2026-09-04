@@ -30,6 +30,7 @@ import { getRun } from '@/lib/broker/runs'
 import {
   resolveTeamCaller,
   teamClaimTask,
+  teamConnectApp,
   teamCreateTask,
   teamListTasks,
   teamReact,
@@ -289,6 +290,39 @@ function buildServer(caller: TeamCaller) {
     async ({ task, summary }) => {
       try {
         return textResult(await teamReportDone(caller, { task, summary }))
+      } catch (error) {
+        return errorResult(error)
+      }
+    },
+  )
+
+  // Registered on THIS server rather than on `/api/mcp` because this is the
+  // one a dispatched member actually reaches: the only MCP plugin rows in the
+  // database point here, and `lib/plugins/resolve.ts` substitutes the
+  // `{{TEAM_SLOT_ID}}` header this endpoint needs. A tool on a server nothing
+  // is configured to call is a tool that does not exist.
+  server.registerTool(
+    'connect_app',
+    {
+      description:
+        'Ask the person you are working for to authorise a third-party app (Gmail, Slack, GitHub, …) so you can ' +
+        'use it. THIS CALL BLOCKS while they sign in, and can take several minutes — that is expected, not a ' +
+        'hang, so do not abandon it and do not call it twice for the same app. It returns `connected: true` once ' +
+        'the authorisation is live, and a reason when it is not. Call it only when a tool you need has actually ' +
+        'refused for want of a connection; if it returns `connected: false`, say what you could not do and carry ' +
+        'on rather than asking again.',
+      inputSchema: {
+        toolkit: z
+          .string()
+          .trim()
+          .min(1)
+          .max(100)
+          .describe("The app's slug, e.g. 'gmail', 'slack', 'github'. Not a display name."),
+      },
+    },
+    async ({ toolkit }) => {
+      try {
+        return textResult(await teamConnectApp(caller, { toolkit }))
       } catch (error) {
         return errorResult(error)
       }

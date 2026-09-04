@@ -11,10 +11,40 @@ import { logger } from '@/lib/logger'
  * must never scale with concurrent viewers. */
 const CHANNEL = 'run_events'
 
+/**
+ * The one connection now carries more than one channel.
+ *
+ * `run_events` was the only subscriber until an approval waiter needed to be
+ * woken across processes (`lib/hermes/approval-helpers.ts`). The obvious
+ * alternative — a second dedicated `Client` for the approvals channel — was
+ * rejected for the reason stated above: the shared Postgres instance has a low
+ * connection cap, and "one more long-lived connection per thing that wants a
+ * push" is how an installation runs out of them. LISTEN is cheap and a single
+ * connection can carry any number of channels, so the set is tracked here and
+ * re-issued on every dial, including a reconnect after a dropped connection —
+ * without which a reconnect would silently resume delivering only whichever
+ * channel happened to re-subscribe first.
+ */
 declare global {
   var _notionforgeRunEventEmitter: EventEmitter | undefined
   var _notionforgeListenClient: Client | null | undefined
   var _notionforgeListenConnecting: Promise<void> | null | undefined
+  var _notionforgeListenChannels: Set<string> | undefined
+}
+
+function subscribedChannels(): Set<string> {
+  if (!global._notionforgeListenChannels) global._notionforgeListenChannels = new Set<string>()
+  return global._notionforgeListenChannels
+}
+
+/** LISTEN takes an identifier, not a bound parameter, so the name is
+ * interpolated. Every channel name in this codebase is a module-level
+ * constant, and this makes that fact enforced rather than assumed. */
+function assertChannelName(channel: string): string {
+  if (!/^[a-z][a-z0-9_]{0,62}$/.test(channel)) {
+    throw new Error(`Refusing to LISTEN on "${channel}": a channel name must be a plain lower-case identifier.`)
+  }
+  return channel
 }
 
 function getEmitter(): EventEmitter {
@@ -29,7 +59,18 @@ function getEmitter(): EventEmitter {
   return global._notionforgeRunEventEmitter
 }
 
-async function ensureListening(): Promise<void> {
+async function ensureListening(channel: string): Promise<void> {
+  subscribedChannels().add(assertChannelName(channel))
+  await dial()
+  // Issued after the dial rather than inside it so a channel added while the
+  // connection already exists starts delivering immediately. LISTEN is
+  // idempotent, so repeating it for a channel already registered costs one
+  // cheap round-trip and changes nothing.
+  const client = global._notionforgeListenClient
+  if (client) await client.query(`LISTEN ${channel}`)
+}
+
+async function dial(): Promise<void> {
   if (global._notionforgeListenClient) return
   if (global._notionforgeListenConnecting) {
     await global._notionforgeListenConnecting
@@ -40,9 +81,19 @@ async function ensureListening(): Promise<void> {
     const client = new Client({ connectionString: process.env.DATABASE_URI || '' })
 
     client.on('notification', (msg) => {
+      if (!msg.channel) return
+      // The generic path: every subscriber to this channel gets the raw
+      // payload. Emitted before the run-specific decoding below so a
+      // malformed `run_events` payload cannot swallow an unrelated channel.
+      getEmitter().emit(`channel:${msg.channel}`, msg.payload ?? '')
+
       if (msg.channel !== CHANNEL || !msg.payload) return
       try {
         const { runId } = JSON.parse(msg.payload) as { runId: number }
+        // Kept as its own emit rather than folded into the generic path: a
+        // busy workspace has one SSE stream per open transcript, and making
+        // each of them parse every other run's notification would turn one
+        // decode per event into N.
         if (typeof runId === 'number') getEmitter().emit(`run:${runId}`)
       } catch {
         // Malformed payload — the SSE route's own fallback poll (see
@@ -66,7 +117,12 @@ async function ensureListening(): Promise<void> {
     })
 
     await client.connect()
-    await client.query(`LISTEN ${CHANNEL}`)
+    // Every channel anyone has ever subscribed to in this process, not just
+    // the one that triggered this dial: after a reconnect the emitter still
+    // holds the other channels' listeners, and re-issuing only one of them
+    // would leave those listeners attached to a connection that never
+    // delivers to them again.
+    for (const name of subscribedChannels()) await client.query(`LISTEN ${name}`)
     global._notionforgeListenClient = client
   })()
 
@@ -89,11 +145,38 @@ async function ensureListening(): Promise<void> {
  * the caller's fallback poll is what guarantees delivery in that case, not
  * this function throwing. */
 export async function subscribeToRunNotifications(runId: number, onNotify: () => void): Promise<() => void> {
-  await ensureListening().catch((err) => {
+  await ensureListening(CHANNEL).catch((err) => {
     logger.error('could not establish the LISTEN connection — falling back to polling only', err, { runId })
   })
   const emitter = getEmitter()
   const event = `run:${runId}`
+  emitter.on(event, onNotify)
+  return () => emitter.off(event, onNotify)
+}
+
+/**
+ * Push wake-ups for one named channel, payload and all.
+ *
+ * The general form of `subscribeToRunNotifications`, for a caller that has to
+ * be woken by something a DIFFERENT PROCESS did — the case that motivated it
+ * is an approval waiter parked inside a turn, settled by an HTTP request that
+ * may be served anywhere (`lib/hermes/approval-helpers.ts`).
+ *
+ * Resolves even when the connection cannot be established, exactly as
+ * `subscribeToRunNotifications` does and for the same reason: a subscriber
+ * that treats this as its only delivery mechanism is already wrong, so
+ * throwing here would convert a degraded push into a hard failure. Every
+ * caller is expected to have a slower fallback of its own.
+ */
+export async function subscribeToNotifications(
+  channel: string,
+  onNotify: (payload: string) => void,
+): Promise<() => void> {
+  await ensureListening(channel).catch((err) => {
+    logger.error('could not establish the LISTEN connection — falling back to polling only', err, { channel })
+  })
+  const emitter = getEmitter()
+  const event = `channel:${channel}`
   emitter.on(event, onNotify)
   return () => emitter.off(event, onNotify)
 }

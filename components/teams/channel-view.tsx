@@ -13,6 +13,8 @@ import {
   toggleReactionAction,
 } from '@/app/(app)/workspace/[workspaceSlug]/teams/actions'
 import { ApprovalStrip } from './approval-strip'
+import { ConnectStrip } from './connect-strip'
+import { isConnectRequest } from '@/lib/hermes/connect-request'
 import { MessageComposer, type SlashCommandRunner } from './message-composer'
 import { MessageRow } from './message-row'
 import { PendingReplyRow } from './pending-reply-row'
@@ -700,9 +702,12 @@ export function ChannelView({
                     below it has stopped moving. */}
                 {rowApprovals?.map((row) => {
                   const slot = slotById(slots, row.slotId)
+                  // A parked connection wears the same row as a parked
+                  // permission and differs only in what it asks of the reader.
+                  const Strip = isConnectRequest(row.externalId) ? ConnectStrip : ApprovalStrip
                   return (
                     <li key={`approval-${row.externalId}`} className="ml-9 px-1.5">
-                      <ApprovalStrip
+                      <Strip
                         approval={row}
                         slotName={slot?.displayName ?? null}
                         canDecide={row.requestedUserId === currentUserId}

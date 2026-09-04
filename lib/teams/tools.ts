@@ -65,6 +65,7 @@
 import {
   claimTeamTask,
   createTeamTask,
+  getTeam,
   getTeamMember,
   getTeamTask,
   listTeamMembers,
@@ -86,6 +87,12 @@ import {
   toggleReaction,
   type ChannelMessage,
 } from '@/lib/broker/channels'
+import { appendRunEvent } from '@/lib/broker/messages'
+import { getRun } from '@/lib/broker/runs'
+import { createPendingApproval, waitForApproval } from '@/lib/hermes/approval-helpers'
+import { connectRequestExternalId } from '@/lib/hermes/connect-request'
+import type { ApprovalOption } from '@/collections/Approvals'
+import type { PermissionOption } from '@/lib/run-events'
 import { runTeamToolOnce, touchAndReadTeamSlot } from './reliability'
 
 /** How long an identical call counts as a retry rather than a repeat, for the
@@ -826,4 +833,299 @@ async function reportDoneEffect(
     null,
     2,
   )
+}
+
+// --- Connecting a third-party app -------------------------------------------
+
+/**
+ * How long a run parked on a connection waits before giving up.
+ *
+ * A permission request waits five minutes (`lib/dispatcher/worker.ts`), which
+ * is the right number for a question answered by pressing a button on a screen
+ * the person is already looking at. This is not that. Answering this means
+ * leaving the app, signing in to a third party, very likely opening a password
+ * manager, very likely completing a second factor on a phone that is in
+ * another room, and choosing which account to authorise. Fifteen minutes is
+ * not generosity — five would time out flows that were about to succeed, and
+ * the person would come back to a run that had already given up on work they
+ * had just finished doing.
+ *
+ * It is still bounded. An unbounded wait would hold the agent's concurrency
+ * slot and its lease for as long as a forgotten tab stayed open, which is how
+ * one abandoned consent screen stops an agent answering anybody else.
+ */
+const CONNECT_TIMEOUT_MS = 15 * 60_000
+
+/**
+ * `connect_app(toolkit)` — ask the accountable person to authorise a
+ * third-party app, and PARK the turn until they have.
+ *
+ * **It reuses the approval spine and adds nothing beside it.**
+ * `createPendingApproval` then `waitForApproval` then `/api/approvals` is
+ * already the one way a run blocks on a person; this raises the same row,
+ * waits on the same waiter, and is settled through the same endpoint. What the
+ * connector callback does when the browser comes back from the third party is
+ * resolve that same approval (`app/api/connectors/callback/route.ts`). The
+ * reason the waiter had to move onto LISTEN/NOTIFY first is exactly this path:
+ * the wait below lives in an MCP route handler and the decision arrives on a
+ * DIFFERENT request, which nothing guarantees is served by the same process.
+ *
+ * **The permission rule is not re-implemented here.**
+ * `resolveConnectorsForRun` is the union-of-scopes plus the intersection rule
+ * from `lib/permissions/model.ts`, and it is the only thing that decides
+ * whether this agent may reach this app at all. An agent that could start a
+ * connection for a toolkit nobody granted it would be using the person in
+ * front of it as a way around its own permissions — and that person would be
+ * looking at a real, entirely legitimate consent screen at the third party,
+ * which is the worst possible place to discover the check was skipped.
+ *
+ * **Nothing here believes the browser about the outcome.** The card's button
+ * says "I have connected it", and pressing it only ENDS THE WAIT; the status
+ * is then re-read from Composio by `syncConnection`, and that is what this
+ * returns. An impatient click produces an honest "still not connected", never
+ * a run proceeding as though it held a credential it does not have.
+ */
+export async function teamConnectApp(caller: TeamCaller, input: { toolkit: string }): Promise<string> {
+  const slug = input.toolkit.trim().toLowerCase()
+  if (!slug) throw new TeamPermissionError('Name the app to connect, for example "gmail".')
+
+  const [team, run] = await Promise.all([getTeam(caller.teamId), getRun(caller.runId)])
+  if (!team) throw new TeamPermissionError('This team no longer exists.')
+  if (!run) throw new TeamPermissionError('This run no longer exists.')
+
+  // Imported at call time, not at module load. `lib/connectors/**` and
+  // `lib/payload` are all `server-only`, which throws outside a React server
+  // runtime — and `scripts/test-teams-mcp.ts` imports this module directly so
+  // the tool bodies can be exercised without HTTP. A static import would break
+  // that script at load, over a dependency nine of the ten tools never touch.
+  const [
+    { resolveConnectorsForRun },
+    { findOrCreateAuthConfig, startConnection },
+    { syncConnection },
+    { getPayloadClient },
+  ] = await Promise.all([
+    import('@/lib/connectors/scope'),
+    import('@/lib/connectors/composio'),
+    import('@/lib/connectors/sync'),
+    import('@/lib/payload'),
+  ])
+
+  const workspaceId = team.workspaceId
+  const accountableUserId = run.accountableUser
+
+  // `projectId: null` is an honest limitation, not an oversight: a team slot
+  // knows its team and its run, and neither carries a project. A
+  // project-scoped connector is therefore invisible here, and this fails
+  // CLOSED — the agent is told the app is unavailable rather than handed a
+  // connection nobody granted it.
+  const resolved = await resolveConnectorsForRun({
+    workspaceId,
+    agentId: caller.agentId,
+    accountableUserId,
+    projectId: null,
+  })
+  const entry = resolved.find((row) => row.connector.toolkitSlug.trim().toLowerCase() === slug)
+
+  if (!entry) {
+    // Deliberately a returned answer rather than a thrown refusal: "no such
+    // connector" is a fact about how the workspace is configured, not a rule
+    // the agent broke, and a model reads a refusal as something it did wrong
+    // and often tries to work around.
+    return JSON.stringify(
+      {
+        connected: false,
+        reason: 'no_connector',
+        message:
+          `"${slug}" is not switched on in this workspace, so there is nothing to connect to. ` +
+          'A workspace admin adds it in Settings, under Connectors. Carry on without it.',
+      },
+      null,
+      2,
+    )
+  }
+  if (entry.reason === 'no_access') {
+    throw new TeamPermissionError(
+      `You are not permitted to use "${slug}" — either this agent's access does not cover it, or the person ` +
+        'you are acting for does not have it. Asking them to connect it would not change that.',
+    )
+  }
+  if (entry.usable) {
+    return JSON.stringify(
+      {
+        connected: true,
+        toolkit: slug,
+        message: `${entry.connector.name} is already connected. Go ahead and use it.`,
+      },
+      null,
+      2,
+    )
+  }
+
+  const payload = await getPayloadClient()
+
+  // Upsert, exactly as `connectToolkit` in the connectors settings actions
+  // does and for the reason stated there: `collections/Connections.ts` is one
+  // row per (user, workspace, toolkit), so an abandoned attempt is reused
+  // rather than accumulating a row per ask. The row is created BEFORE Composio
+  // is called because the callback URL carries its id and nothing else.
+  const existing = await payload.find({
+    collection: 'connections',
+    where: {
+      and: [
+        { workspace: { equals: workspaceId } },
+        { user: { equals: accountableUserId } },
+        { toolkitSlug: { equals: slug } },
+      ],
+    },
+    limit: 1,
+    depth: 0,
+    overrideAccess: true,
+  })
+  const previous = existing.docs[0]
+  const rowId: number = previous
+    ? ((
+        await payload.update({
+          collection: 'connections',
+          id: previous.id,
+          data: {
+            status: 'pending',
+            statusDetail: null,
+            requestedByRun: caller.runId,
+            lastCheckedAt: new Date().toISOString(),
+          },
+          overrideAccess: true,
+        })
+      ).id as number)
+    : ((
+        await payload.create({
+          collection: 'connections',
+          data: {
+            workspace: workspaceId,
+            user: accountableUserId,
+            toolkitSlug: slug,
+            status: 'pending',
+            requestedByRun: caller.runId,
+            lastCheckedAt: new Date().toISOString(),
+          },
+          overrideAccess: true,
+        })
+      ).id as number)
+
+  const authConfigId = entry.connector.authConfigId || (await findOrCreateAuthConfig(workspaceId, slug))
+  const started = await startConnection({
+    workspaceId,
+    userId: accountableUserId,
+    authConfigId,
+    callbackUrl: connectorCallbackUrl(rowId),
+  })
+  await payload.update({
+    collection: 'connections',
+    id: rowId,
+    data: { composioConnectedAccountId: started.connectedAccountId, redirectUrl: started.redirectUrl },
+    overrideAccess: true,
+  })
+
+  const externalId = connectRequestExternalId(rowId, caller.runId)
+  const title = `Connect ${entry.connector.name}`
+  const detail =
+    `${caller.displayName} needs your ${entry.connector.name} account to carry on. ` +
+    'You sign in at the app itself; no password or token is stored here.'
+  // Two options, both of which `/api/approvals` already understands. "I have
+  // connected it" is the escape hatch for when the callback never fires — a
+  // blocked popup, a browser that ate the redirect — and NOT the normal path.
+  // The normal path is the callback resolving this request by itself while the
+  // person is still looking at the third party.
+  const options: PermissionOption[] = [
+    { optionId: 'connected', kind: 'allow_once', label: 'I have connected it' },
+    { optionId: 'skip', kind: 'reject_once', label: 'Skip' },
+  ]
+
+  await createPendingApproval({
+    runId: caller.runId,
+    externalId,
+    requestedUserId: accountableUserId,
+    title,
+    detail,
+    // `reject_once` is ACP's vocabulary, which the cards read; the collection
+    // spells the same thing `deny_once`. Translated at the boundary rather
+    // than letting either vocabulary leak into the other's storage.
+    options: options.map((option) => ({
+      optionId: option.optionId,
+      kind: (option.kind === 'reject_once' ? 'deny_once' : option.kind) as ApprovalOption['kind'],
+      label: option.label,
+    })),
+  })
+
+  // The card in the transcript. Written as a `permission` event on purpose:
+  // the transcript already renders a blocked run, and a third event type would
+  // be a third rendering path for the same "this run is waiting on you".
+  // `appendRunEvent` also NOTIFYs, so an open SSE stream paints it without
+  // waiting for its fallback poll.
+  await appendRunEvent(caller.runId, { type: 'permission', id: externalId, title, detail, options })
+
+  const outcome = await waitForApproval(externalId, CONNECT_TIMEOUT_MS)
+
+  // Whatever the person pressed, the truth comes from Composio.
+  // `syncConnection` is the one place that mapping lives, and it verifies the
+  // connected account belongs to this row's own user before believing it.
+  let status = 'pending'
+  let statusDetail: string | null = null
+  try {
+    const synced = await syncConnection({ workspaceId, connectionId: rowId, viewerUserId: accountableUserId })
+    status = synced.status
+    statusDetail = synced.statusDetail
+  } catch (error) {
+    // A verification that could not run is NOT a connection. Recorded as the
+    // detail and reported as unconnected, because the alternative — assuming
+    // it worked because the person said so — is the one outcome that puts an
+    // agent to work with a credential it may not have.
+    statusDetail = error instanceof Error ? error.message : String(error)
+  }
+  const connected = status === 'active'
+
+  await appendRunEvent(caller.runId, {
+    type: 'permission',
+    id: externalId,
+    title,
+    detail,
+    options,
+    outcome: connected ? 'selected' : 'cancelled',
+    selectedOptionId: connected ? 'connected' : undefined,
+    reason: connected ? undefined : outcome.outcome === 'cancelled' ? (outcome.reason ?? 'skipped') : 'not_connected',
+  })
+
+  return JSON.stringify(
+    {
+      connected,
+      toolkit: slug,
+      status,
+      detail: statusDetail,
+      message: connected
+        ? `${entry.connector.name} is connected now. Carry on with what you were doing.`
+        : outcome.outcome === 'cancelled' && outcome.reason === 'timeout'
+          ? `Nobody finished authorising ${entry.connector.name} in time. Say what you could not do, and do not ` +
+            'call this again in this turn.'
+          : `${entry.connector.name} is still not connected. Say what you could not do and carry on without it.`,
+    },
+    null,
+    2,
+  )
+}
+
+/**
+ * Where Composio sends the browser back to, built from `NOTIONFORGE_URL`.
+ *
+ * A second copy of the settings actions' `callbackUrlFor` rather than an
+ * import: that file is a `'use server'` module and the helper is not exported,
+ * and exporting it would publish an endpoint to the browser for no reason. The
+ * env var is the shared fact, and it is the right source here for exactly the
+ * reason it is there — a connection started by a run may be started nowhere
+ * near the browser that will finish it, so there is no incoming request to
+ * derive an origin from.
+ */
+function connectorCallbackUrl(connectionId: number): string {
+  const base = (process.env.NOTIONFORGE_URL || 'http://localhost:3000').replace(/\/$/, '')
+  const url = new URL(`${base}/api/connectors/callback`)
+  url.searchParams.set('connection', String(connectionId))
+  return url.toString()
 }
