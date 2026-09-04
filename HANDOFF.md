@@ -1,6 +1,6 @@
 # Handoff — 2026-09-05
 
-Main is at `e602959`, builds clean, tsc clean, 102/102 vitest, running on :3000.
+Main is at `59f5222`, builds clean, tsc clean, 102/102 vitest, running on :3000 with the dispatcher loop active.
 
 ## Landed this session
 
@@ -43,23 +43,40 @@ workspace's page to a run token — fixed. ~30 server actions had no session
 check at all, including `syncPageDoc` (a page id + a Yjs update rewrote any
 document in the install).
 
-## Pending — start here
+## Update — 2026-09-05, resumed
 
-1. **Connect-from-chat (R12 phase 2)** — never started; both agents died on the
-   session rate limit. Its prerequisite is real: `pendingApprovalWaiters` in
-   `lib/hermes/approval-helpers.ts` is an in-process `Map` that only works
-   because the dispatcher runs inside Next. Move it onto LISTEN/NOTIFY
-   (`lib/broker/notify.ts`) **before** building on it. `test-mention-loop` is
-   the proof it still works.
-2. **R14-P1.1 message search** — partially built in worktree branch
+**Connect-from-chat: it actually landed.** The agent got further than its
+rate-limit error suggested. `pendingApprovalWaiters` IS moved onto a
+three-source race (in-process map, Postgres LISTEN/NOTIFY on
+`approval_decisions`, a 10s poll fallback); `connect_app(toolkit)` is a real
+MCP tool in `app/api/mcp/teams/route.ts`, reusing the approval spine exactly as
+briefed; `ConnectCard.tsx` / `connect-strip.tsx` / the callback route all
+exist. It was swept into `main` by an earlier "push all uncommitted work"
+commit rather than lost. Confirmed with `npx tsc --noEmit` (clean) and
+`test-mention-loop.ts` run live end-to-end (mention -> dispatch -> real agent
+turn -> reply), which is the specific proof the LISTEN/NOTIFY change did not
+break the run path.
+
+**Found and fixed while verifying: the dispatcher was completely dead.** The
+Phase 0 lockdown correctly makes `POST /api/dispatcher/tick` refuse with no
+`DISPATCHER_SECRET` when `NODE_ENV=production` — but `npm start` is a
+production build and no secret had ever been generated, so every run since
+that commit landed sat at `status: queued`, `run_token: null` forever. Fixed:
+generated `DISPATCHER_SECRET`, added to `.env`, restarted. Both processes
+confirmed live: server on :3000, `scripts/run-dispatcher-loop.ts` running and
+claiming runs (PID recorded in `.dispatcher-loop.pid`). Commit `59f5222`.
+
+**Still pending, unchanged from before:**
+
+1. **R14-P1.1 message search** — partially built in worktree branch
    `worktree-agent-a9b58c2928cb8be92` (died mid "query wiring and visibility
    gate"). Inspect before continuing; do not restart from scratch.
-3. **`resolveConnectorsForRun` has no consumer.** Built and tested; nothing
+2. **`resolveConnectorsForRun` has no consumer.** Built and tested; nothing
    injects connectors into a run. Do **not** fold them into `worker.ts`'s
    `sessionConfig` merge — scopes are a union, not most-specific-wins.
-4. **`payload_locked_documents_rels` lacks columns** for the five new
+3. **`payload_locked_documents_rels` lacks columns** for the five new
    collections. Pre-existing drift, flagged by the lockdown unit.
-5. **Nothing has been opened in a browser.** All verification is compile-,
+4. **Nothing has been opened in a browser.** All verification is compile-,
    lint- and database-level. Optimistic rollbacks, disabled-control
    affordances, and every new screen are visually unverified.
 
