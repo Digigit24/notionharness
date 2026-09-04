@@ -357,3 +357,33 @@ affine-menu .affine-menu-body::-webkit-scrollbar-thumb:hover {
     scroll-behavior: auto !important;
   }
 }
+
+/*
+ * R12-P2.2 — the shimmer used by `components/ui/skeleton.tsx`.
+ *
+ * A moving highlight over the flat `bg-muted` the skeleton already paints,
+ * rather than a gradient that REPLACES the background: if the animation is
+ * suppressed (the reduced-motion rule above collapses it to 0.001ms) what is
+ * left is the plain box, correctly sized and correctly coloured, instead of a
+ * gradient stopped halfway across.
+ *
+ * `background-size: 200%` with a translating position keeps this on the
+ * compositor — no layout, no paint of anything underneath, and no work at all
+ * when the element is offscreen.
+ */
+@keyframes skeleton-shimmer-sweep {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+.skeleton-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--foreground) 7%, transparent) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: skeleton-shimmer-sweep 1.6s ease-in-out infinite;
+}
