@@ -229,3 +229,88 @@ Roadmaps live in `docs/ROADMAP-A-PAGES.md` and `docs/ROADMAP-B-HARNESS.md`.
 - **Two UI bugs found by using it:** clicking "New chat" left the previous transcript on screen, because `use-run-event-stream` never cleared snapshots when the observed id changed and the `!observed` early return skipped every write path. Cleared on a real id change only, tracked by ref — clearing inside the effect would blank the transcript on every send, since `retry()` re-runs it. And a sent message showed nothing until the server answered; the optimistic bubble now renders dimmed with "Sending…" beneath it, "Not sent" on failure, and the new session appears in the rail immediately with its derived title.
 - **Corrections to the audit that produced this list:** breadcrumbs already exist on all three detail pages (they are passed through `DetailLayout`, not rendered in `page.tsx`), and `RunUsageTotals` never had a `runCount` field — it had to be added.
 - **Still open in Roadmap A:** the record detail header (A5.1), page provenance (A5.3), the persistent re-runnable block (A1.5), suggest-edits page writes (A3.5), and the remaining free wins on projects list rows and the tasks `?project=` filter.
+
+## Standing constraint: latency is the first priority (2026-09-04)
+
+Stated by the user as binding on all future work, and written here so it
+survives this session: **speed and latency come first, and anything that
+reduces them gets dropped.** The full form, with the specific things it
+forbids and the known debt it leaves open, is `docs/ROADMAP-SERIES.md` under
+"D0". The short version:
+
+- No CRDT on a streaming path. A Yjs document is for durable artifacts, never
+  for a high-frequency append-only feed — every token would become a document
+  update and a write.
+- No round trip on the send path. Enter paints immediately; the server
+  confirms afterwards.
+- No N queries where one will do, no sequential awaits that could be
+  `Promise.all`, no new polling interval where LISTEN/NOTIFY or SSE already
+  reaches the same data.
+- Nothing blocks a first render on spawning or waking an external process.
+  Warm it off the render path and say it is warming.
+- Everything unbounded caps and virtualises: transcripts, feeds, boards,
+  terminals.
+- A change that adds a query, a fetch or a subscription states its cost when
+  it lands.
+
+## R1 delivered — the harness is runtime-neutral (2026-09-04)
+
+- **The twelve Hermes-specific files now live in `lib/runtimes/hermes/`**; the
+  protocol core (`acp-client`, `terminal-buffer`, `unified-diff`, `spawn-env`,
+  `runEvent-adapter`, `classify-run-error`, `run-events`) stayed put, and
+  `components/hermes/` became `components/thread/` because all 24 of those
+  components render the `RunEvent` contract and contain nothing Hermes.
+- **The import cycle is gone.** `ApprovalOutcome` moved into
+  `lib/run-events.ts` beside `PermissionOption`, where it belongs — it is a
+  protocol shape, and having the dispatcher import it from the ACP client is
+  what made core and runtime import each other.
+- **The client-bundle risk was checked before the move, not after**: all seven
+  `'use client'` files importing Hermes modules do so `import type` only, so
+  nothing server-only was ever reaching a browser bundle.
+- **Detection is now protocol-level** (`lib/runtimes/detect.ts`): two steps,
+  reported separately, because "the binary is not here" and "the binary is
+  here but never handshook" are different problems with different fixes.
+  Stable codes (`command_not_found`, `acp_init_failed`, `acp_init_timeout`,
+  `spawn_failed`) rather than translated strings, and a 20s timeout — the
+  reference implementation's equivalent probe has none and their own docs
+  record that it hangs forever when a CLI hangs. Verified live against the
+  real Hermes binary (643ms, `ok`), a missing binary, and a binary that exists
+  but is not ACP; all three returned distinct codes.
+- **The handshake is stored verbatim** on the runtime profile (`handshake`,
+  `lastProbeCode`, `lastProbeDetail`, `lastProbedAt`; columns applied
+  directly, since `payload migrate` refuses on a dev-pushed database). Not
+  folded into flags we maintain: a capability matrix in our code is a set of
+  claims about other people's software that goes stale on their release
+  schedule. Capability helpers return a **tri-state** — `undefined` means "not
+  probed", which is genuinely different from `false`. Hermes reports
+  `loadSession: true` (so session resume is available, R3.1) and offers no
+  `availableModels` (its model is config-driven), which is exactly the case
+  the tri-state exists for.
+- **`pingAcpRuntime` no longer uses Hermes's `--check` flag** and the starter
+  seeder honours `ACP_RUNTIME_COMMAND` before falling back to Hermes guesses.
+
+### The finding that changes D1, and does not break it
+
+**ACP is native only to Hermes.** Both other CLIs are installed on this
+machine and were inspected: Claude Code 2.1.259 speaks stream-json over stdio
+(the Agent SDK protocol), Codex 0.144.4 speaks `app-server` JSON-RPC. Neither
+contains any ACP string. Zed publishes adapters for both
+(`@zed-industries/claude-agent-acp`, `zed-industries/codex-acp`).
+
+The resolution keeps the design intact: **a runtime profile's command points
+at the ACP adapter, not the raw CLI.** ACP stays the single interface, adding
+a CLI stays data rather than code, and `probeAcpRuntime` works unchanged
+because it speaks ACP to whatever binary is named. What we must NOT do is
+write our own per-runtime transport adapters; that is the version where the
+abstraction rots.
+
+Two facts for R2's home materialiser: both CLIs relocate their home by env var
+(`CLAUDE_CONFIG_DIR`, `CODEX_HOME`) and both use a `skills/<name>/` pool, so
+the junction logic ports directly. But **Codex keeps memory and session state
+in SQLite at the home root**, so per-agent isolation there means a whole
+`CODEX_HOME` per agent rather than selective junctions. Claude Code can take
+instructions, agents and MCP entirely on the command line
+(`--append-system-prompt`, `--agents`, `--mcp-config`), so a thinner overlay
+carrying only skills and memory is enough there. Unverified: whether
+`CLAUDE_CONFIG_DIR` also relocates `~/.claude.json`, which holds MCP servers
+and auth.

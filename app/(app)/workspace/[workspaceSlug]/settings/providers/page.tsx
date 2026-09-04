@@ -1,8 +1,8 @@
 import { notFound } from 'next/navigation'
 import { getWorkspaceBySlug } from '@/lib/pages-cache'
 import { Breadcrumbs } from '@/components/nav/breadcrumbs'
-import { getActiveModelConfig, listKnownProviders, listProviderEnvSlots, listProviderKeyStatus } from '@/lib/hermes/providers'
-import { listHermesProfiles } from '@/lib/hermes/profiles'
+import { getActiveModelConfig, listKnownProviders, listProviderEnvSlots, listProviderKeyStatus } from '@/lib/runtimes/hermes/providers'
+import { listHermesProfiles } from '@/lib/runtimes/hermes/profiles'
 import { ProvidersView } from '@/components/providers/providers-view'
 
 export default async function ProvidersPage({

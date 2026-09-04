@@ -36,7 +36,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'id (or externalId) and decision are required' }, { status: 400 })
   }
 
-  // The in-chat approval card (components/hermes/PermissionCard) only ever
+  // The in-chat approval card (components/thread/PermissionCard) only ever
   // sees the ACP request id from the RunEvent stream — the `approvals` row is
   // created inside the dispatcher, after the card has already been painted, so
   // its numeric id is not something the transcript can carry. Resolving by

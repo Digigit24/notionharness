@@ -488,6 +488,18 @@ export interface RuntimeProfile {
     | boolean
     | null;
   enabled?: boolean | null;
+  handshake?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  lastProbeCode?: string | null;
+  lastProbeDetail?: string | null;
+  lastProbedAt?: string | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -1146,6 +1158,10 @@ export interface RuntimeProfilesSelect<T extends boolean = true> {
   commandName?: T;
   fixedArgs?: T;
   enabled?: T;
+  handshake?: T;
+  lastProbeCode?: T;
+  lastProbeDetail?: T;
+  lastProbedAt?: T;
   updatedAt?: T;
   createdAt?: T;
 }

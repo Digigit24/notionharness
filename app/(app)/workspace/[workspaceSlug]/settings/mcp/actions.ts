@@ -9,7 +9,7 @@ import {
   testMcpServer,
   type ServeMcpServer,
   type ServeProfile,
-} from '@/lib/hermes/serve-client'
+} from '@/lib/runtimes/hermes/serve-client'
 
 /**
  * MCP servers, per Hermes profile.

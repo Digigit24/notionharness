@@ -1,6 +1,6 @@
 import { getPayloadClient } from '@/lib/payload'
 import type { ApprovalOption, ApprovalStatus } from '@/collections/Approvals'
-import type { ApprovalOutcome } from './acp-client'
+import type { ApprovalOutcome } from '@/lib/run-events'
 
 const pendingApprovalWaiters = new Map<
   string,

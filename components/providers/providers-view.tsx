@@ -7,8 +7,8 @@ import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from '@/hooks/use-toast'
 import { clearProviderKey, switchActiveProvider, updateProviderKey } from '@/app/(app)/workspace/[workspaceSlug]/settings/providers/actions'
-import type { ActiveModelConfig, ProviderEnvSlot, ProviderKeyStatus, ProviderModelInfo } from '@/lib/hermes/providers'
-import type { HermesProfileSummary } from '@/lib/hermes/profiles'
+import type { ActiveModelConfig, ProviderEnvSlot, ProviderKeyStatus, ProviderModelInfo } from '@/lib/runtimes/hermes/providers'
+import type { HermesProfileSummary } from '@/lib/runtimes/hermes/profiles'
 
 export function ProvidersView({
   workspaceSlug,

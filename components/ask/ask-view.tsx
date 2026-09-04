@@ -5,7 +5,7 @@ import { Bot, Send, Square } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { ConnectionStatusBanner, Thread } from '@/components/hermes'
+import { ConnectionStatusBanner, Thread } from '@/components/thread'
 import { useRunEventStream } from '@/components/runs/use-run-event-stream'
 import {
   cancelAskRun,
@@ -14,7 +14,7 @@ import {
   getAskRunSnapshots,
 } from '@/app/(app)/workspace/[workspaceSlug]/ask/actions'
 import { EmptyState } from '@/components/ui/empty-state'
-import type { ActiveModelConfig } from '@/lib/hermes/providers'
+import type { ActiveModelConfig } from '@/lib/runtimes/hermes/providers'
 import { adaptRunSnapshotsToThread, type ChatMessage, type ChatThread } from '@/lib/hermes/runEvent-adapter'
 
 /** Shown only on a genuinely empty conversation — clicking one sends it. */

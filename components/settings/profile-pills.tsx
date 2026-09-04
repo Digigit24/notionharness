@@ -1,7 +1,7 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
-import type { ServeProfile } from '@/lib/hermes/serve-client'
+import type { ServeProfile } from '@/lib/runtimes/hermes/serve-client'
 
 /**
  * The profile switcher every Hermes-backed settings section shares.

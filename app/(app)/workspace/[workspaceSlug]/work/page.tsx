@@ -1,7 +1,7 @@
 import { notFound } from 'next/navigation'
 import { getPayloadClient } from '@/lib/payload'
 import { getWorkspaceBySlug } from '@/lib/pages-cache'
-import { getActiveModelConfig, type ActiveModelConfig } from '@/lib/hermes/providers'
+import { getActiveModelConfig, type ActiveModelConfig } from '@/lib/runtimes/hermes/providers'
 import { listSessions } from '@/lib/broker'
 import { WorkView } from '@/components/work/work-view'
 

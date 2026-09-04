@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { Maximize2, X } from 'lucide-react'
 import { getRunMessages, getTaskActivity, getTaskRuns, updateTaskFields } from '@/app/(app)/workspace/[workspaceSlug]/tasks/actions'
-import { ThreadDrawerTab } from '@/components/hermes'
+import { ThreadDrawerTab } from '@/components/thread'
 import type { Activity, Agent, Project, Task, TaskStatus, User, Workspace } from '@/payload-types'
 import { formatTimestamp } from '@/lib/relative-time'
 

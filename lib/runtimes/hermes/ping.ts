@@ -1,6 +1,5 @@
-import { execFile } from 'node:child_process'
-import { buildSpawnEnv } from './spawn-env'
 import { checkHermesBashProbePatch } from './install-checks'
+import { probeAcpRuntime } from '@/lib/runtimes/detect'
 
 export interface RuntimePingResult {
   ok: boolean
@@ -18,7 +17,6 @@ export interface RuntimePingResult {
   warning?: string
 }
 
-const PING_TIMEOUT_MS = 10_000
 
 /**
  * "Test connection" for an agent's runtime profile — spawns the ACP binary
@@ -30,29 +28,27 @@ const PING_TIMEOUT_MS = 10_000
  * installed, importable, and runnable on this machine, which is the
  * narrower, safer thing a lightweight ping button should check.
  */
+/**
+ * "Test connection" for an agent's runtime.
+ *
+ * Now a real ACP handshake rather than Hermes's own `--check` flag, which
+ * could only ever validate Hermes. `probeAcpRuntime` answers the two
+ * questions separately — is the binary here, and does it speak the protocol —
+ * and returns what the agent said about itself.
+ *
+ * The Hermes install check rides along because a green handshake still does
+ * not mean the first tool call will work: a reverted stdin patch hangs it.
+ */
 export async function pingAcpRuntime(commandName: string): Promise<RuntimePingResult> {
-  const start = Date.now()
-  // Runs alongside the spawn, not after it — a stat plus at most one file
-  // read, so it never adds to the ping's wall-clock.
   const installCheck = checkHermesBashProbePatch()
-  const result = await new Promise<RuntimePingResult>((resolve) => {
-    execFile(
-      commandName,
-      ['--check'],
-      { env: buildSpawnEnv() as NodeJS.ProcessEnv, timeout: PING_TIMEOUT_MS, windowsHide: true },
-      (error, stdout, stderr) => {
-        const durationMs = Date.now() - start
-        if (error) {
-          resolve({ ok: false, output: (stderr || error.message).trim(), durationMs })
-          return
-        }
-        resolve({ ok: true, output: (stdout || stderr || '').trim(), durationMs })
-      },
-    )
-  })
-  // `--check` proves the binary imports and starts; it says nothing about
-  // whether the first tool call will hang. Surface that here, where someone
-  // pressing "Test connection" is actually looking.
+  const probe = await probeAcpRuntime(commandName)
   const check = await installCheck
-  return check.ok ? result : { ...result, warning: check.detail }
+  return {
+    ok: probe.ok,
+    output: probe.ok
+      ? `${probe.detail}${probe.handshake?.agentVersion ? ` (v${probe.handshake.agentVersion})` : ''}`
+      : `${probe.code}: ${probe.detail}`,
+    durationMs: probe.durationMs,
+    ...(check.ok ? {} : { warning: check.detail }),
+  }
 }

@@ -1,7 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { setActiveHermesProfile } from '@/lib/hermes/personas'
+import { setActiveHermesProfile } from '@/lib/runtimes/hermes/personas'
 
 export async function switchActiveHermesProfile({
   workspaceSlug,

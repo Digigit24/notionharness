@@ -1,5 +1,5 @@
 import { notFound } from 'next/navigation'
-import { ThreadFullPage } from '@/components/hermes'
+import { ThreadFullPage } from '@/components/thread'
 import { getRunMessages, getTaskRuns } from '@/app/(app)/workspace/[workspaceSlug]/tasks/actions'
 import { getPayloadClient } from '@/lib/payload'
 

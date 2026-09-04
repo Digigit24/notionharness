@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Bot, ChevronDown, ChevronRight, Loader2, Maximize2, Send, Square } from 'lucide-react'
-import { Thread } from '@/components/hermes/Thread'
+import { Thread } from '@/components/thread/Thread'
 import { useRunEventStream } from '@/components/runs/use-run-event-stream'
 import { adaptRunSnapshotsToThread, type ChatMessage, type ChatThread } from '@/lib/hermes/runEvent-adapter'
 import {

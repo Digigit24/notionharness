@@ -5,8 +5,8 @@ import Link from 'next/link'
 import { listAgentHermesProfiles, saveAgent } from '@/app/(app)/workspace/[workspaceSlug]/agents/actions'
 import { Button } from '@/components/ui/button'
 import type { Agent } from '@/components/agents/agent-editor'
-import type { ActiveModelConfig } from '@/lib/hermes/providers'
-import type { HermesProfileSummary } from '@/lib/hermes/profiles'
+import type { ActiveModelConfig } from '@/lib/runtimes/hermes/providers'
+import type { HermesProfileSummary } from '@/lib/runtimes/hermes/profiles'
 
 // Extracted out of the old list-page inline editor (agent-editor.tsx) so the
 // same save-a-draft form can be mounted from two places: the "New agent"

@@ -28,7 +28,7 @@ import { getSession } from '@/lib/session'
 // `profile` is forwarded verbatim, which is what makes every one of these
 // screens per-profile: the dashboard API scopes almost every route to a
 // profile's own HERMES_HOME when given `?profile=<name>`.
-import { getServeEndpoint } from '@/lib/hermes/serve-supervisor'
+import { getServeEndpoint } from '@/lib/runtimes/hermes/serve-supervisor'
 
 /** Retained only so existing callers keep compiling; nothing reads it now. */
 export const HERMES_BASE_URL = process.env.HERMES_API_BASE_URL || ''

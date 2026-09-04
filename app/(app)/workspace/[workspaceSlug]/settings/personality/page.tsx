@@ -6,7 +6,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
 import { SwitchActiveProfileButton } from '@/components/personality/switch-profile-button'
-import { getActiveHermesProfile, listHermesIdentities, listHermesProfiles } from '@/lib/hermes/personas'
+import { getActiveHermesProfile, listHermesIdentities, listHermesProfiles } from '@/lib/runtimes/hermes/personas'
 
 export const metadata = {
   title: 'Personality | NotionForge',

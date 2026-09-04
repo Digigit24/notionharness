@@ -17,7 +17,7 @@
 // response — never fabricated when the shape doesn't match.
 
 import { getPayloadClient } from '@/lib/payload'
-import { HERMES_API_KEY, HERMES_BASE_URL } from '@/lib/hermes-api'
+import { HERMES_API_KEY, HERMES_BASE_URL } from '@/lib/runtimes/hermes/api-proxy'
 import type { RuntimeProfile } from '@/payload-types'
 
 const HEALTH_CHECK_TIMEOUT_MS = 8_000

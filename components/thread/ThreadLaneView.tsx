@@ -1,6 +1,6 @@
 'use client'
 
-import { Thread } from '@/components/hermes'
+import { Thread } from '@/components/thread'
 import { ConnectionStatusBanner } from './connection-status-banner'
 import { useThreadData } from './use-thread-data'
 import type { Agent } from '@/payload-types'

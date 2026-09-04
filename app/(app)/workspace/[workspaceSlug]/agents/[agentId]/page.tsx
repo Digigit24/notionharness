@@ -2,7 +2,7 @@ import { notFound } from 'next/navigation'
 import { getPayloadClient } from '@/lib/payload'
 import { getWorkspaceBySlug } from '@/lib/pages-cache'
 import { getActiveRunForAgent, getAgentUsageRollup } from '@/lib/broker'
-import { getActiveModelConfig } from '@/lib/hermes/providers'
+import { getActiveModelConfig } from '@/lib/runtimes/hermes/providers'
 import { AgentDetailView } from '@/components/agents/agent-detail-view'
 
 // ROADMAP B-1 (Detail) — the real, linkable home for one agent. Conforms to

@@ -8,8 +8,8 @@ import { getUnreadNotificationCount } from '@/app/(app)/notifications/actions'
 import { getAmbientStatus } from '@/app/(app)/workspace/[workspaceSlug]/actions'
 import { Sidebar } from '@/components/sidebar/sidebar'
 import { KeyboardProvider } from '@/components/keyboard/keyboard-provider'
-import { HermesNotConfiguredBanner } from '@/components/hermes/hermes-not-configured-banner'
-import { HERMES_BASE_URL } from '@/lib/hermes-api'
+import { HermesNotConfiguredBanner } from '@/components/thread/hermes-not-configured-banner'
+import { HERMES_BASE_URL } from '@/lib/runtimes/hermes/api-proxy'
 
 export default async function WorkspaceLayout({
   children,

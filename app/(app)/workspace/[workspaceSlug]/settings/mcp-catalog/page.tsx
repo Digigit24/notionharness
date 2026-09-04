@@ -5,7 +5,7 @@ import { Breadcrumbs } from '@/components/nav/breadcrumbs'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
-import { listMcpCatalog } from '@/lib/hermes/mcp-catalog'
+import { listMcpCatalog } from '@/lib/runtimes/hermes/mcp-catalog'
 
 export const metadata = {
   title: 'MCP Connectors | NotionForge',

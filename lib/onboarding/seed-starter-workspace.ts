@@ -31,6 +31,12 @@ import type { TaskStatus } from '@/payload-types'
 // ever a placeholder a human confirms before turning the agent on, never a
 // value anything actually spawns against from this code path.
 function defaultAcpBinary(): string {
+  // An explicit runtime command wins, whatever it points at. This is the
+  // runtime-neutral knob: an install driving Claude Code or Codex through an
+  // ACP adapter sets this and never reaches the Hermes fallbacks below.
+  // Seeding used to start at the Hermes guess and therefore always produced a
+  // Hermes-only runtime profile.
+  if (process.env.ACP_RUNTIME_COMMAND) return process.env.ACP_RUNTIME_COMMAND
   if (process.env.HERMES_ACP_BIN) return process.env.HERMES_ACP_BIN
   if (process.env.HERMES_HOME_BASE) {
     return `${process.env.HERMES_HOME_BASE}\\hermes-agent\\venv\\Scripts\\hermes-acp.exe`

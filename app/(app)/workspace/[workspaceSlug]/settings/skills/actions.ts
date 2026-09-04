@@ -10,7 +10,7 @@ import {
   toggleSkill,
   type ServeProfile,
   type ServeSkill,
-} from '@/lib/hermes/serve-client'
+} from '@/lib/runtimes/hermes/serve-client'
 
 /**
  * Skills, per Hermes profile.

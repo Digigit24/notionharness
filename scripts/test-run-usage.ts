@@ -24,7 +24,7 @@ import { join } from 'node:path'
 import { Pool } from 'pg'
 import { enqueueRun, claimNextRun, settleRun, appendRunEvent, recordUsage, closeBrokerPool } from '../lib/broker'
 import { getRunUsageTotals } from '../lib/broker/usage'
-import { sendTurnWithIdentity } from '../lib/hermes/run-with-identity'
+import { sendTurnWithIdentity } from '../lib/runtimes/hermes/run-with-identity'
 import type { RunEventEnvelope } from '../lib/run-events'
 
 nextEnv.loadEnvConfig(process.cwd())

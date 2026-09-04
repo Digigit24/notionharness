@@ -7,7 +7,7 @@ import {
   readConfigSubset,
   writeConfigSubset,
   type ServeProfile,
-} from '@/lib/hermes/serve-client'
+} from '@/lib/runtimes/hermes/serve-client'
 import { APPROVAL_MODES } from '@/components/settings/approval-modes'
 
 /**

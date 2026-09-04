@@ -1,4 +1,4 @@
-import { hermesGet, hermesPost, hermesPatch, hermesDelete } from '@/lib/hermes-api'
+import { hermesGet, hermesPost, hermesPatch, hermesDelete } from '@/lib/runtimes/hermes/api-proxy'
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)

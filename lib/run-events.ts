@@ -12,6 +12,20 @@ export interface PermissionOption {
   label?: string
 }
 
+/**
+ * How a permission request was answered.
+ *
+ * Lives in the shared contract rather than in the ACP client because the
+ * dispatcher and the approvals layer both need it, and importing it from the
+ * client made the runtime package and the core import each other. It is a
+ * protocol shape, not a client detail: it mirrors ACP's own `outcome` union
+ * and sits naturally beside `PermissionOption`, which describes what was
+ * offered.
+ */
+export type ApprovalOutcome =
+  | { outcome: 'selected'; optionId: string }
+  | { outcome: 'cancelled'; reason?: string }
+
 export type RunEvent =
   | { type: 'message'; role: 'user' | 'assistant' | 'system'; text: string }
   | { type: 'thought'; text: string }

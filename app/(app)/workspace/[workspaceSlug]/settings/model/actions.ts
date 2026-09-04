@@ -13,7 +13,7 @@ import {
   type ServeModelOptions,
   type ServeProfile,
   type SetModelResult,
-} from '@/lib/hermes/serve-client'
+} from '@/lib/runtimes/hermes/serve-client'
 
 /**
  * Model settings, per Hermes profile.

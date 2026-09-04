@@ -11,7 +11,7 @@ import { AgentSettingsForm, type AgentProfile } from '@/components/agents/agent-
 import { RuntimePingButton } from '@/components/agents/runtime-ping-button'
 import { saveAgent } from '@/app/(app)/workspace/[workspaceSlug]/agents/actions'
 import type { Agent } from '@/components/agents/agent-editor'
-import type { ActiveModelConfig } from '@/lib/hermes/providers'
+import type { ActiveModelConfig } from '@/lib/runtimes/hermes/providers'
 import { formatTimestamp } from '@/lib/relative-time'
 
 // ROADMAP B-1 (Detail) — the real, linkable home for one agent, conformed to

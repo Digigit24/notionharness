@@ -35,9 +35,9 @@ import {
 } from '@/lib/broker'
 import { RunWorktreeManager } from '@/lib/run-worktrees/manager'
 import { resolveRunWorktreeConfig } from '@/lib/run-worktrees/config'
-import { sendTurnWithIdentity } from '@/lib/hermes/run-with-identity'
-import { warnIfHermesProbeUnpatched } from '@/lib/hermes/install-checks'
-import { resolveProfileHome } from '@/lib/hermes/profiles'
+import { sendTurnWithIdentity } from '@/lib/runtimes/hermes/run-with-identity'
+import { warnIfHermesProbeUnpatched } from '@/lib/runtimes/hermes/install-checks'
+import { resolveProfileHome } from '@/lib/runtimes/hermes/profiles'
 import { access } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createPendingApproval, waitForApproval } from '@/lib/hermes/approval-helpers'
@@ -46,7 +46,7 @@ import { sendPushToUser } from '@/lib/push/send'
 import type { RunEvent } from '@/lib/run-events'
 import type { Agent, Task } from '@/payload-types'
 import type { ApprovalOption } from '@/collections/Approvals'
-import type { ApprovalOutcome } from '@/lib/hermes/acp-client'
+import type { ApprovalOutcome } from '@/lib/run-events'
 
 export interface DispatchOutcome {
   claimed: boolean

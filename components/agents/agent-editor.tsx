@@ -7,7 +7,7 @@ import { Bot } from 'lucide-react'
 import { AgentSettingsForm, type AgentProfile } from '@/components/agents/agent-settings-form'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
-import type { ActiveModelConfig } from '@/lib/hermes/providers'
+import type { ActiveModelConfig } from '@/lib/runtimes/hermes/providers'
 
 // ROADMAP B-1 (Detail) — this used to be a list + full inline editor (an
 // Overview/Capabilities toggle built entirely as client-side state on this

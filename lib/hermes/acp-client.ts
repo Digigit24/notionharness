@@ -63,7 +63,7 @@ import * as pty from 'node-pty'
 // `lib/run-events.ts` (merged from a reconciliation task). The local
 // worktree is behind main so the file isn't visible here — the lead wires
 // it up at merge time, same as for the daemon-ws and broker consumers.
-import type { PermissionOption, RunEvent, RunEventEnvelope } from '@/lib/run-events'
+import type { ApprovalOutcome, PermissionOption, RunEvent, RunEventEnvelope } from '@/lib/run-events'
 import { TerminalBuffer } from './terminal-buffer'
 import { buildSpawnEnv } from './spawn-env'
 import { unifiedDiff } from './unified-diff'
@@ -72,10 +72,9 @@ import { unifiedDiff } from './unified-diff'
 // Public options.
 // ---------------------------------------------------------------------------
 
-/** ACP `outcome` union for permission callbacks — matches protocol schema. */
-export type ApprovalOutcome =
-  | { outcome: 'selected'; optionId: string }
-  | { outcome: 'cancelled'; reason?: string }
+/** Defined in the shared contract (`lib/run-events.ts`) and re-exported here
+ * so long-standing imports keep resolving. One definition, two names. */
+export type { ApprovalOutcome } from '@/lib/run-events'
 
 export interface SendTurnOptions {
   /** Absolute path to the `hermes-acp` binary (or `hermes-acp.exe` on Windows). */

@@ -2,7 +2,7 @@ import { notFound } from 'next/navigation'
 import { getPayloadClient } from '@/lib/payload'
 import { getWorkspaceBySlug } from '@/lib/pages-cache'
 import { getAgentUsageRollupForAgents } from '@/lib/broker'
-import { getActiveModelConfig } from '@/lib/hermes/providers'
+import { getActiveModelConfig } from '@/lib/runtimes/hermes/providers'
 import { AgentEditor } from '@/components/agents/agent-editor'
 import { Breadcrumbs } from '@/components/nav/breadcrumbs'
 

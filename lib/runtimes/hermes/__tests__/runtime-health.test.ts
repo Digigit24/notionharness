@@ -28,7 +28,7 @@ vi.mock('@/lib/hermes-api', () => ({
   },
 }))
 
-const { checkHermesReachability } = await import('@/lib/hermes/runtime-health')
+const { checkHermesReachability } = await import('@/lib/runtimes/hermes/runtime-health')
 
 const originalFetch = global.fetch
 

@@ -2,11 +2,11 @@
 
 import { revalidatePath } from 'next/cache'
 import { getPayloadClient } from '@/lib/payload'
-import { pingAcpRuntime, type RuntimePingResult } from '@/lib/hermes/ping'
+import { pingAcpRuntime, type RuntimePingResult } from '@/lib/runtimes/hermes/ping'
 import { enqueueRun, getRun, listRunEvents, TERMINAL_STATUSES } from '@/lib/broker'
 import { getCurrentPayloadUser } from '@/lib/current-user'
-import { getActiveModelConfig } from '@/lib/hermes/providers'
-import { listHermesProfiles, type HermesProfileSummary } from '@/lib/hermes/profiles'
+import { getActiveModelConfig } from '@/lib/runtimes/hermes/providers'
+import { listHermesProfiles, type HermesProfileSummary } from '@/lib/runtimes/hermes/profiles'
 import {
   addAgentMemoryEntry,
   deleteAgentMemoryEntry,
@@ -15,7 +15,7 @@ import {
   type AgentMemory,
   type AgentMemoryFile,
   type MemoryTarget,
-} from '@/lib/hermes/agent-memory'
+} from '@/lib/runtimes/hermes/agent-memory'
 
 export async function saveAgent({ workspaceId, workspaceSlug, id, data }: { workspaceId: number; workspaceSlug: string; id?: number; data: Record<string, unknown> }) {
   const payload = await getPayloadClient()

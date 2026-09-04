@@ -1,9 +1,9 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { removeProviderApiKey, setActiveModelConfig, setProviderApiKey } from '@/lib/hermes/providers'
+import { removeProviderApiKey, setActiveModelConfig, setProviderApiKey } from '@/lib/runtimes/hermes/providers'
 import { getCurrentPayloadUser } from '@/lib/current-user'
-import { listHermesProfiles, type HermesProfileSummary } from '@/lib/hermes/profiles'
+import { listHermesProfiles, type HermesProfileSummary } from '@/lib/runtimes/hermes/profiles'
 
 /** Every Hermes profile on this machine, each with its own active
  * provider/model. The install root is included as the implicit default. */

@@ -45,7 +45,7 @@
 // only ever using it for the raw-pg-owned broker tables.
 
 import { getBrokerPool } from '@/lib/broker'
-import { HERMES_API_KEY, HERMES_BASE_URL } from '@/lib/hermes-api'
+import { HERMES_API_KEY, HERMES_BASE_URL } from '@/lib/runtimes/hermes/api-proxy'
 
 export interface RankedId {
   id: number

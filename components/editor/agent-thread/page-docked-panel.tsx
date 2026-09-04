@@ -5,7 +5,7 @@ import { Bot, PanelRightClose, Send, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { ConnectionStatusBanner, Thread, useThreadData } from '@/components/hermes'
+import { ConnectionStatusBanner, Thread, useThreadData } from '@/components/thread'
 import { enqueuePageRun, getPageRunSnapshots } from '@/app/(app)/actions'
 import { registerPagePanelOpener } from './registry'
 

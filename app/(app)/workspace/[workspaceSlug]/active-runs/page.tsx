@@ -1,5 +1,5 @@
 import { Activity } from 'lucide-react'
-import { ThreadLaneView } from '@/components/hermes'
+import { ThreadLaneView } from '@/components/thread'
 import { getRunMessages, getTaskRuns, getActiveRunsForWorkspace } from '@/app/(app)/workspace/[workspaceSlug]/tasks/actions'
 import { getPayloadClient } from '@/lib/payload'
 import { EmptyState } from '@/components/ui/empty-state'

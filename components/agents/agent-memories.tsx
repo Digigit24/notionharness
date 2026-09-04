@@ -10,7 +10,7 @@ import {
   getAgentMemory,
   updateAgentMemory,
 } from '@/app/(app)/workspace/[workspaceSlug]/agents/actions'
-import type { AgentMemory, AgentMemoryFile, MemoryTarget } from '@/lib/hermes/agent-memory'
+import type { AgentMemory, AgentMemoryFile, MemoryTarget } from '@/lib/runtimes/hermes/agent-memory'
 import { formatCount } from '@/lib/relative-time'
 
 /**

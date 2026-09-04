@@ -5,7 +5,7 @@
 // (The dispatcher-wiring task also added `onEvent` live streaming and
 // relaxed `env`'s type on `acp-client.ts` — additive, no behavior change to
 // existing callers.)
-import { sendTurn, type SendTurnOptions, type SendTurnResult } from './acp-client'
+import { sendTurn, type SendTurnOptions, type SendTurnResult } from '@/lib/hermes/acp-client'
 import { buildHermesHomeOverlay, type BuildHermesHomeOverlayOptions } from './home-overlay'
 
 export type SendTurnWithIdentityOptions = Omit<SendTurnOptions, 'env'> &

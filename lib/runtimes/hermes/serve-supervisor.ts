@@ -38,7 +38,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
-import { buildSpawnEnv } from './spawn-env'
+import { buildSpawnEnv } from '@/lib/hermes/spawn-env'
 import { hermesRoot } from './profiles'
 
 export interface ServeEndpoint {

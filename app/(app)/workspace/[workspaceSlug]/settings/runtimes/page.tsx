@@ -9,6 +9,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { RuntimesRefreshButton } from '@/components/runtimes/refresh-button'
 import { AddRuntimeProfileForm } from '@/components/runtimes/add-profile-form'
 import { ToggleRuntimeProfileEnabledButton } from '@/components/runtimes/toggle-enabled-button'
+import { RuntimeProbeButton } from '@/components/runtimes/probe-button'
 import { formatRelativeTime } from '@/lib/relative-time'
 import type { Agent, Runtime, RuntimeProfile } from '@/payload-types'
 
@@ -143,6 +144,17 @@ function RuntimeRow({
               workspaceSlug={workspaceSlug}
               profileId={profile.id}
               enabled={Boolean(profile.enabled)}
+            />
+            <RuntimeProbeButton
+              profileId={profile.id}
+              workspaceSlug={workspaceSlug}
+              lastCode={profile.lastProbeCode}
+              lastDetail={profile.lastProbeDetail}
+              agentName={
+                profile.handshake && typeof profile.handshake === 'object'
+                  ? ((profile.handshake as { agentName?: string | null }).agentName ?? null)
+                  : null
+              }
             />
           </div>
           <span className="text-xs text-faint">
