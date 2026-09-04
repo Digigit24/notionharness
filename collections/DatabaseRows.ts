@@ -1,4 +1,5 @@
 import type { CollectionConfig } from 'payload'
+import { inMyWorkspaces } from './access'
 
 // ROADMAP P2.3/D4 — one row of a `databases` doc. `cells` is a flat
 // fieldId -> value map (the roadmap's own words: "generic `databases` +
@@ -7,6 +8,13 @@ import type { CollectionConfig } from 'payload'
 // point of storing it this way instead of one Postgres column per property.
 export const DatabaseRows: CollectionConfig = {
   slug: 'database-rows',
+  // One hop: a row has no workspace of its own, so it borrows its database's.
+  access: {
+    read: inMyWorkspaces('database.workspace'),
+    create: inMyWorkspaces('database.workspace'),
+    update: inMyWorkspaces('database.workspace'),
+    delete: inMyWorkspaces('database.workspace'),
+  },
   fields: [
     {
       name: 'database',

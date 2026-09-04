@@ -1,4 +1,5 @@
 import type { CollectionConfig } from 'payload'
+import { inMyWorkspaces } from './access'
 
 // ROADMAP P2.3/D4: the generic, backend-owned table an `affine:database`
 // block is allowed to hold user-created (queryable) data in. Per D4,
@@ -15,6 +16,13 @@ import type { CollectionConfig } from 'payload'
 // simplifies property CRUD versus `TeableDataSource`'s id-aliasing dance.
 export const Databases: CollectionConfig = {
   slug: 'databases',
+  // Ordinary workspace content: everyone in the workspace, nobody outside it.
+  access: {
+    read: inMyWorkspaces(),
+    create: inMyWorkspaces(),
+    update: inMyWorkspaces(),
+    delete: inMyWorkspaces(),
+  },
   admin: {
     useAsTitle: 'name',
   },

@@ -6,6 +6,7 @@ import { reclaimRunWorktrees } from '@/lib/run-worktrees/retention'
 import { resolveRunWorktreeConfig } from '@/lib/run-worktrees/config'
 import { bestEffort } from '@/lib/failures'
 import { logger } from '@/lib/logger'
+import { requireInternalCaller } from '../../internal-auth'
 
 // Every tick, not every tenth. `sweepExpiredLeases` is one indexed UPDATE
 // that normally matches nothing, so the cost is negligible — while the
@@ -83,7 +84,12 @@ function maybeReclaimWorktrees(): void {
  * (10 minutes for `permissionMode: 'ask'`), and the poller below hits this
  * route every 3s with no mutex of its own.
  */
-export async function POST() {
+export async function POST(request: Request) {
+  // Before the heartbeat, before the sweep, before anything: this route
+  // spawns a real agent process on this host, so an unauthorised caller must
+  // not even leave a trace that says the loop is alive.
+  const refusal = await requireInternalCaller(request, 'dispatcher/tick')
+  if (refusal) return refusal
   const workerId = `server-${process.pid}`
   // Recorded before any work, so a tick that then fails still proves the
   // loop is alive — the heartbeat answers "is anything polling", which is a

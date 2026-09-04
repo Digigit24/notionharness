@@ -4,6 +4,7 @@ import { getWorkspaceBySlug } from '@/lib/pages-cache'
 import { getActiveRunForAgent, getAgentUsageRollup, listSessions } from '@/lib/broker'
 import { getActiveModelConfig } from '@/lib/runtimes/hermes/providers'
 import { AgentDetailView } from '@/components/agents/agent-detail-view'
+import { ScopedConnectorsTab } from '@/components/connectors/scoped-connectors-tab'
 
 // ROADMAP B-1 (Detail) — the real, linkable home for one agent. Conforms to
 // <DetailLayout> the same way runs/[runId]/review/page.tsx does: this
@@ -144,6 +145,27 @@ export default async function AgentDetailPage({
       }))}
       activeModel={activeModel}
       agentModel={agentModel}
+      // Registered here rather than inside the view because the content is a
+      // server component — it resolves this agent's connector rows and, for
+      // each, the connection belonging to the PERSON LOOKING AT THE PAGE. That
+      // last part is the whole point: "you have not connected Gmail" is a
+      // sentence somebody can act on, and "this agent has not connected Gmail"
+      // describes something that cannot happen.
+      extraTabs={[
+        {
+          key: 'connectors',
+          label: 'Connectors',
+          content: (
+            <ScopedConnectorsTab
+              workspaceSlug={workspace.slug}
+              scopeType="agent"
+              scopeId={agent.id}
+              heading="Apps this agent may act on"
+              description="Granted to this agent alone. They ADD to the workspace’s and the project’s connectors rather than replacing them — tool availability is additive, so giving this agent one app never takes another away."
+            />
+          ),
+        },
+      ]}
     />
   )
 }

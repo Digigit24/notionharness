@@ -8,8 +8,9 @@ import { unwrap } from '@/lib/failures'
 import type { Agent } from '@/components/agents/agent-editor'
 import type { ActiveModelConfig } from '@/lib/runtimes/hermes/providers'
 import type { HermesProfileSummary } from '@/lib/runtimes/hermes/profiles'
-import { sessionConfigOptions, type AgentHandshake } from '@/lib/runtimes/handshake'
+import { sessionConfigOptions, type AgentHandshake, type SessionConfigOption } from '@/lib/runtimes/handshake'
 import { RuntimeConfigFields } from '@/components/runtimes/runtime-config-fields'
+import { AgentSkillsField, normalizeSkillNames } from '@/components/agents/agent-skills-field'
 
 // Extracted out of the old list-page inline editor (agent-editor.tsx) so the
 // same save-a-draft form can be mounted from two places: the "New agent"
@@ -29,6 +30,11 @@ export type AgentProfile = {
   /** What the runtime said about itself when it was last probed. The source
    * of truth for which settings this agent can be given. */
   handshake?: AgentHandshake | null
+  /** R12-P4.1 — what this runtime does for an option the agent leaves unset.
+   * Optional because the agents LIST page passes runtime-profile rows through
+   * without projecting them; a missing value there means "we were not told",
+   * which the inheritance summary renders differently from "no default". */
+  defaultSessionConfig?: Record<string, unknown> | null
 }
 
 type Draft = {
@@ -38,8 +44,7 @@ type Draft = {
   instructions: string
   customEnv: string
   customArgs: string
-  mcpConfig: string
-  skills: string
+  skills: string[]
   maxConcurrentRuns: number
   permissionMode: string
   enabled: boolean
@@ -58,8 +63,7 @@ function buildDraft(agent: Agent | null, profiles: AgentProfile[]): Draft {
     instructions: agent?.instructions ?? '',
     customEnv: JSON.stringify(agent?.customEnv ?? {}, null, 2),
     customArgs: JSON.stringify(agent?.customArgs ?? [], null, 2),
-    mcpConfig: JSON.stringify(agent?.mcpConfig ?? {}, null, 2),
-    skills: JSON.stringify(agent?.skills ?? [], null, 2),
+    skills: normalizeSkillNames(agent?.skills),
     maxConcurrentRuns: agent?.maxConcurrentRuns ?? 1,
     permissionMode: agent?.permissionMode ?? 'ask',
     enabled: agent?.enabled ?? true,
@@ -139,22 +143,15 @@ export function AgentSettingsForm({
     setBusy(true)
     setError('')
 
-    let advanced: {
-      customEnv: unknown
-      customArgs: unknown
-      mcpConfig: unknown
-      skills: unknown
-    }
+    let advanced: { customEnv: unknown; customArgs: unknown }
 
     try {
       advanced = {
         customEnv: JSON.parse(draft.customEnv),
         customArgs: JSON.parse(draft.customArgs),
-        mcpConfig: JSON.parse(draft.mcpConfig),
-        skills: JSON.parse(draft.skills),
       }
     } catch {
-      setError('Environment, arguments, MCP config, and skills must contain valid JSON.')
+      setError('Environment and arguments must contain valid JSON.')
       setBusy(false)
       return
     }
@@ -304,6 +301,12 @@ export function AgentSettingsForm({
             disabled={busy}
             onChange={(runtimeConfig) => setDraft({ ...draft, runtimeConfig })}
           />
+          <InheritedRuntimeDefaults
+            runtimeName={selectedRuntime?.name ?? 'this runtime'}
+            options={runtimeOptions}
+            values={draft.runtimeConfig}
+            defaults={selectedRuntime?.defaultSessionConfig ?? null}
+          />
         </div>
       )}
 
@@ -351,29 +354,22 @@ export function AgentSettingsForm({
         </label>
       </div>
 
-      <div className="grid gap-2 sm:grid-cols-2">
-        <label className="block text-xs">
-          MCP config (JSON)
-          <textarea
-            value={draft.mcpConfig}
-            onChange={(event) => setDraft({ ...draft, mcpConfig: event.target.value })}
-            rows={6}
-            className="mt-1 w-full rounded border border-black/15 px-2 py-1.5 font-mono text-xs dark:border-white/15 dark:bg-white/[.04]"
-          />
-        </label>
-        <label className="block text-xs">
-          Skills (JSON)
-          <textarea
-            value={draft.skills}
-            onChange={(event) => setDraft({ ...draft, skills: event.target.value })}
-            rows={6}
-            className="mt-1 w-full rounded border border-black/15 px-2 py-1.5 font-mono text-xs dark:border-white/15 dark:bg-white/[.04]"
-          />
-        </label>
-      </div>
-      <p className="-mt-1 text-[11px] text-black/45 dark:text-white/45">
-        Prefer the Capabilities tab to bind/unbind skills — this raw JSON field is for advanced edits only.
-      </p>
+      {/* The MCP config editor that used to sit beside this is GONE. It wrote
+          `agents.mcpConfig` and nothing anywhere read it back: the dispatcher
+          composes a run's MCP servers from `lib/plugins/resolve.ts`, and the
+          only other references to the column in the whole repository were this
+          form writing it and `app/api/agents/route.ts` listing it among the
+          fields it must never return. An editor for a field with zero
+          consumers is worse than no editor — it looks like configuration and
+          behaves like a text file. The column is left in place (it is not this
+          unit's to drop) but nothing offers to fill it any more; MCP servers
+          are configured as plugins, which the Capabilities tab shows. */}
+      <AgentSkillsField
+        value={draft.skills}
+        onChange={(skills) => setDraft({ ...draft, skills })}
+        usesHermesHome={usesHermesHome}
+        disabled={busy}
+      />
 
       <div className="grid gap-2 sm:grid-cols-2">
         <label className="block text-xs">
@@ -427,5 +423,60 @@ export function AgentSettingsForm({
         </Button>
       </div>
     </form>
+  )
+}
+
+/**
+ * What an unset option actually resolves to, named out loud.
+ *
+ * R12-P4.1 gave runtime profiles a `defaultSessionConfig` that the dispatcher
+ * merges UNDER an agent's own `runtimeConfig`, so leaving a field empty is not
+ * "no value" — it is "whatever the runtime profile says". Until this, the form
+ * rendered an empty select for `model` and the agent silently ran on `sonnet`
+ * because the Claude Code runtime profile said so, with nothing on the screen
+ * connecting the two. Somebody debugging "why is this agent on the wrong
+ * model" had no way to discover the answer from the page that configures it.
+ *
+ * Only options the agent leaves UNSET are listed: an option the agent has
+ * chosen for itself is not inheriting anything, and listing it would turn a
+ * short, readable line into noise nobody reads.
+ *
+ * `defaults` being null means the profile was passed through without this
+ * field (the agents LIST page does that) — which is "we were not told", not
+ * "there are no defaults", and the two must not render the same.
+ */
+function InheritedRuntimeDefaults({
+  runtimeName,
+  options,
+  values,
+  defaults,
+}: {
+  runtimeName: string
+  options: SessionConfigOption[]
+  values: Record<string, unknown>
+  defaults: Record<string, unknown> | null
+}) {
+  if (!defaults) return null
+  const inherited = options
+    .filter((option) => values[option.id] === undefined && defaults[option.id] !== undefined)
+    .map((option) => {
+      const value = defaults[option.id]
+      const label =
+        option.options?.find((choice) => choice.value === String(value))?.name ?? String(value)
+      return { id: option.id, name: option.name, label }
+    })
+  if (inherited.length === 0) return null
+
+  return (
+    <p className="border-t border-black/10 pt-2 text-[11px] text-black/50 dark:border-white/10 dark:text-white/50">
+      Left unset, so inherited from the {runtimeName} runtime:{' '}
+      {inherited.map((entry, index) => (
+        <span key={entry.id}>
+          {index > 0 ? ', ' : ''}
+          <span className="font-medium text-black/70 dark:text-white/70">{entry.label}</span> for {entry.name}
+        </span>
+      ))}
+      .
+    </p>
   )
 }

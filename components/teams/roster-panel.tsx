@@ -31,6 +31,7 @@ import {
   removeSlotAction,
   setLeaderAction,
 } from '@/app/(app)/workspace/[workspaceSlug]/teams/actions'
+import { ChannelInviteByEmail } from '@/components/members/channel-invite'
 
 /** What the "add" picker is currently offering. Two lists, one control: a
  * channel gains members of both kinds and splitting it into two pickers would
@@ -80,6 +81,7 @@ export function RosterPanel({
   workspaceId,
   workspaceSlug,
   teamId,
+  channelName,
   slots,
   mySlotId,
   tasks,
@@ -91,6 +93,12 @@ export function RosterPanel({
   workspaceId: number
   workspaceSlug: string
   teamId: number
+  /** The channel's own name, for the invitation copy — "they land in #design"
+   * is the sentence somebody needs before they hand a stranger a link.
+   * Optional so a caller that has not been updated still compiles and still
+   * works; the copy degrades to "this channel" rather than the panel
+   * disappearing. */
+  channelName?: string
   slots: TeamSlotView[]
   mySlotId: number | null
   tasks: TeamTask[]
@@ -358,6 +366,23 @@ export function RosterPanel({
             ))}
           </SelectContent>
         </Select>
+
+        {/*
+          THE OTHER HALF OF "ADD A MEMBER".
+          The picker above offers people who are already in this workspace,
+          because adding one of them is a `team_members` row and nothing more.
+          Somebody who is NOT in the workspace cannot be added that way at all —
+          there is no user id to put in the row, and there may be no account —
+          so they are invited by email with this channel carried on the
+          invitation, and the accept path puts them in both at once. Two
+          operations wearing one label is how the second one goes missing.
+        */}
+        <ChannelInviteByEmail
+          workspaceId={workspaceId}
+          workspaceSlug={workspaceSlug}
+          teamId={teamId}
+          channelName={channelName ?? 'this channel'}
+        />
 
         {addingId != null && (
           <div className="space-y-1.5">

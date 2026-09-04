@@ -1,4 +1,5 @@
 import type { CollectionConfig } from 'payload'
+import { inMyAdministeredWorkspaces, inMyWorkspaces } from './access'
 
 // Phase C, C1.6/§02 — "a project holds several folders, not one." A
 // project's substance (a git repo, a docs folder, a scratch dir) modeled as
@@ -25,6 +26,15 @@ import type { CollectionConfig } from 'payload'
 //     can warn quietly when a folder moves instead of failing mid-run.
 export const ProjectResources: CollectionConfig = {
   slug: 'project-resources',
+  // One hop, through the project. Writing one names a real directory or repo
+  // on this host that agents are then allowed to touch, so writes are
+  // `administer`-level even though reads are ordinary workspace business.
+  access: {
+    read: inMyWorkspaces('project.workspace'),
+    create: inMyAdministeredWorkspaces('project.workspace'),
+    update: inMyAdministeredWorkspaces('project.workspace'),
+    delete: inMyAdministeredWorkspaces('project.workspace'),
+  },
   admin: { useAsTitle: 'path' },
   fields: [
     { name: 'project', type: 'relationship', relationTo: 'projects', required: true, index: true },

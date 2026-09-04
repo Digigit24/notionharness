@@ -4,7 +4,52 @@ import { revalidatePath } from 'next/cache'
 import { getPayloadClient } from '@/lib/payload'
 import { listRunsForProject, getRunUsageTotalsForRuns, type RunUsageTotals, type Run } from '@/lib/broker'
 import { guard, raise, type WithFailure } from '@/lib/failures'
+import { getCurrentPayloadUser } from '@/lib/current-user'
+import { requireAccess, type Verb } from '@/lib/permissions'
 import type { Project, ProjectResource } from '@/payload-types'
+
+/**
+ * PHASE 0 — every action in this file wrote or read with `overrideAccess: true`
+ * and no check of any kind. A server action is a public POST endpoint with a
+ * generated URL, so naming any `projectId` was enough to rename somebody
+ * else's project, list the repositories and directories it is bound to, bind a
+ * new one, or delete one.
+ *
+ * The project's OWN workspace is resolved from the id, never taken from the
+ * caller. `workspaceSlug` is present in most of these signatures but it only
+ * ever drives `revalidatePath`, and trusting it for authorisation would mean a
+ * caller could pair a workspace they administer with a project they do not.
+ *
+ * `objectType: 'project'` rather than `'workspace'`, so a per-object grant
+ * (`collections/AccessGrants.ts`) genuinely raises access the way it is meant
+ * to — a `viewer` in the workspace who was granted `editor` on this one
+ * project can work in it, which is the case the grant table exists for.
+ */
+async function requireProject(projectId: number, verb: Verb): Promise<{ project: Project; userId: number }> {
+  const user = await getCurrentPayloadUser()
+  if (!user) raise('unauthenticated', 'You are not signed in.')
+  const payload = await getPayloadClient()
+  const project = await payload
+    .findByID({ collection: 'projects', id: projectId, depth: 0, overrideAccess: true, disableErrors: true })
+    .catch(() => null)
+  if (!project) raise('not_found', 'That project no longer exists.')
+  const workspaceId = typeof project.workspace === 'number' ? project.workspace : project.workspace.id
+  await requireAccess({ userId: user.id, workspaceId, verb, objectType: 'project', objectId: projectId })
+  return { project, userId: user.id }
+}
+
+/** The resource's project, resolved from the resource itself. Passing the
+ * `projectId` in and trusting it would let a caller pair a project they may
+ * write with a resource belonging to one they may not. */
+async function requireResourceProject(resourceId: number, verb: Verb): Promise<void> {
+  const payload = await getPayloadClient()
+  const resource = await payload
+    .findByID({ collection: 'project-resources', id: resourceId, depth: 0, overrideAccess: true, disableErrors: true })
+    .catch(() => null)
+  if (!resource) raise('not_found', 'That resource no longer exists.')
+  const projectId = typeof resource.project === 'number' ? resource.project : resource.project.id
+  await requireProject(projectId, verb)
+}
 
 // ROADMAP B-1 (project detail) — the project's own fields are deliberately
 // minimal today (collections/Projects.ts: name/workspace/icon/description
@@ -22,6 +67,7 @@ export async function updateProject({
   data: Partial<Pick<Project, 'name' | 'icon' | 'description'>>
 }): Promise<WithFailure<Project>> {
   return guard(async () => {
+    await requireProject(projectId, 'write')
     const payload = await getPayloadClient()
     const project = await payload.update({
       collection: 'projects',
@@ -44,6 +90,7 @@ export async function updateProject({
  * added this session (runtime profiles, projects themselves). */
 export async function listProjectResources(projectId: number): Promise<WithFailure<ProjectResource[]>> {
   return guard(async () => {
+    await requireProject(projectId, 'read')
     const payload = await getPayloadClient()
     const result = await payload.find({
       collection: 'project-resources',
@@ -67,6 +114,11 @@ export async function createProjectResource({
   data: Pick<ProjectResource, 'kind' | 'role' | 'path' | 'repoUrl' | 'defaultBranch' | 'writable'>
 }): Promise<WithFailure<ProjectResource>> {
   return guard(async () => {
+    // `administer`, not `write`: this names a real directory or git repository
+    // on the machine running the app, which agents are then allowed to read and
+    // (when `writable`) modify. Choosing what this host exposes is the same
+    // decision as choosing a connector or a runtime.
+    await requireProject(projectId, 'administer')
     if (data.role === 'primary') {
       const existingPrimary = await getPayloadClient().then((payload) =>
         payload.find({
@@ -102,6 +154,7 @@ export async function deleteProjectResource({
   workspaceSlug: string
 }): Promise<WithFailure<void>> {
   return guard(async () => {
+    await requireResourceProject(resourceId, 'administer')
     const payload = await getPayloadClient()
     await payload.delete({ collection: 'project-resources', id: resourceId, overrideAccess: true })
     revalidatePath(`/workspace/${workspaceSlug}/projects/${projectId}`)
@@ -126,6 +179,7 @@ export async function getProjectRuns({
   agentId?: number | null
 }): Promise<WithFailure<ProjectRunRow[]>> {
   return guard(async () => {
+    await requireProject(projectId, 'read')
     const runs = await listRunsForProject(projectId, { agentId: agentId ?? null })
     const usageByRun = await getRunUsageTotalsForRuns(runs.map((r) => r.id))
     return runs.map((run) => ({ run, usage: usageByRun[run.id] ?? { totalTokens: 0, totalCostTicks: 0 } }))

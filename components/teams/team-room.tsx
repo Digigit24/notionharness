@@ -1169,6 +1169,7 @@ export function TeamRoom({
           workspaceId={workspaceId}
           workspaceSlug={workspaceSlug}
           teamId={channel.id}
+          channelName={channel.name}
           slots={slots}
           mySlotId={mySlotId}
           tasks={tasks}

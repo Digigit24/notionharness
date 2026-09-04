@@ -11,6 +11,8 @@ import { Button } from '@/components/ui/button'
 import { AgentCapabilities } from '@/components/agents/agent-capabilities'
 import { AgentMemories } from '@/components/agents/agent-memories'
 import { AgentSettingsForm, type AgentProfile } from '@/components/agents/agent-settings-form'
+import { SharePanel } from '@/components/access/share-panel'
+import { AgentReachPanel } from '@/components/access/agent-reach-panel'
 import { RuntimePingButton } from '@/components/agents/runtime-ping-button'
 import { saveAgent } from '@/app/(app)/workspace/[workspaceSlug]/agents/actions'
 import { unwrap } from '@/lib/failures'
@@ -50,6 +52,7 @@ export function AgentDetailView({
   plugins,
   activeModel,
   agentModel,
+  extraTabs,
 }: {
   workspaceId: number
   workspaceSlug: string
@@ -73,6 +76,17 @@ export function AgentDetailView({
   /** The model pinned by THIS agent's own Hermes profile. Null when the agent
    * runs on the install default, in which case `activeModel` is the answer. */
   agentModel?: ActiveModelConfig | null
+  /**
+   * Tabs contributed by the page that renders this view, appended after the
+   * ones above.
+   *
+   * The shared registration point for every tab whose data belongs to the
+   * server component rather than to this file — the Access panels and the
+   * Connectors tab both arrive this way. One composable array rather than a
+   * prop per feature: two teams adding a tab in the same week is exactly the
+   * case a second mechanism would have made conflict-prone for no gain.
+   */
+  extraTabs?: DetailLayoutTab[]
 }) {
   const router = useRouter()
   const [agent, setAgent] = useState(initialAgent)
@@ -237,6 +251,26 @@ export function AgentDetailView({
     </div>
   )
 
+  // Both halves of "access" on one tab, because they are the two directions of
+  // the same question and answering one without the other is how a permissions
+  // screen misleads: who may USE this agent, and what this agent may REACH.
+  // Splitting them into two tabs would let somebody grant an agent admin on
+  // every project without ever seeing that a viewer can trigger it.
+  const accessContent = (
+    <div className="max-w-2xl space-y-8 p-6">
+      <SharePanel
+        workspaceId={workspaceId}
+        workspaceSlug={workspaceSlug}
+        objectType="agent"
+        objectId={String(agent.id)}
+        objectLabel={agent.name}
+      />
+      <div className="border-t border-black/10 pt-6 dark:border-white/10">
+        <AgentReachPanel workspaceId={workspaceId} workspaceSlug={workspaceSlug} agentId={agent.id} />
+      </div>
+    </div>
+  )
+
   const tabs: DetailLayoutTab[] = [
     { key: 'overview', label: 'Overview', content: overviewContent },
     { key: 'capabilities', label: 'Capabilities', count: skillsCount, content: capabilitiesContent },
@@ -247,7 +281,9 @@ export function AgentDetailView({
       content: <AgentSessionsTab workspaceSlug={workspaceSlug} sessions={sessions ?? []} />,
     },
     { key: 'memory', label: 'Memory', content: memoryContent },
+    { key: 'access', label: 'Access', content: accessContent },
     { key: 'settings', label: 'Settings', content: settingsContent },
+    ...(extraTabs ?? []),
   ]
 
   const rightRail = (

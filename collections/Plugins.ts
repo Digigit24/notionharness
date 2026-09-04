@@ -1,4 +1,5 @@
 import type { CollectionConfig } from 'payload'
+import { inMyAdministeredWorkspaces } from './access'
 
 /**
  * R4.1 — the plugin layer: tools this product gives an agent, as data.
@@ -23,6 +24,17 @@ import type { CollectionConfig } from 'payload'
  */
 export const Plugins: CollectionConfig = {
   slug: 'plugins',
+  // `headers` and `env` hold third-party API tokens (see those fields' own
+  // comments), so this is `administer`-level in BOTH directions — a plain
+  // member reading them is already the leak. Demonstrated live before this
+  // block existed: a user belonging to no workspace read every plugin row in
+  // the install, header values included.
+  access: {
+    read: inMyAdministeredWorkspaces(),
+    create: inMyAdministeredWorkspaces(),
+    update: inMyAdministeredWorkspaces(),
+    delete: inMyAdministeredWorkspaces(),
+  },
   admin: { useAsTitle: 'name', defaultColumns: ['name', 'transport', 'enabled'] },
   fields: [
     { name: 'name', type: 'text', required: true },

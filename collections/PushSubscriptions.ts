@@ -1,4 +1,5 @@
 import type { CollectionConfig } from 'payload'
+import { ownedByMe } from './access'
 
 // ROADMAP B5.3 (Batch B-5 "Attention") — one row per browser subscription a
 // user has granted for Web Push (a user can have several: multiple browsers/
@@ -22,6 +23,15 @@ import type { CollectionConfig } from 'payload'
 // unapplied migration in this repo.
 export const PushSubscriptions: CollectionConfig = {
   slug: 'push-subscriptions',
+  // A subscription is a live push endpoint plus its encryption keys: anyone
+  // who can read one can send that browser a notification. Owner only, and
+  // deliberately not readable by an app admin either.
+  access: {
+    read: ownedByMe(),
+    create: ownedByMe(),
+    update: ownedByMe(),
+    delete: ownedByMe(),
+  },
   admin: { useAsTitle: 'endpoint' },
   fields: [
     {

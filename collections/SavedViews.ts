@@ -1,4 +1,5 @@
 import type { CollectionConfig } from 'payload'
+import { inMyWorkspaces } from './access'
 
 // ROADMAP B-4 "Work" — saved views for the tasks board/list/table. A view is
 // a named, scoped snapshot of a `TaskViewConfig` (lib/task-views/types.ts):
@@ -31,6 +32,14 @@ export type SavedViewScope = (typeof SAVED_VIEW_SCOPES)[number]
 
 export const SavedViews: CollectionConfig = {
   slug: 'saved-views',
+  // Ordinary workspace content. `owner` decides whose sidebar a view appears
+  // in, not who may read it — a shared view is meant to be seen by the workspace.
+  access: {
+    read: inMyWorkspaces(),
+    create: inMyWorkspaces(),
+    update: inMyWorkspaces(),
+    delete: inMyWorkspaces(),
+  },
   admin: {
     useAsTitle: 'name',
   },

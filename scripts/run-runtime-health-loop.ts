@@ -14,6 +14,13 @@
 // Usage: npx tsx scripts/run-runtime-health-loop.ts [baseUrl]
 //   (baseUrl defaults to http://localhost:3000 — the shared dev server)
 
+import nextEnv from '@next/env'
+
+// Phase 0 — needed only to read `DISPATCHER_SECRET` out of `.env`, which the
+// health-check route now requires. `@next/env` imports nothing from this app,
+// so the connection-pool hazard the header describes does not apply to it.
+nextEnv.loadEnvConfig(process.cwd())
+
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -80,7 +87,13 @@ interface HealthCheckOutcome {
 }
 
 async function tick(): Promise<void> {
-  const res = await fetch(`${baseUrl}/api/runtimes/health-check`, { method: 'POST' })
+  // Same shared secret as the dispatcher loop — this route is gated by the
+  // same `app/api/internal-auth.ts` check, for the same reason.
+  const secret = process.env.DISPATCHER_SECRET || ''
+  const res = await fetch(`${baseUrl}/api/runtimes/health-check`, {
+    method: 'POST',
+    headers: secret ? { 'X-Dispatcher-Secret': secret } : {},
+  })
   if (!res.ok) throw new Error(`health-check returned ${res.status}`)
   const outcome = (await res.json()) as HealthCheckOutcome
   console.log(`[runtime-health] checked ${outcome.checked} runtime profile(s)`)

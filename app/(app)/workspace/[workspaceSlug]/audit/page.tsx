@@ -11,6 +11,23 @@ import { ACTIVITY_ENTITY_TYPES } from '@/collections/Activity'
 import type { Where } from 'payload'
 import { History } from 'lucide-react'
 
+/**
+ * Channel ids in this workspace, for scoping channel audit rows.
+ *
+ * A direct broker query because channels are `teams` in raw Postgres and have
+ * no Payload collection to `find`. Bounded by the same limit as every other
+ * scan on this page, and archived channels are included deliberately: their
+ * history is exactly what an audit log is for.
+ */
+async function listChannelIdsForWorkspace(workspaceId: number): Promise<string[]> {
+  const { getBrokerPool } = await import('@/lib/broker/db')
+  const { rows } = await getBrokerPool().query<{ id: string }>(
+    `SELECT id FROM teams WHERE workspace_id = $1 ORDER BY id LIMIT ${ENTITY_SCAN_LIMIT}`,
+    [workspaceId],
+  )
+  return rows.map((row) => String(row.id))
+}
+
 const PAGE_SIZE = 50
 // Bounds the one-time "collect every workspace entity id to scope Activity
 // by" reads below. A workspace with more tasks/projects/pages than this
@@ -59,12 +76,34 @@ export default async function AuditPage({
   // first collecting which task/project/page ids belong to this workspace,
   // same "join through the owning Payload collection" shape this codebase
   // already uses for broker `runs` reads (lib/broker/runs.ts).
-  const [tasksRes, projectsRes, pagesRes] = await Promise.all([
+  const [tasksRes, projectsRes, pagesRes, agentsRes, connectorsRes, channelIds] = await Promise.all([
     payload.find({ collection: 'tasks', where: { workspace: { equals: workspace.id } }, limit: ENTITY_SCAN_LIMIT, depth: 0, overrideAccess: true }),
     payload.find({ collection: 'projects', where: { workspace: { equals: workspace.id } }, limit: ENTITY_SCAN_LIMIT, depth: 0, overrideAccess: true }),
     payload.find({ collection: 'pages', where: { workspace: { equals: workspace.id } }, limit: ENTITY_SCAN_LIMIT, depth: 0, overrideAccess: true }),
+    payload.find({ collection: 'agents', where: { workspace: { equals: workspace.id } }, limit: ENTITY_SCAN_LIMIT, depth: 0, overrideAccess: true }),
+    payload.find({ collection: 'connectors', where: { workspace: { equals: workspace.id } }, limit: ENTITY_SCAN_LIMIT, depth: 0, overrideAccess: true }),
+    // Channels live in the raw-pg broker, not in Payload, so this one is a
+    // direct query rather than a `find`. Same scope, same limit.
+    listChannelIdsForWorkspace(workspace.id),
   ])
-  const idsByType: Record<string, string[]> = {
+  /**
+   * TYPED EXHAUSTIVELY ON PURPOSE, and this is the whole fix.
+   *
+   * The comment below records a cross-tenant leak that was confirmed live: a
+   * type present in `ACTIVITY_ENTITY_TYPES` but missing a key here produces
+   * `entityId: { in: undefined }`, which Payload reads as NO CONSTRAINT, and
+   * the audit log then shows another workspace's rows. It happened once with
+   * `workspace` and it happened again the moment `connector`, `agent` and
+   * `channel` were added for access control — the same bug, three more times,
+   * because a `Record<string, string[]>` cannot notice a missing key.
+   *
+   * `Record<ActivityEntityType, string[]>` can. Adding a value to
+   * `ACTIVITY_ENTITY_TYPES` without an entry here is now a compile error rather
+   * than a silent tenancy hole. The `?? []` at the use site is the second belt:
+   * if this is ever widened again, the failure mode becomes "shows nothing"
+   * instead of "shows everyone's".
+   */
+  const idsByType: Record<(typeof ACTIVITY_ENTITY_TYPES)[number], string[]> = {
     task: tasksRes.docs.map((d) => String(d.id)),
     project: projectsRes.docs.map((d) => String(d.id)),
     page: pagesRes.docs.map((d) => String(d.id)),
@@ -73,11 +112,30 @@ export default async function AuditPage({
     // empty id list here is correct, not a bug: it means "no run activity
     // exists to scope," not "runs were forgotten."
     run: [],
+    // People management (invite sent/accepted/revoked, role changed, member
+    // removed) files its rows against the workspace itself, so the scope is
+    // this one id. This entry is NOT optional: every type in
+    // ACTIVITY_ENTITY_TYPES must have one, because a missing key makes the
+    // clause below `entityId: { in: undefined }`, which Payload treats as no
+    // constraint at all — confirmed live, it returned a `workspace` row
+    // belonging to a different workspace. That is a cross-tenant leak in the
+    // audit log, not a cosmetic gap.
+    workspace: [String(workspace.id)],
+    // Access control and connectors, added with the enum values they need.
+    // An `agent` or `channel` grant is filed against the object it is about,
+    // not against the workspace, because "who was given access to THIS agent"
+    // is the question an audit log exists to answer and anchoring it to the
+    // workspace makes a per-object timeline impossible to reconstruct.
+    agent: agentsRes.docs.map((d) => String(d.id)),
+    connector: connectorsRes.docs.map((d) => String(d.id)),
+    channel: channelIds,
   }
 
   const entityScopeOr: Where[] = ACTIVITY_ENTITY_TYPES.filter((t) => !entityType || t === entityType).map((t) => ({
     entityType: { equals: t },
-    entityId: { in: idsByType[t] },
+    // `?? []` rather than `idsByType[t]`: an absent key must scope to NOTHING.
+    // See the block comment on `idsByType` — the alternative is the leak.
+    entityId: { in: idsByType[t] ?? [] },
   }))
 
   const conditions: Where[] = [{ or: entityScopeOr }]

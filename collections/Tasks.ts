@@ -1,5 +1,6 @@
 import type { CollectionConfig } from 'payload'
 import { recordActivity, relId } from '@/lib/activity'
+import { inMyWorkspaces } from './access'
 
 // ROADMAP P2.1 — the core unit of work. Three details called out explicitly
 // as "cheap now and structural later":
@@ -23,6 +24,13 @@ import { recordActivity, relId } from '@/lib/activity'
 // must pass `createdBy` explicitly on create.
 export const Tasks: CollectionConfig = {
   slug: 'tasks',
+  // Ordinary workspace content: everyone in the workspace, nobody outside it.
+  access: {
+    read: inMyWorkspaces(),
+    create: inMyWorkspaces(),
+    update: inMyWorkspaces(),
+    delete: inMyWorkspaces(),
+  },
   admin: {
     useAsTitle: 'title',
   },

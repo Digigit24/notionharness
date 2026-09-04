@@ -14,6 +14,7 @@ import { ProjectRunsTab } from './project-runs-tab'
 import { ProjectSettingsTab } from './project-settings-tab'
 import { ProjectResourcesTab } from './project-resources-tab'
 import { ProjectFilesTab } from '@/components/repo/project-files-tab'
+import { SharePanel } from '@/components/access/share-panel'
 import type { ProjectRunRow } from '@/app/(app)/workspace/[workspaceSlug]/projects/[projectId]/actions'
 import type { Agent, Page, Project, ProjectResource, User, Workspace } from '@/payload-types'
 
@@ -45,6 +46,7 @@ export function ProjectDetailView({
   projectPages,
   gitOverview,
   initialResources,
+  extraTabs,
 }: {
   workspace: Workspace
   project: Project
@@ -65,6 +67,19 @@ export function ProjectDetailView({
   defaultStatusId: number | null
   projectPages: Page[]
   initialResources: ProjectResource[]
+  /**
+   * Tabs contributed by the page that renders this view, appended last.
+   *
+   * The one registration point for a tab whose data belongs to the server
+   * component rather than to this file — the Connectors tab arrives this way.
+   * A composable array rather than a prop per feature, because two teams
+   * adding a tab in the same week is exactly the case a second mechanism would
+   * make conflict-prone for no gain. The Access tab below is NOT registered
+   * through it: it reads `currentProject`, which this component's own Settings
+   * tab mutates, so a rename would leave a page-registered copy showing the
+   * old name.
+   */
+  extraTabs?: DetailLayoutTab[]
 }) {
   const [currentProject, setCurrentProject] = useState(project)
   const totalTasks = columns.reduce((sum, c) => sum + c.totalDocs, 0)
@@ -147,6 +162,28 @@ export function ProjectDetailView({
     },
   ]
 
+  // Who can reach this project, as its own tab rather than a dialog behind a
+  // button. A share DIALOG is the convention, and it is the wrong one here:
+  // per-object access is the thing an enterprise buyer audits, and a modal
+  // that closes when you click past it is not somewhere anybody reviews a
+  // list. Pushed rather than declared inline so the tab list stays additive —
+  // another agent is adding a Connectors tab to this same file.
+  tabs.push({
+    key: 'access',
+    label: 'Access',
+    content: (
+      <div className="max-w-2xl p-6">
+        <SharePanel
+          workspaceId={workspace.id}
+          workspaceSlug={workspace.slug}
+          objectType="project"
+          objectId={String(currentProject.id)}
+          objectLabel={currentProject.name}
+        />
+      </div>
+    ),
+  })
+
   // R9.4 — Files is back, and only when there is something in it.
   //
   // The condition is `isRepo`, which `getProjectGitOverview` computes by
@@ -164,6 +201,10 @@ export function ProjectDetailView({
       content: <ProjectFilesTab workspaceSlug={workspace.slug} projectId={currentProject.id} />,
     })
   }
+
+  // Whatever the page that rendered this view contributed, last. See the prop's
+  // own comment for why there is one array rather than a prop per feature.
+  if (extraTabs?.length) tabs.push(...extraTabs)
 
   // Four tabs (five with a repository), not eight.
   //

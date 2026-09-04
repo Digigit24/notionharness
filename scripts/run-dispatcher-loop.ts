@@ -23,6 +23,15 @@
 // Usage: npx tsx scripts/run-dispatcher-loop.ts [baseUrl]
 //   (baseUrl defaults to http://localhost:3000 — the shared dev server)
 
+import nextEnv from '@next/env'
+
+// Phase 0 — needed only to read `DISPATCHER_SECRET` out of `.env`. This does
+// NOT reintroduce hazard 1 above: `@next/env` imports nothing from this app,
+// so no transitive `payload.config.ts` import happens and no second connection
+// pool is opened. It is called before anything else runs for the same reason
+// hazard 1 exists at all.
+nextEnv.loadEnvConfig(process.cwd())
+
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -116,8 +125,18 @@ interface DispatchOutcome {
   recovered?: number
 }
 
+// Phase 0 — the tick route now refuses an unauthenticated caller (see
+// `app/api/internal-auth.ts`). This process cannot hold a session by design, so
+// the shared secret is its only way in; when the variable is unset the route
+// still allows a development build, which is why this sends no header rather
+// than refusing to start.
+const DISPATCHER_SECRET = process.env.DISPATCHER_SECRET || ''
+
 async function tick(): Promise<void> {
-  const res = await fetch(`${baseUrl}/api/dispatcher/tick`, { method: 'POST' })
+  const res = await fetch(`${baseUrl}/api/dispatcher/tick`, {
+    method: 'POST',
+    headers: DISPATCHER_SECRET ? { 'X-Dispatcher-Secret': DISPATCHER_SECRET } : {},
+  })
   if (!res.ok) throw new Error(`tick returned ${res.status}`)
   const outcome = (await res.json()) as DispatchOutcome
   if (outcome.claimed) {

@@ -26,6 +26,7 @@ import { getRun, getRunPageContext, setRunPageContext } from '@/lib/broker/runs'
 import { loadDoc, docToMarkdown } from '@/lib/blocksuite-doc'
 import { getPayloadClient } from '@/lib/payload'
 import { ensureTaskPage } from '@/lib/task-pages'
+import { can, effectiveAgentAccess, grantRoleAllows, loadAccess } from '@/lib/permissions'
 
 export const dynamic = 'force-dynamic'
 // Postgres and BlockSuite are both Node-only; neither runs on the edge.
@@ -43,6 +44,108 @@ function errorResult(error: unknown) {
 }
 
 /**
+ * The workspace a run belongs to, plus the two identities the intersection
+ * rule needs.
+ *
+ * A run carries no workspace column of its own: it reaches one by any of three
+ * routes — its task, its page, or (for a standalone "Ask" run, which has
+ * neither) its agent. `lib/broker/runs.ts`'s `listActiveRunsForWorkspace` makes
+ * the same three-way join for the same reason, and its comment records what
+ * happened when only the task route was tried.
+ */
+interface RunScope {
+  workspaceId: number
+  agentId: number | null
+  accountableUserId: number
+}
+
+async function resolveRunScope(run: {
+  taskId: number | null
+  pageId: number | null
+  agentId: number | null
+  accountableUser: number
+}): Promise<RunScope | null> {
+  const payload = await getPayloadClient()
+  const workspaceOf = (value: unknown): number | null => {
+    if (typeof value === 'number') return value
+    if (value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'number') {
+      return (value as { id: number }).id
+    }
+    return null
+  }
+
+  if (run.taskId != null) {
+    const task = await payload
+      .findByID({ collection: 'tasks', id: run.taskId, depth: 0, overrideAccess: true, disableErrors: true })
+      .catch(() => null)
+    const id = task ? workspaceOf(task.workspace) : null
+    if (id != null) return { workspaceId: id, agentId: run.agentId, accountableUserId: run.accountableUser }
+  }
+  if (run.pageId != null) {
+    const page = await payload
+      .findByID({ collection: 'pages', id: run.pageId, depth: 0, overrideAccess: true, disableErrors: true })
+      .catch(() => null)
+    const id = page ? workspaceOf(page.workspace) : null
+    if (id != null) return { workspaceId: id, agentId: run.agentId, accountableUserId: run.accountableUser }
+  }
+  if (run.agentId != null) {
+    const agent = await payload
+      .findByID({ collection: 'agents', id: run.agentId, depth: 0, overrideAccess: true, disableErrors: true })
+      .catch(() => null)
+    const id = agent ? workspaceOf(agent.workspace) : null
+    if (id != null) return { workspaceId: id, agentId: run.agentId, accountableUserId: run.accountableUser }
+  }
+  return null
+}
+
+/**
+ * May this run read this page?
+ *
+ * Two gates, and both are load-bearing. The workspace gate is the one that was
+ * missing entirely: `get_page` took a numeric id, looked it up with
+ * `overrideAccess: true`, and returned any page in the install as Markdown to
+ * any valid run token. The second gate is THE INTERSECTION RULE from
+ * `lib/permissions/model.ts` — an agent gets the weaker of its own grants and
+ * the accountable user's, never the union — applied against the page's project
+ * where it has one, because `project` is a grant object type and a page is not.
+ *
+ * A page with no project falls back to the accountable user's workspace role
+ * alone. That is the honest answer rather than a stricter-looking one: there is
+ * no per-object grant to intersect with, so inventing a refusal would only mean
+ * an agent could read a project's pages but not the workspace's loose ones.
+ */
+async function runMayReadPage(scope: RunScope, page: { workspace: unknown; project?: unknown }): Promise<boolean> {
+  const workspaceId =
+    typeof page.workspace === 'number'
+      ? page.workspace
+      : page.workspace && typeof page.workspace === 'object'
+        ? ((page.workspace as { id?: number }).id ?? null)
+        : null
+  if (workspaceId == null || workspaceId !== scope.workspaceId) return false
+
+  const projectId =
+    typeof page.project === 'number'
+      ? page.project
+      : page.project && typeof page.project === 'object'
+        ? ((page.project as { id?: number }).id ?? null)
+        : null
+
+  if (projectId != null && scope.agentId != null) {
+    const role = await effectiveAgentAccess({
+      agentId: scope.agentId,
+      accountableUserId: scope.accountableUserId,
+      workspaceId: scope.workspaceId,
+      objectType: 'project',
+      objectId: projectId,
+    })
+    return role !== null && grantRoleAllows(role, 'read')
+  }
+
+  const access = await loadAccess(scope.accountableUserId, scope.workspaceId)
+  return can(access, 'read', 'workspace')
+}
+
+/**
  * Builds a server bound to one authorised run.
  *
  * A fresh instance per request rather than a module-level singleton: the
@@ -50,7 +153,7 @@ function errorResult(error: unknown) {
  * authorisation into another run's tool calls. Constructing it is cheap;
  * getting this wrong is not.
  */
-function buildServer(runId: number, taskId: number | null) {
+function buildServer(runId: number, taskId: number | null, scope: RunScope) {
   const server = new McpServer({ name: 'notionforge', version: '1.0.0' })
 
   server.registerTool(
@@ -63,9 +166,14 @@ function buildServer(runId: number, taskId: number | null) {
       try {
         const payload = await getPayloadClient()
         const page = await payload
-          .findByID({ collection: 'pages', id: pageId, overrideAccess: true, disableErrors: true })
+          .findByID({ collection: 'pages', id: pageId, depth: 0, overrideAccess: true, disableErrors: true })
           .catch(() => null)
-        if (!page) return errorResult(new Error(`Page ${pageId} was not found.`))
+        // One sentence for "does not exist" and for "not yours", deliberately:
+        // two different answers would turn this tool into an id oracle that
+        // maps out every page in the install one probe at a time.
+        if (!page || !(await runMayReadPage(scope, page))) {
+          return errorResult(new Error(`Page ${pageId} was not found.`))
+        }
         const title = page.title || 'Untitled'
         const { doc } = loadDoc(pageId, title, page.docState)
         return textResult(await docToMarkdown(doc, title))
@@ -168,7 +276,15 @@ async function handle(request: Request): Promise<Response> {
     return refuse('This run has already finished.', 409)
   }
 
-  const server = buildServer(runId, run.taskId)
+  // Resolved once per request and closed over by every tool, so a tool cannot
+  // be written later that forgets to ask. A run that reaches no workspace by
+  // any of the three routes is refused outright rather than given an
+  // unscoped server — a run with no workspace has nothing it may legitimately
+  // read, and treating "could not tell" as "allow" is how this hole existed.
+  const scope = await resolveRunScope(run)
+  if (!scope) return refuse('This run is not attached to a workspace.', 403)
+
+  const server = buildServer(runId, run.taskId, scope)
   const transport = new WebStandardStreamableHTTPServerTransport({
     // Stateless: no session id, so nothing is retained between requests and
     // nothing has to be cleaned up if a caller disappears.

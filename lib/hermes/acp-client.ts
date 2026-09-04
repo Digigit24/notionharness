@@ -1034,7 +1034,14 @@ function normaliseSessionUpdate(update: unknown): RunEvent | null {
         costTicks,
       }
     }
-    case 'plan': {
+    // `plan` is the FIRST plan; `plan_update` is a revision of it, carrying the
+    // same `entries` shape. Only the first was handled, so an agent that
+    // re-planned mid-turn - which is the interesting moment - left a stale plan
+    // on screen for the rest of the run with nothing saying it had changed.
+    // They share a case because the payload is identical; all that differs is
+    // that the reader should be told this one is a revision.
+    case 'plan':
+    case 'plan_update': {
       const text = Array.isArray(u.entries)
         ? (u.entries as Array<{ content?: string; title?: string }>)
             .map((e) => e.title ?? e.content ?? '')
@@ -1042,14 +1049,37 @@ function normaliseSessionUpdate(update: unknown): RunEvent | null {
             .join('\n')
         : ''
       if (!text) return null
-      return { type: 'thought', text }
+      return { type: 'thought', text: kind === 'plan_update' ? `Revised plan:\n${text}` : text }
     }
+    // The agent withdrew its plan. Silence here reads as "the plan still
+    // stands", which is the opposite of what happened.
+    case 'plan_removed':
+      return { type: 'thought', text: 'The agent dropped its plan.' }
     case 'session_info_update': {
       const id = String((u.sessionId as string | undefined) ?? '')
       if (!id) return null
       return { type: 'session', externalId: id }
     }
     default:
+      // FIVE VARIANTS REACH HERE AND ARE DELIBERATELY NOT RENDERED, which is a
+      // different statement from the silent `return null` this used to be.
+      //
+      // ACP declares fifteen `sessionUpdate` kinds; this switch now handles
+      // ten. `available_commands_update`, `compaction_summary_chunk`,
+      // `compaction_update`, `config_option_update` and `current_mode_update`
+      // arrive and are dropped because none of them has a `RunEvent` type or a
+      // renderer yet - not because they are uninteresting. `compaction_update`
+      // in particular is the agent announcing that it has just compacted its
+      // own context, which is exactly the signal that explains an agent no
+      // longer recognising work it did earlier in the same run.
+      //
+      // Logged behind a flag rather than dropped in silence, so that "we never
+      // receive that event" and "we throw that event away" stop looking
+      // identical from the outside. Rendering them is a UI task, not a
+      // protocol one.
+      if (process.env.ACP_LOG_UNHANDLED === '1') {
+        console.debug(`[acp] unhandled sessionUpdate: ${kind}`)
+      }
       return null
   }
 }

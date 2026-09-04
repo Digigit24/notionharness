@@ -1,4 +1,5 @@
 import type { CollectionConfig } from 'payload'
+import { ownedByMe } from './access'
 
 // ROADMAP P2.1/2.6 — "a user follows an entity" ... "follows drive
 // notifications." `entityType`/`entityId` (not Payload's native
@@ -13,6 +14,16 @@ export const FOLLOWABLE_ENTITY_TYPES = ['task', 'project', 'page'] as const
 
 export const Followers: CollectionConfig = {
   slug: 'followers',
+  // Whose sidebar something appears in. `entityType`/`entityId` cannot be
+  // joined to a workspace (see this file's own header on why that pair exists
+  // instead of a relationship), so the only honest scope is the person the row
+  // is about.
+  access: {
+    read: ownedByMe(),
+    create: ownedByMe(),
+    update: ownedByMe(),
+    delete: ownedByMe(),
+  },
   fields: [
     {
       name: 'user',

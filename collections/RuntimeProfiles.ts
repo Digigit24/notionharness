@@ -1,7 +1,17 @@
 import type { CollectionConfig } from 'payload'
+import { inMyAdministeredWorkspaces, inMyWorkspaces } from './access'
 
 export const RuntimeProfiles: CollectionConfig = {
   slug: 'runtime-profiles',
+  // A profile names a binary and its arguments on THIS host. Reading one is
+  // ordinary workspace business; writing one decides what this machine
+  // executes, which is `administer`.
+  access: {
+    read: inMyWorkspaces(),
+    create: inMyAdministeredWorkspaces(),
+    update: inMyAdministeredWorkspaces(),
+    delete: inMyAdministeredWorkspaces(),
+  },
   admin: { useAsTitle: 'commandName' },
   fields: [
     { name: 'name', type: 'text', required: true, defaultValue: 'ACP runtime' },

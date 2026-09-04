@@ -1,8 +1,18 @@
 import type { CollectionConfig } from 'payload'
 import { recordActivity } from '@/lib/activity'
+import { inMyWorkspaces } from './access'
 
 export const Pages: CollectionConfig = {
   slug: 'pages',
+  // Ordinary workspace content. Before this block an authenticated user in NO
+  // workspace at all could list every page in the install and POST a new one
+  // into somebody else's workspace — both demonstrated live, not assumed.
+  access: {
+    read: inMyWorkspaces(),
+    create: inMyWorkspaces(),
+    update: inMyWorkspaces(),
+    delete: inMyWorkspaces(),
+  },
   admin: {
     useAsTitle: 'title',
   },

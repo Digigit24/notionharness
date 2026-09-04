@@ -1,4 +1,5 @@
 import type { CollectionConfig } from 'payload'
+import { noOne, ownedByMe } from './access'
 
 export type ApprovalStatus = 'pending' | 'approved' | 'denied' | 'timeout'
 
@@ -24,6 +25,15 @@ export interface Approval {
 
 export const Approvals: CollectionConfig = {
   slug: 'approvals',
+  // The person who was asked, and nobody else. Created and settled only by
+  // `app/api/approvals` and the dispatcher, both via `overrideAccess` — an
+  // approval granted over the public REST API would be an approval nobody gave.
+  access: {
+    read: ownedByMe('requestedUser'),
+    create: noOne,
+    update: noOne,
+    delete: noOne,
+  },
   admin: { useAsTitle: 'title' },
   fields: [
     {

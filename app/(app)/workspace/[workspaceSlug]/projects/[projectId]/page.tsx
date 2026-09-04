@@ -5,6 +5,7 @@ import { getCurrentPayloadUser } from '@/lib/current-user'
 import { listActiveRunsForProject, getProjectUsageRollup } from '@/lib/broker'
 import { TASK_STATUS_CATEGORIES } from '@/collections/TaskStatuses'
 import { ProjectDetailView } from '@/components/projects/project-detail-view'
+import { ScopedConnectorsTab } from '@/components/connectors/scoped-connectors-tab'
 import { getProjectRuns, listProjectResources } from './actions'
 import { getProjectGitOverview } from './worktree-actions'
 import { isFailureEnvelope, unwrap } from '@/lib/failures'
@@ -147,6 +148,26 @@ export default async function ProjectDetailPage({
       projectPages={projectPages.docs}
       gitOverview={gitOverview}
       initialResources={initialResources}
+      // The Connectors tab is registered HERE rather than inside the view,
+      // because its content is a server component: it reads this project's
+      // connector rows and the VIEWER's own connection for each of them, and a
+      // client component could not do either without a second round trip after
+      // hydration. `extraTabs` exists on the view for exactly this.
+      extraTabs={[
+        {
+          key: 'connectors',
+          label: 'Connectors',
+          content: (
+            <ScopedConnectorsTab
+              workspaceSlug={workspace.slug}
+              scopeType="project"
+              scopeId={project.id}
+              heading="Apps this project’s agents may act on"
+              description="These ADD to the workspace’s own connectors rather than replacing them — an agent working here can reach both. Whether it can actually act depends on you: an agent borrows the account of the person accountable for the run."
+            />
+          ),
+        },
+      ]}
     />
   )
 }

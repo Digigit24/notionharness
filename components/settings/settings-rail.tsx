@@ -11,11 +11,13 @@ import {
   Gauge,
   History,
   KeyRound,
+  Plug,
   Puzzle,
   Server,
   Settings2,
   Sparkles,
   UserCog,
+  Users,
   Wrench,
 } from 'lucide-react'
 
@@ -68,6 +70,10 @@ const GROUPS: RailGroup[] = [
     title: 'Workspace',
     items: [
       { segment: '', label: 'General', icon: Settings2, hint: 'Spend cap' },
+      // People management sits in Workspace rather than under Control: "who is
+      // in this workspace" is a property of the workspace itself, asked long
+      // before anybody asks how the queue is behaving.
+      { segment: 'members', label: 'Members', icon: Users, hint: 'Roles, invitations' },
       // Per-user and cross-workspace by design, so it lives outside the
       // workspace segment — but it was in no navigation at all, which its own
       // header comment had been asking someone to fix.
@@ -82,6 +88,11 @@ const GROUPS: RailGroup[] = [
       // it belongs to every workspace rather than to the Hermes group below.
       { segment: 'providers', label: 'Providers', icon: KeyRound, hint: 'Where each runtime gets its model' },
       { segment: 'plugins', label: 'Plugins', icon: Puzzle, hint: 'Our tools, scoped per agent' },
+      // Connectors sit beside Plugins rather than under Control because they
+      // answer the same question — what can an agent reach — and differ only in
+      // whose credential it reaches with. A plugin is a tool surface we own; a
+      // connector is a third-party identity a PERSON authorised.
+      { segment: 'connectors', label: 'Connectors', icon: Plug, hint: 'Third-party apps, per person' },
     ],
   },
   {

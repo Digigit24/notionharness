@@ -1,4 +1,5 @@
 import type { CollectionConfig } from 'payload'
+import { ownedByMe } from './access'
 
 // ROADMAP B5.3 (Batch B-5 "Attention") — per-user, per-event toggles for
 // real notification delivery. One row per user, enforced at the DB level by
@@ -16,6 +17,14 @@ import type { CollectionConfig } from 'payload'
 // collections/PushSubscriptions.ts; see that file's header comment.
 export const NotificationPreferences: CollectionConfig = {
   slug: 'notification-preferences',
+  // One person's own settings. Nobody else has a reason to read them and
+  // nobody at all has a reason to change them on somebody's behalf.
+  access: {
+    read: ownedByMe(),
+    create: ownedByMe(),
+    update: ownedByMe(),
+    delete: ownedByMe(),
+  },
   admin: { useAsTitle: 'user' },
   fields: [
     {

@@ -7,6 +7,7 @@ import { pingAcpRuntime, type RuntimePingResult } from '@/lib/runtimes/hermes/pi
 import { enqueueRun, getRun, listRunEvents, TERMINAL_STATUSES } from '@/lib/broker'
 import { getCurrentPayloadUser } from '@/lib/current-user'
 import { guard, raise, type WithFailure } from '@/lib/failures'
+import { requireAccess } from '@/lib/permissions'
 import { getActiveModelConfig } from '@/lib/runtimes/hermes/providers'
 import { listHermesProfiles, type HermesProfileSummary } from '@/lib/runtimes/hermes/profiles'
 import {
@@ -26,12 +27,87 @@ import {
 // React sentence in place of Payload's own validation error — which is the
 // only part of it worth reading.
 
+/**
+ * The writable surface of an agent, stated as a list rather than left implied.
+ *
+ * PHASE 0 — this action took `data: Record<string, unknown>` and spread it
+ * straight into `payload.update`, so a caller could write ANY field on the
+ * collection, including `workspace` (moving somebody else's agent into their
+ * own workspace) and any field added to `collections/Agents.ts` later that
+ * nobody thought to guard. A whitelist inverts that: a new field is unwritable
+ * until it is named here, which is the direction a security boundary has to
+ * fail.
+ *
+ * `workspace` is deliberately ABSENT even though the write sets it. It comes
+ * from the `workspaceId` argument the permission check below was performed
+ * against, never from `data` — otherwise the check and the write could be
+ * about two different workspaces.
+ */
+const AGENT_WRITABLE_FIELDS = [
+  'name',
+  'runtimeProfile',
+  'model',
+  'hermesProfile',
+  'runtimeConfig',
+  'thinkingLevel',
+  'instructions',
+  'customEnv',
+  'customArgs',
+  'mcpConfig',
+  'skills',
+  'maxConcurrentRuns',
+  'permissionMode',
+  'enabled',
+] as const
+
+function pickWritableAgentFields(data: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const field of AGENT_WRITABLE_FIELDS) {
+    if (field in data) out[field] = data[field]
+  }
+  return out
+}
+
+/**
+ * PHASE 0 — this had no session check at all, on top of the arbitrary-field
+ * write above: an unauthenticated POST to this action's generated endpoint
+ * could create or rewrite any agent in any workspace.
+ *
+ * `administer`, not `write`. An agent row names the `runtimeProfile` — the
+ * binary and arguments this host will execute — and its `customEnv` and
+ * `customArgs`, so editing one decides what runs on this machine and with what
+ * environment. That is `lib/permissions/model.ts`'s definition of `administer`
+ * ("configuration that costs money or reaches outside") rather than ordinary
+ * workspace work, and the collection's own access block draws the same line.
+ *
+ * Editing an EXISTING agent also re-checks that the agent is in the workspace
+ * the caller was authorised against. Without it, holding `administer` on any
+ * one workspace would be enough to rewrite every agent in the install by
+ * pairing your own `workspaceId` with somebody else's agent id — and the
+ * write's own `workspace: workspaceId` would then quietly move it.
+ */
 export async function saveAgent({ workspaceId, workspaceSlug, id, data }: { workspaceId: number; workspaceSlug: string; id?: number; data: Record<string, unknown> }): Promise<WithFailure<Agent>> {
   return guard(async () => {
+    const user = await getCurrentPayloadUser()
+    if (!user) raise('unauthenticated', 'You are not signed in.')
+    await requireAccess({ userId: user.id, workspaceId, verb: 'administer', objectType: 'workspace' })
+
     const payload = await getPayloadClient()
+    if (id !== undefined) {
+      const existing = await payload
+        .findByID({ collection: 'agents', id, depth: 0, overrideAccess: true, disableErrors: true })
+        .catch(() => null)
+      const existingWorkspaceId =
+        typeof existing?.workspace === 'number' ? existing.workspace : (existing?.workspace?.id ?? null)
+      // One sentence for "no such agent" and for "not in this workspace", so
+      // the action cannot be used to probe which agent ids exist elsewhere.
+      if (!existing || existingWorkspaceId !== workspaceId) raise('not_found', 'That agent no longer exists.')
+    }
+
+    const fields = pickWritableAgentFields(data)
     const agent = id
-      ? await payload.update({ collection: 'agents', id, data: { ...data, workspace: workspaceId } as never, overrideAccess: true })
-      : await payload.create({ collection: 'agents', data: { ...data, workspace: workspaceId } as never, overrideAccess: true })
+      ? await payload.update({ collection: 'agents', id, data: { ...fields, workspace: workspaceId } as never, overrideAccess: true })
+      : await payload.create({ collection: 'agents', data: { ...fields, workspace: workspaceId } as never, overrideAccess: true })
     revalidatePath(`/workspace/${workspaceSlug}/agents`)
     revalidatePath(`/workspace/${workspaceSlug}/agents/${agent.id}`)
     return agent

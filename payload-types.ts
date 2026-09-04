@@ -580,7 +580,7 @@ export interface Comment {
  */
 export interface Activity {
   id: number;
-  entityType: 'task' | 'project' | 'page' | 'run';
+  entityType: 'task' | 'project' | 'page' | 'run' | 'workspace' | 'connector' | 'agent' | 'channel';
   entityId: string;
   /**
    * Nullable: system/automation-generated activity has no human actor.

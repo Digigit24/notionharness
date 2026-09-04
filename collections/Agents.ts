@@ -1,7 +1,18 @@
 import type { CollectionConfig } from 'payload'
+import { inMyAdministeredWorkspaces, inMyWorkspaces } from './access'
 
 export const Agents: CollectionConfig = {
   slug: 'agents',
+  // Scoped to the caller's own workspaces. An agent row names the runtime
+  // profile that will execute on this host, so a stranger able to point one at
+  // a different binary has a remote-execution primitive, not just a data leak —
+  // which is why writes are the `administer` line `lib/permissions` draws.
+  access: {
+    read: inMyWorkspaces(),
+    create: inMyAdministeredWorkspaces(),
+    update: inMyAdministeredWorkspaces(),
+    delete: inMyAdministeredWorkspaces(),
+  },
   admin: { useAsTitle: 'name' },
   fields: [
     { name: 'name', type: 'text', required: true, defaultValue: 'New agent' },

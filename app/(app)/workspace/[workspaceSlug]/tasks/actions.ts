@@ -6,7 +6,8 @@ import { getCurrentPayloadUser } from '@/lib/current-user'
 import type { Task } from '@/payload-types'
 import { enqueueRun, listActiveRunsForWorkspace, listRunsForTask, listRunEvents, getTaskUsageTotals } from '@/lib/broker'
 import { buildTasksWhere, payloadSortString, type TaskFilters, type TaskSort } from '@/lib/task-views/data-layer'
-import { guard, type WithFailure } from '@/lib/failures'
+import { guard, raise, type WithFailure } from '@/lib/failures'
+import { requireAccess, type Verb } from '@/lib/permissions'
 
 // R12-P1.1 — the failure spine (lib/failures.ts) is adopted here per action,
 // not per file, because this module is shared across units. Everything below
@@ -23,6 +24,42 @@ import { guard, type WithFailure } from '@/lib/failures'
 // them in the same pass, which is the flag day the envelope design exists to
 // avoid. They still throw, so their messages are still lost in production —
 // tracked, not forgotten.
+
+/**
+ * PHASE 0 — every action in this file wrote or read with `overrideAccess: true`
+ * and no session check of any kind. A server action is a public POST endpoint
+ * with a generated URL, not a private function, so naming any `workspaceId` or
+ * `taskId` was enough to create, retitle, reassign, bulk-edit or list somebody
+ * else's tasks — and, through `updateTaskFields`'s assign-agent side effect, to
+ * START A RUN in a workspace you have never been a member of, spending its
+ * budget and running a binary on this host.
+ *
+ * Two helpers, because the actions split cleanly in two. The ones that already
+ * carry a `workspaceId` check it directly; the ones that carry only a `taskId`
+ * resolve the workspace FROM THE TASK rather than from anything the caller
+ * said, which is the difference between a check and a formality.
+ */
+async function requireWorkspace(workspaceId: number, verb: Verb): Promise<number> {
+  const user = await getCurrentPayloadUser()
+  if (!user) raise('unauthenticated', 'You are not signed in.')
+  await requireAccess({ userId: user.id, workspaceId, verb, objectType: 'workspace' })
+  return user.id
+}
+
+async function requireTask(taskId: number, verb: Verb): Promise<number> {
+  const user = await getCurrentPayloadUser()
+  if (!user) raise('unauthenticated', 'You are not signed in.')
+  const payload = await getPayloadClient()
+  const task = await payload
+    .findByID({ collection: 'tasks', id: taskId, depth: 0, overrideAccess: true, disableErrors: true })
+    .catch(() => null)
+  // One sentence for "no such task" and for "not yours", so this cannot be used
+  // to enumerate which task ids exist in other workspaces.
+  if (!task) raise('not_found', 'That task no longer exists.')
+  const workspaceId = typeof task.workspace === 'number' ? task.workspace : task.workspace.id
+  await requireAccess({ userId: user.id, workspaceId, verb, objectType: 'workspace' })
+  return user.id
+}
 
 async function nextColumnPosition(
   payload: Awaited<ReturnType<typeof getPayloadClient>>,
@@ -57,6 +94,7 @@ export async function createTask({
    * caller (the plain Tasks board) is unaffected. */
   projectId?: number
 }): Promise<Task> {
+  await requireWorkspace(workspaceId, 'write')
   const payload = await getPayloadClient()
   const position = await nextColumnPosition(payload, workspaceId, statusId)
   const task = await payload.create({
@@ -95,6 +133,11 @@ export async function moveTaskToStatus({
   statusId: number
 }): Promise<WithFailure<Task>> {
   return guard(async () => {
+    // The task decides the workspace. `workspaceId` is still used below to find
+    // the next position in the target column, but it no longer decides who may
+    // move the card — pairing your own workspace with somebody else's task id
+    // was exactly the hole.
+    await requireTask(taskId, 'write')
     const payload = await getPayloadClient()
     const [position, user] = await Promise.all([
       nextColumnPosition(payload, workspaceId, statusId),
@@ -123,6 +166,10 @@ export async function updateTaskFields({
   workspaceSlug: string
   data: Partial<Pick<Task, 'title' | 'status' | 'assignee' | 'agent' | 'project'>>
 }): Promise<Task> {
+  // `execute`, not `write`: setting `agent` enqueues a run below, which spends
+  // the workspace's budget and runs a binary on this host. `lib/permissions/
+  // model.ts` separates the two verbs for precisely this case.
+  await requireTask(taskId, 'execute')
   const payload = await getPayloadClient()
   const user = await getCurrentPayloadUser()
   const before = await payload.findByID({ collection: 'tasks', id: taskId, depth: 0, overrideAccess: true })
@@ -168,6 +215,11 @@ export async function bulkUpdateTaskFields({
   data: Partial<Pick<Task, 'status' | 'assignee' | 'agent' | 'project'>>
 }): Promise<WithFailure<Task[]>> {
   return guard(async () => {
+    // Checked per task rather than once for the set: a bulk call is a list of
+    // ids the caller supplied, and one id from another workspace hidden among
+    // fifty of their own is the obvious way to abuse a single up-front check.
+    // `execute` for the same reason `updateTaskFields` uses it.
+    for (const taskId of taskIds) await requireTask(taskId, 'execute')
     const payload = await getPayloadClient()
     const user = await getCurrentPayloadUser()
     const changesAgent = Object.prototype.hasOwnProperty.call(data, 'agent')
@@ -219,6 +271,7 @@ export interface TaskAgentColumnData {
  * of scope for this pass. */
 export async function getTaskAgentColumnsData(taskIds: number[]): Promise<WithFailure<Record<number, TaskAgentColumnData>>> {
   return guard(async () => {
+    for (const taskId of taskIds) await requireTask(taskId, 'read')
     const entries = await Promise.all(
       taskIds.map(async (taskId) => {
         const [usage, runs] = await Promise.all([getTaskUsageTotals(taskId), listRunsForTask(taskId)])
@@ -254,6 +307,7 @@ export async function createQuickTask({
 }): Promise<Task> {
   const [user, payload] = await Promise.all([getCurrentPayloadUser(), getPayloadClient()])
   if (!user) throw new Error('You must be logged in to create a task.')
+  await requireAccess({ userId: user.id, workspaceId, verb: 'write', objectType: 'workspace' })
 
   const statuses = await payload.find({
     collection: 'task-statuses',
@@ -272,15 +326,26 @@ export async function createQuickTask({
  * — `depth: 1` so `status`/`assignee` come back populated for display, not
  * just raw relationship ids. */
 export async function getTask(taskId: number): Promise<Task | null> {
+  // Null rather than a raise for a task the caller may not see: this feeds the
+  // editor's task block, which already renders a "no longer exists" state, and
+  // a permission error inside a document reads as a broken document. It also
+  // keeps the two cases indistinguishable to somebody probing ids.
+  try {
+    await requireTask(taskId, 'read')
+  } catch {
+    return null
+  }
   const payload = await getPayloadClient()
   return payload.findByID({ collection: 'tasks', id: taskId, depth: 1, overrideAccess: true, disableErrors: true }).catch(() => null)
 }
 
 export async function getTaskRuns(taskId: number) {
+  await requireTask(taskId, 'read')
   return listRunsForTask(taskId)
 }
 
 export async function getActiveRunsForWorkspace(workspaceId: number) {
+  await requireWorkspace(workspaceId, 'read')
   return listActiveRunsForWorkspace(workspaceId)
 }
 
@@ -300,6 +365,7 @@ export async function loadMoreTasks({
   limit: number
 }): Promise<WithFailure<Task[]>> {
   return guard(async () => {
+    await requireWorkspace(workspaceId, 'read')
     const payload = await getPayloadClient()
     const result = await payload.find({
       collection: 'tasks',
@@ -339,6 +405,7 @@ export async function getTasksForView({
   limit?: number
 }): Promise<WithFailure<{ docs: Task[]; totalDocs: number }>> {
   return guard(async () => {
+    await requireWorkspace(workspaceId, 'read')
     const payload = await getPayloadClient()
     const result = await payload.find({
       collection: 'tasks',
@@ -356,6 +423,7 @@ export async function getTasksForView({
 // top-level `app/(app)/actions.ts` since it's scoped to this surface only.
 export async function getTaskActivity(taskId: number) {
   return guard(async () => {
+    await requireTask(taskId, 'read')
     const payload = await getPayloadClient()
     const result = await payload.find({
       collection: 'activity',

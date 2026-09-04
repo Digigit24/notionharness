@@ -9,7 +9,49 @@ import { applyDocSync } from '@/lib/blocksuite-doc'
 import { enqueueRun, getRun, listPendingSuggestionRunsForPage, listRunEvents, listRunsForPage } from '@/lib/broker'
 import type { Run, RunMessageRow } from '@/lib/broker/types'
 import { acceptRunSuggestions, rejectRunSuggestions } from '@/lib/agent-suggestions'
+import { raise } from '@/lib/failures'
+import { requireAccess, type Verb } from '@/lib/permissions'
 import type { Page, TaskStatus } from '@/payload-types'
+
+/**
+ * PHASE 0 — the page mutations in this file had NO check of any kind.
+ *
+ * `enqueuePageRun`, `getPageRunSnapshots` and the three suggestion actions were
+ * already guarded (by `assertPageAccess`, below). Everything else was not:
+ * `createPage`, `renamePage`, `setPageIcon`, `setPageCover`, `toggleFavorite`,
+ * `toggleFullWidth`, `toggleLocked`, `archivePage`, `restorePage`,
+ * `deletePageForever`, `duplicatePage`, `movePage`, `getRunSnapshot` and — the
+ * worst of them — `syncPageDoc`, which takes a page id and a Yjs update and
+ * applies it. A server action is a public POST endpoint with a generated URL,
+ * so that was "rewrite the contents of any page in the install".
+ *
+ * These two helpers say it once. `requirePage` resolves the workspace FROM THE
+ * PAGE, never from a `workspaceId` the caller also supplied — several of these
+ * actions take both, and trusting the second would let a caller pair a
+ * workspace they belong to with a page they do not.
+ */
+async function requirePage(pageId: number, verb: Verb): Promise<{ userId: number; workspaceId: number }> {
+  const user = await getCurrentPayloadUser()
+  if (!user) raise('unauthenticated', 'You are not signed in.')
+  const payload = await getPayloadClient()
+  const page = await payload
+    .findByID({ collection: 'pages', id: pageId, depth: 0, overrideAccess: true, disableErrors: true })
+    .catch(() => null)
+  // One sentence for "no such page" and for "not yours", so this cannot be used
+  // to enumerate which page ids exist in other workspaces.
+  if (!page) raise('not_found', 'That page no longer exists.')
+  const workspaceId = typeof page.workspace === 'number' ? page.workspace : page.workspace?.id
+  if (typeof workspaceId !== 'number') raise('not_found', 'That page no longer exists.')
+  await requireAccess({ userId: user.id, workspaceId, verb, objectType: 'workspace' })
+  return { userId: user.id, workspaceId }
+}
+
+async function requireWorkspace(workspaceId: number, verb: Verb): Promise<number> {
+  const user = await getCurrentPayloadUser()
+  if (!user) raise('unauthenticated', 'You are not signed in.')
+  await requireAccess({ userId: user.id, workspaceId, verb, objectType: 'workspace' })
+  return user.id
+}
 
 function parentIdOf(page: Page): number | null {
   if (!page.parentPage) return null
@@ -103,6 +145,7 @@ export async function createPage({
   workspaceSlug: string
   parentPageId?: number | null
 }) {
+  await requireWorkspace(workspaceId, 'write')
   const payload = await getPayloadClient()
   const [position, user] = await Promise.all([
     nextPosition(payload, workspaceId, parentPageId ?? null),
@@ -129,6 +172,7 @@ export async function createPage({
 }
 
 export async function renamePage(pageId: number, workspaceSlug: string, title: string) {
+  await requirePage(pageId, 'write')
   const payload = await getPayloadClient()
   const user = await getCurrentPayloadUser()
   await payload.update({
@@ -142,24 +186,28 @@ export async function renamePage(pageId: number, workspaceSlug: string, title: s
 }
 
 export async function setPageIcon(pageId: number, workspaceSlug: string, icon: string | null) {
+  await requirePage(pageId, 'write')
   const payload = await getPayloadClient()
   await payload.update({ collection: 'pages', id: pageId, data: { icon }, overrideAccess: true })
   revalidatePath(`/workspace/${workspaceSlug}`)
 }
 
 export async function setPageCover(pageId: number, workspaceSlug: string, coverImage: string | null) {
+  await requirePage(pageId, 'write')
   const payload = await getPayloadClient()
   await payload.update({ collection: 'pages', id: pageId, data: { coverImage }, overrideAccess: true })
   revalidatePath(`/workspace/${workspaceSlug}`)
 }
 
 export async function toggleFavorite(pageId: number, workspaceSlug: string, value: boolean) {
+  await requirePage(pageId, 'write')
   const payload = await getPayloadClient()
   await payload.update({ collection: 'pages', id: pageId, data: { isFavorite: value }, overrideAccess: true })
   revalidatePath(`/workspace/${workspaceSlug}`)
 }
 
 export async function toggleFullWidth(pageId: number, workspaceSlug: string, value: boolean) {
+  await requirePage(pageId, 'write')
   const payload = await getPayloadClient()
   await payload.update({ collection: 'pages', id: pageId, data: { isFullWidth: value }, overrideAccess: true })
   // `'layout'` (not the default `'page'`) so this invalidates the currently-open
@@ -170,6 +218,7 @@ export async function toggleFullWidth(pageId: number, workspaceSlug: string, val
 }
 
 export async function toggleLocked(pageId: number, workspaceSlug: string, value: boolean) {
+  await requirePage(pageId, 'write')
   const payload = await getPayloadClient()
   await payload.update({ collection: 'pages', id: pageId, data: { isLocked: value }, overrideAccess: true })
   // See toggleFullWidth's comment — 'layout' so a fresh load/other tab of the
@@ -184,6 +233,11 @@ export async function toggleLocked(pageId: number, workspaceSlug: string, value:
 // Wrapped in an object (not a bare string) because Payload's `json` field
 // tries to JSON.parse a raw string value, which a base64 Yjs update isn't.
 export async function syncPageDoc(pageId: number, update: string) {
+  // Fires on every keystroke, so this adds two indexed reads to the debounced
+  // autosave path. Measured against the alternative it is not close: the
+  // alternative was that a page id and a Yjs update were the only things needed
+  // to rewrite any document in the install.
+  await requirePage(pageId, 'write')
   const payload = await getPayloadClient()
   await applyDocSync(payload, pageId, update)
 }
@@ -240,6 +294,12 @@ export async function enqueuePageRun(prompt: string, pageId: number, agentId: nu
 export async function getRunSnapshot(runId: number): Promise<{ run: Run; events: RunMessageRow[] } | null> {
   const run = await getRun(runId)
   if (!run) return null
+  // A run's events are its full transcript — the prompt, the tool calls, the
+  // output. This is the block-anchored thread popover's loader, so every run it
+  // legitimately asks about has a page; a run without one is refused rather
+  // than waved through, because there is nothing here to check it against.
+  if (!run.pageId) return null
+  await requirePage(run.pageId, 'read')
   const events = await listRunEvents(runId)
   return { run, events }
 }
@@ -260,7 +320,7 @@ export async function getPageRunSnapshots(pageId: number): Promise<{ run: Run; e
   if (!Number.isSafeInteger(pageId) || pageId < 1) throw new Error('A valid page id is required.')
   const [user, payload] = await Promise.all([getCurrentPayloadUser(), getPayloadClient()])
   if (!user) throw new Error('You must be logged in.')
-  await assertPageAccess(payload, pageId, user.id)
+  await assertPageAccess(payload, pageId, user.id, 'read')
   const runs = await listRunsForPage(pageId)
   return Promise.all(runs.map(async (run) => ({ run, events: await listRunEvents(run.id) })))
 }
@@ -280,6 +340,10 @@ async function subtreeIds(
 }
 
 export async function archivePage(pageId: number, workspaceId: number, workspaceSlug: string) {
+  // Checked against the page, then the caller's own `workspaceId` is used only
+  // to walk the subtree — a mismatch between the two finds no descendants
+  // rather than archiving another workspace's tree.
+  await requirePage(pageId, 'write')
   const payload = await getPayloadClient()
   const ids = await subtreeIds(payload, workspaceId, pageId)
   await Promise.all(
@@ -291,6 +355,7 @@ export async function archivePage(pageId: number, workspaceId: number, workspace
 }
 
 export async function restorePage(pageId: number, workspaceId: number, workspaceSlug: string) {
+  await requirePage(pageId, 'write')
   const payload = await getPayloadClient()
   const ids = await subtreeIds(payload, workspaceId, pageId)
   await Promise.all(
@@ -302,6 +367,7 @@ export async function restorePage(pageId: number, workspaceId: number, workspace
 }
 
 export async function deletePageForever(pageId: number, workspaceId: number, workspaceSlug: string) {
+  await requirePage(pageId, 'delete')
   const payload = await getPayloadClient()
   const ids = await subtreeIds(payload, workspaceId, pageId)
   await Promise.all(
@@ -311,6 +377,9 @@ export async function deletePageForever(pageId: number, workspaceId: number, wor
 }
 
 export async function duplicatePage(pageId: number, workspaceSlug: string) {
+  // `write` on the source, which is also the destination: a copy always lands
+  // beside its original, in the same workspace.
+  await requirePage(pageId, 'write')
   const payload = await getPayloadClient()
   const original = await payload.findByID({ collection: 'pages', id: pageId, overrideAccess: true })
   const workspaceId = typeof original.workspace === 'number' ? original.workspace : original.workspace.id
@@ -351,6 +420,11 @@ export async function movePage({
   placement: 'before' | 'after' | 'end'
   referenceId?: number | null
 }) {
+  // Both ends: the page being moved, and the workspace whose sibling positions
+  // this rewrites. They are normally the same workspace, and a caller who names
+  // two different ones is refused by whichever they do not belong to.
+  await requirePage(pageId, 'write')
+  await requireWorkspace(workspaceId, 'write')
   const payload = await getPayloadClient()
   const all = (
     await payload.find({
@@ -395,22 +469,28 @@ export async function movePage({
   revalidatePath(`/workspace/${workspaceSlug}`)
 }
 
-/** Same "does this user belong to the page's workspace" check `enqueuePageRun`
- * already inlines, shared here since both suggestion actions below need it
- * too — a human must not be able to accept/reject another workspace's agent
- * output just by knowing a run id. */
-async function assertPageAccess(payload: Awaited<ReturnType<typeof getPayloadClient>>, pageId: number, userId: number) {
-  const page = await payload.findByID({ collection: 'pages', id: pageId, depth: 0, overrideAccess: true, disableErrors: true }).catch(() => null)
-  if (!page) throw new Error('Page not found.')
-  const workspaceId = typeof page.workspace === 'number' ? page.workspace : page.workspace?.id
-  if (typeof workspaceId !== 'number') throw new Error('Page has no workspace.')
-  const workspace = await payload.findByID({ collection: 'workspaces', id: workspaceId, depth: 0, overrideAccess: true, disableErrors: true }).catch(() => null)
-  if (!workspace) throw new Error('Workspace not found.')
-  const ownerId = typeof workspace.owner === 'number' ? workspace.owner : workspace.owner?.id
-  const memberIds = Array.isArray(workspace.members)
-    ? workspace.members.map((member) => (typeof member === 'number' ? member : member.id))
-    : []
-  if (ownerId !== userId && !memberIds.includes(userId)) throw new Error('You do not have access to this page.')
+/**
+ * The suggestion actions' access check, now delegated to `lib/permissions`.
+ *
+ * PHASE 0 — this used to read `workspace.owner` and `workspace.members`
+ * directly, which is the ad-hoc boolean `lib/permissions/model.ts` was written
+ * to replace: it could not tell a viewer from an editor, so somebody added to a
+ * workspace read-only could accept or reject an agent's edits to its documents.
+ * `workspace-members` is now authoritative and the backfill is complete —
+ * verified against this database, every legacy `owner`/`members` pair has a row
+ * — so this is strictly stronger than what it replaces rather than a different
+ * set of people.
+ *
+ * The `payload` parameter is kept so the four callers need no edit; it is
+ * unused now that the lookup lives behind `requirePage`.
+ */
+async function assertPageAccess(
+  _payload: Awaited<ReturnType<typeof getPayloadClient>>,
+  pageId: number,
+  _userId: number,
+  verb: Verb = 'write',
+) {
+  await requirePage(pageId, verb)
 }
 
 /** ROADMAP B3.1 (Batch B-2, suggestions mode) — read side of the
@@ -425,7 +505,7 @@ export async function listPendingSuggestionsForPage(
   if (!Number.isSafeInteger(pageId) || pageId < 1) throw new Error('A valid page id is required.')
   const [user, payload] = await Promise.all([getCurrentPayloadUser(), getPayloadClient()])
   if (!user) throw new Error('You must be logged in.')
-  await assertPageAccess(payload, pageId, user.id)
+  await assertPageAccess(payload, pageId, user.id, 'read')
   const runs = await listPendingSuggestionRunsForPage(pageId)
   return runs
     .filter((run): run is Run & { pageSubtreeBlockId: string } => run.pageSubtreeBlockId !== null)

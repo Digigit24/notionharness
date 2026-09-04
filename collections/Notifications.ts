@@ -1,4 +1,5 @@
 import type { CollectionConfig } from 'payload'
+import { noOne, ownedByMe } from './access'
 
 // ROADMAP P2.1/2.6 — "follows drive notifications." `activity` is optional:
 // most notifications will reference the activity row that caused them, but
@@ -6,6 +7,16 @@ import type { CollectionConfig } from 'payload'
 // doesn't yet) have a backing activity row.
 export const Notifications: CollectionConfig = {
   slug: 'notifications',
+  // One person's own notifications and nobody else's, an app admin included —
+  // a notification body quotes the message that triggered it. Written only by
+  // `lib/notifications` via `overrideAccess`; `update` stays open to the owner
+  // so marking one read over the API still works.
+  access: {
+    read: ownedByMe(),
+    create: noOne,
+    update: ownedByMe(),
+    delete: ownedByMe(),
+  },
   fields: [
     {
       name: 'user',

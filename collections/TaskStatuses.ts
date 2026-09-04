@@ -1,4 +1,5 @@
 import type { CollectionConfig } from 'payload'
+import { inMyWorkspaces } from './access'
 
 // ROADMAP P2.2/D-level decision — a workspace defines its own named statuses
 // (whatever a team calls their workflow stages), but EVERY status carries a
@@ -11,6 +12,13 @@ export const TASK_STATUS_CATEGORIES = ['backlog', 'todo', 'inProgress', 'inRevie
 
 export const TaskStatuses: CollectionConfig = {
   slug: 'task-statuses',
+  // Ordinary workspace content: everyone in the workspace, nobody outside it.
+  access: {
+    read: inMyWorkspaces(),
+    create: inMyWorkspaces(),
+    update: inMyWorkspaces(),
+    delete: inMyWorkspaces(),
+  },
   admin: {
     useAsTitle: 'name',
   },

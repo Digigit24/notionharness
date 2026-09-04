@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { refreshAllRuntimes } from '@/lib/runtimes/hermes/runtime-health'
+import { requireInternalCaller } from '../../internal-auth'
 
 /**
  * Internal-only trigger for `refreshAllRuntimes`, meant to be polled by
@@ -11,7 +12,11 @@ import { refreshAllRuntimes } from '@/lib/runtimes/hermes/runtime-health'
  * instance. Also callable directly (e.g. a "Refresh" button on the runtimes
  * page) for an on-demand check between timer ticks.
  */
-export async function POST() {
+export async function POST(request: Request) {
+  // Same gate as the dispatcher tick, for the same reason: this starts the
+  // Hermes dashboard server on this host if it is not already running.
+  const refusal = await requireInternalCaller(request, 'runtimes/health-check')
+  if (refusal) return refusal
   const result = await refreshAllRuntimes()
   return NextResponse.json(result)
 }

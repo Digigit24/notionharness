@@ -1,4 +1,5 @@
 import type { CollectionConfig } from 'payload'
+import { inMyWorkspaces, noOne } from './access'
 
 /**
  * ROADMAP R8.2 — the artifact data model.
@@ -20,6 +21,15 @@ import type { CollectionConfig } from 'payload'
  */
 export const Artifacts: CollectionConfig = {
   slug: 'artifacts',
+  // Read within the workspace; written only by the app, which uses
+  // `overrideAccess: true`. An artifact is a record of what a run produced, and
+  // one that can be hand-edited over REST is a record of nothing.
+  access: {
+    read: inMyWorkspaces(),
+    create: noOne,
+    update: noOne,
+    delete: noOne,
+  },
   admin: {
     useAsTitle: 'name',
     defaultColumns: ['name', 'kind', 'project', 'createdByAgent', 'createdAt'],

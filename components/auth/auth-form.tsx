@@ -1,12 +1,30 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { authClient } from '@/lib/auth-client'
+import { safeNextPath } from './next-path'
 
+/**
+ * `?next=` exists for exactly one reason: an invitation link.
+ *
+ * Somebody who has been invited arrives at `/invite/<token>` with no account.
+ * Sending them to sign up and then landing them on the app home would strand
+ * them one step short of the thing they came for, with the token only in their
+ * browser history. So both pages carry the destination through and come back to
+ * it. `router.push('/')` remains the default when there is no `next`, so every
+ * other path into these forms is unchanged.
+ *
+ * The validation in `safeNextPath` is not optional: an unvalidated `next` on a
+ * SIGNUP page is an open redirect on the one page an unauthenticated stranger
+ * is meant to reach, which is how a phishing link gets to borrow this app's
+ * domain. Same-origin relative paths only.
+ */
 export function AuthForm({ mode }: { mode: 'login' | 'signup' }) {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const next = safeNextPath(searchParams.get('next'))
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -28,7 +46,7 @@ export function AuthForm({ mode }: { mode: 'login' | 'signup' }) {
       setError(result.error.message || 'Something went wrong.')
       return
     }
-    router.push('/')
+    router.push(next ?? '/')
     router.refresh()
   }
 
@@ -80,14 +98,14 @@ export function AuthForm({ mode }: { mode: 'login' | 'signup' }) {
         {mode === 'signup' ? (
           <>
             Already have an account?{' '}
-            <Link href="/login" className="underline">
+            <Link href={next ? `/login?next=${encodeURIComponent(next)}` : '/login'} className="underline">
               Log in
             </Link>
           </>
         ) : (
           <>
             Don&apos;t have an account?{' '}
-            <Link href="/signup" className="underline">
+            <Link href={next ? `/signup?next=${encodeURIComponent(next)}` : '/signup'} className="underline">
               Sign up
             </Link>
           </>

@@ -14,11 +14,32 @@ export default async function Home() {
   // any other account's workspace by slug. Real fix, not a superficial one:
   // this query is the one place both the auto-redirect-if-only-one-workspace
   // shortcut below and the full picker draw their list from.
-  const workspaces =
+  //
+  // PHASE 0 — now read from `workspace-members` rather than the legacy
+  // `workspaces.owner`/`workspaces.members` pair, for the reason
+  // `app/(app)/workspace/[workspaceSlug]/layout.tsx` states at its own check:
+  // the two tables had diverged, and this picker was the surface where that
+  // showed up as "you have no workspaces" for somebody who plainly did.
+  const memberWorkspaceIds =
     user != null
+      ? (
+          await payload.find({
+            collection: 'workspace-members',
+            where: { user: { equals: user.id } },
+            limit: 500,
+            depth: 0,
+            overrideAccess: true,
+          })
+        ).docs
+          .map((doc) => (typeof doc.workspace === 'object' && doc.workspace ? doc.workspace.id : doc.workspace))
+          .filter((id): id is number => typeof id === 'number')
+      : []
+
+  const workspaces =
+    memberWorkspaceIds.length > 0
       ? await payload.find({
           collection: 'workspaces',
-          where: { or: [{ owner: { equals: user.id } }, { members: { contains: user.id } }] },
+          where: { id: { in: memberWorkspaceIds } },
           limit: 100,
           sort: 'name',
           overrideAccess: true,
