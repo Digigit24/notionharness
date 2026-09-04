@@ -1,7 +1,7 @@
 import { notFound } from 'next/navigation'
 import { getPayloadClient } from '@/lib/payload'
 import { getWorkspaceBySlug } from '@/lib/pages-cache'
-import { getRunUsageTotals, getTaskUsageTotals, listRunsForTask } from '@/lib/broker'
+import { getChannelMessage, getRunUsageTotals, getTaskUsageTotals, listRunsForTask } from '@/lib/broker'
 import { loadRunReview } from '@/lib/run-worktrees/review'
 import { TaskDetailView, type ChangeSummary } from '@/components/tasks/task-detail-view'
 import { getTaskActivity } from '@/app/(app)/workspace/[workspaceSlug]/tasks/actions'
@@ -128,6 +128,14 @@ export default async function TaskDetailPage({
       }),
   )
 
+  // R14-P0.8.2 — "opening a task shows its thread." `tasks.channelThreadRootId`
+  // stores only the broker `team_messages.id` (see that field's own comment
+  // in `collections/Tasks.ts` for why it is not a Payload relationship); the
+  // team/channel id the "View thread" link needs is resolved here, server-side,
+  // from the broker rather than adding a second stored column for it.
+  const threadTeamId =
+    task.channelThreadRootId != null ? (await getChannelMessage(task.channelThreadRootId))?.teamId ?? null : null
+
   return (
     <TaskDetailView
       workspace={workspace}
@@ -144,6 +152,7 @@ export default async function TaskDetailPage({
       activity={activity}
       page={page}
       changes={changes}
+      threadTeamId={threadTeamId}
     />
   )
 }

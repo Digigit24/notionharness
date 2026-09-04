@@ -426,6 +426,10 @@ export interface Task {
    * Denormalized "most recently active" timestamp, updated automatically on every change, so sorting never has to join activity.
    */
   lastActivityAt?: string | null;
+  /**
+   * Optional broker `team_messages.id` — the thread this task was opened as (ROADMAP R14-P0.8), or the shared parent-task thread for a subtask created from inside it. A number rather than a relationship because team_messages lives in the raw-pg broker, not in Payload, the same reason Invitations.channelId and AccessGrants.objectId are plain columns instead. Deliberately NOT team_tasks (the broker's own lightweight coordination item) — this points at a project task's thread root message, one project task at a time; a task with no thread leaves this null and behaves exactly as it did before this field existed.
+   */
+  channelThreadRootId?: number | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -1374,6 +1378,7 @@ export interface TasksSelect<T extends boolean = true> {
   position?: T;
   revision?: T;
   lastActivityAt?: T;
+  channelThreadRootId?: T;
   updatedAt?: T;
   createdAt?: T;
 }

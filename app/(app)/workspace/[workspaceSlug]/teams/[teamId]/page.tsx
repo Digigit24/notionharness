@@ -67,7 +67,12 @@ export default async function ChannelPage({
   // The agents and the people the roster can add. Fetched here rather than
   // behind a click so opening the picker costs nothing, and as two bounded
   // queries rather than one per row.
-  const [agentsResult, usersResult] = await Promise.all([
+  //
+  // `projectsResult` is R14-P0.8's own addition — the "New task" popup's
+  // project picker needs the same list `app/(app)/workspace/[workspaceSlug]/
+  // projects/page.tsx` already fetches for its own list, so opening that
+  // popup costs nothing either.
+  const [agentsResult, usersResult, projectsResult] = await Promise.all([
     payload.find({
       collection: 'agents',
       where: { workspace: { equals: workspace.id }, enabled: { equals: true } },
@@ -82,6 +87,14 @@ export default async function ChannelPage({
       depth: 1,
       overrideAccess: true,
       disableErrors: true,
+    }),
+    payload.find({
+      collection: 'projects',
+      where: { workspace: { equals: workspace.id } },
+      sort: 'name',
+      limit: 500,
+      depth: 0,
+      overrideAccess: true,
     }),
   ])
 
@@ -154,6 +167,7 @@ export default async function ChannelPage({
         }}
         agents={agentsResult.docs.map((a) => ({ id: a.id, name: a.name }))}
         users={[...peopleById.values()].sort((a, b) => a.name.localeCompare(b.name))}
+        projects={projectsResult.docs.map((p) => ({ id: p.id, name: p.name }))}
       />
     </main>
   )

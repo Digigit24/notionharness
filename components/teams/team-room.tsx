@@ -23,6 +23,13 @@ import {
 } from '@/app/(app)/workspace/[workspaceSlug]/teams/actions'
 import type { Channel } from '@/app/(app)/workspace/[workspaceSlug]/teams/data'
 import {
+  createChannelSubtaskAction,
+  createChannelTaskAction,
+  listProjectTaskChipsAction,
+  type ProjectTaskChipData,
+} from '@/app/(app)/workspace/[workspaceSlug]/teams/task-thread-actions'
+import type { TaskProjectOption } from './new-task-popup'
+import {
   SLOT_STATE_LABEL,
   formatSilence,
   isTerminalRunStatus,
@@ -123,6 +130,7 @@ export function TeamRoom({
   initialUnread,
   agents,
   users,
+  projects,
 }: {
   workspaceId: number
   workspaceSlug: string
@@ -154,6 +162,9 @@ export function TeamRoom({
   initialUnread: { unreadCount: number; mentionCount: number }
   agents: TeamAgentOption[]
   users: TeamUserOption[]
+  /** R14-P0.8 — the workspace's projects, for the "New task" popup's project
+   * picker. Fetched once on the server the same way `agents` already is. */
+  projects: TaskProjectOption[]
 }) {
   const [view, setView] = useState<RoomView>('channel')
   const [slots, setSlots] = useState(initialSlots)
@@ -201,6 +212,20 @@ export function TeamRoom({
   const [retiredRunIds, setRetiredRunIds] = useState<Set<number>>(() => new Set())
   /** The board card to scroll to and flash, set by a task chip in the feed. */
   const [focusTaskId, setFocusTaskId] = useState<number | null>(null)
+  /**
+   * R14-P0.8 — project-task threads, keyed by their root message id.
+   *
+   * Fetched once below rather than threaded through `initialFeed`/the poll:
+   * this is a SECOND, unrelated task system (`collections/Tasks.ts`, not the
+   * broker's own `tasks`/`TeamTask`) and teaching `listChannelFeed`/
+   * `pollTeamRoomAction` (broker foundation) about it would be exactly the
+   * merge ROADMAP-SERIES.md's R14-P0.8 section says not to do. One chip
+   * component (`ProjectTaskChip`) reads this same map from both
+   * `ChannelView` (a chip beside a thread-root message) and `ThreadPane` (a
+   * chip atop an open thread) — "one chip component, two ways to arrive at
+   * the same state."
+   */
+  const [projectTaskChips, setProjectTaskChips] = useState<Record<number, ProjectTaskChipData>>({})
 
   // The server re-renders this component with fresh props after any action
   // that calls revalidatePath (adding a slot, changing the leader). Without
@@ -239,6 +264,16 @@ export function TeamRoom({
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get('view')
     if (requested === 'lanes' || requested === 'board' || requested === 'channel') setView(requested)
+  }, [])
+
+  // R14-P0.8.2 — "opening a task shows its thread." One bulk read on mount
+  // rather than per-message: every project task in the workspace that
+  // carries a thread, keyed by root id (see `projectTaskChips` above).
+  useEffect(() => {
+    void listProjectTaskChipsAction({ workspaceId, workspaceSlug })
+      .then((result) => setProjectTaskChips(unwrap(result)))
+      .catch(() => undefined)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const selectView = useCallback((next: RoomView) => {
@@ -568,6 +603,20 @@ export function TeamRoom({
     [workspaceId, channel.id, feed],
   )
 
+  // R14-P0.8.2 — "opening a task shows its thread." A task detail page's
+  // "View thread" link lands here with `?thread=<rootId>` (the same
+  // channel-page URL `view` already reads a query param from, above); this
+  // is the one addition to that mechanism, not a second one. Mount only,
+  // deliberately not reacting to `openThread`'s identity changing (it closes
+  // over `feed`) — this must open the linked thread exactly once, not
+  // re-open it every time a poll refreshes the feed.
+  useEffect(() => {
+    const requested = new URLSearchParams(window.location.search).get('thread')
+    const rootId = requested ? Number(requested) : null
+    if (rootId != null && Number.isSafeInteger(rootId)) openThread(rootId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // `appendReply` lived here until R12-P3.1. It appended a reply the server had
   // already confirmed; `insertOptimistic` now puts the reply on screen before
   // the write starts and `settleOptimistic` swaps in the real row, so keeping
@@ -825,6 +874,67 @@ export function TeamRoom({
       }
     },
     [workspaceId, channel.id, patchMessage],
+  )
+
+  /**
+   * R14-P0.8.1 — the "New task" popup's Create button, from either the
+   * channel composer or a thread pane's own composer.
+   *
+   * The new thread root is inserted the same way a freshly-sent message is
+   * (`insertOptimistic`) rather than waited for on the next poll: D0 forbids
+   * a round trip on a UI action, and `postChannelMessage`'s own
+   * `notifyChannelEvent` will separately deliver the real row through the
+   * live SSE/poll path within the same tick anyway — this just paints it
+   * first.
+   */
+  const createChannelTask = useCallback(
+    async (input: { title: string; projectId: number; agentId: number | null }) => {
+      const { message, chip } = unwrap(
+        await createChannelTaskAction({
+          workspaceId,
+          workspaceSlug,
+          teamId: channel.id,
+          projectId: input.projectId,
+          agentId: input.agentId,
+          title: input.title,
+        }),
+      )
+      setProjectTaskChips((prev) => ({ ...prev, [message.id]: chip }))
+      insertOptimistic({ ...message, systemKind: null, undeliverableAt: null, addresseeMissing: false })
+    },
+    [workspaceId, workspaceSlug, channel.id, insertOptimistic],
+  )
+
+  /**
+   * R14-P0.8.3 — "Create subtask" inside a task-carrying thread. Posted as a
+   * REPLY (`threadRootId` set), so `insertOptimistic` appends it to `thread`
+   * and nudges the parent root's `replyCount` — the same path a normal reply
+   * takes, because a subtask's message IS a normal reply.
+   *
+   * The chip map is updated defensively, never overwritten: the root's chip
+   * must stay the PARENT task's, not whichever subtask was created last (see
+   * `listProjectTaskChipsAction`'s own comment on why more than one task can
+   * share a root).
+   */
+  const createChannelSubtask = useCallback(
+    async (input: { parentTaskId: number; title: string; agentId: number | null }) => {
+      const { message, chip } = unwrap(
+        await createChannelSubtaskAction({
+          workspaceId,
+          workspaceSlug,
+          teamId: channel.id,
+          parentTaskId: input.parentTaskId,
+          agentId: input.agentId,
+          title: input.title,
+        }),
+      )
+      const rootId = message.threadRootId
+      if (rootId != null) {
+        setProjectTaskChips((prev) => (prev[rootId] ? prev : { ...prev, [rootId]: chip }))
+      }
+      insertOptimistic({ ...message, systemKind: null, undeliverableAt: null, addresseeMissing: false })
+    },
+    [workspaceId, workspaceSlug, channel.id, insertOptimistic],
   )
 
   /**
@@ -1216,6 +1326,10 @@ export function TeamRoom({
             onSeen={onSeen}
             onJoin={() => void join()}
             joining={joining}
+            projects={projects}
+            agents={agents}
+            projectTaskChips={projectTaskChips}
+            onCreateTask={createChannelTask}
           />
         )}
         {view === 'lanes' && (
@@ -1275,6 +1389,11 @@ export function TeamRoom({
             onPatchMessage={patchMessage}
             onDismissPending={dismissPending}
             onOpenTask={openTask}
+            projects={projects}
+            agents={agents}
+            projectTaskChips={projectTaskChips}
+            onCreateTask={createChannelTask}
+            onCreateSubtask={createChannelSubtask}
           />
         )}
         {canvasOpen && (
