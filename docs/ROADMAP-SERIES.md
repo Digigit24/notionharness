@@ -2077,25 +2077,39 @@ boundary: the divider between panes. This phase closes that gap before
 building anything else on top of it, because every item after this one
 mounts inside this shell.
 
-**R14-P0.1 Flatten the chrome — S.** Remove the nested `rounded-xl border`
-wrappers from the feed, thread and canvas containers in favour of the page's
-own edge and the `PaneDivider` hairlines already built in R12-P3.4. One
-outer boundary (the window/page edge), one moving boundary (the divider),
-nothing else. The message row, the composer and the header keep their own
-internal spacing; what goes away is the box drawn AROUND each pane.
+**R14-P0.1 Flatten the chrome — S.** Verified exactly where each box comes
+from before touching any of them: `channel-view.tsx:579` (`rounded-xl
+border`, the feed's own container) and `:594` (a second `rounded-t-xl
+border-b` sub-header inside it), `message-composer.tsx:256` (`rounded-xl
+border ... shadow-sm`, NESTED inside the feed container — a box inside a
+box), `thread-pane.tsx:237`, `canvas-pane.tsx:121`, and each roster row in
+`roster-panel.tsx:241`. Up to four independently-bordered `rounded-xl`
+siblings can be on screen at once (feed / thread / canvas / roster rail)
+plus the composer's own nested fifth box. Remove all of them in favour of
+the page's own edge and the `PaneDivider` hairlines already built in
+R12-P3.4 — one outer boundary, one moving boundary per pane seam, nothing
+else. The message row already has no border
+(`message-row.tsx:127` is hover-background only) and does not change.
 
 **R14-P0.2 Canvas, History and Messages as tabs, not a side pane toggle —
-M.** Slack's own pattern (confirmed against the reference screenshot): a
-tab strip under the channel name — **Messages** (default), **Canvas**, plus
-whatever else a channel has. Today `canvasOpen` is a boolean that opens a
-THIRD pane beside the feed and the thread (`team-room.tsx`); this replaces
-that with a tab bar reusing the same `DetailLayoutTab` shape
-`agent-detail-view.tsx` already has for `extraTabs`. Selecting Canvas
-REPLACES the feed in the main pane rather than sitting beside it — the
-thread pane, when open, still docks to the right of whichever tab is active,
-because a thread is a conversation about whatever you're looking at, not a
-second view of it. The URL carries the active tab (`?view=` already exists
-for channel/lanes/board — this is a sibling switch, not a new mechanism).
+M.** Verified there are TWO separate, disagreeing mechanisms for "what's
+visible" in the header today: a hand-rolled segmented control at
+`team-room.tsx:1060-1075` for `Channel | Lanes | Board`, and a completely
+separate toggle `Button` at `:1027-1034` flipping `canvasOpen` — a boolean
+that opens Canvas as a THIRD sibling pane beside the feed and the thread,
+rather than a tab. Both get replaced by ONE tab bar, and it should be the
+EXISTING `components/layout/detail-layout.tsx` — not a new bespoke
+component. That file already solves the exact problem this pane has:
+local `useState` for the active tab plus `history.replaceState` rather than
+`router.push`, chosen there specifically because a `router.push` tab switch
+was a visible server round trip (D0) — and it already has an optional
+`rightRail` slot rendered outside tab content, which is precisely where the
+thread pane docks so it stays beside whichever tab (Messages, Canvas,
+History) is active rather than being its own fourth thing to coordinate.
+`DetailLayout` already backs six other pages in this app
+(`agents/[agentId]`, `tasks/[taskId]`, `project-detail-view`,
+`review-surface`, `repo-browser`, `page-canvas`) — the channel adopting it
+is consistency, not a new pattern.
 
 **R14-P0.3 History becomes a tab, not a route.** The Work route today is a
 separate page (`/work?session=`) that a "See full run" link navigates away
@@ -2155,14 +2169,26 @@ about that runtime's capabilities, which still come only from its own ACP
 handshake.
 
 **R14-P0.7 Agent detail page: Overview / Work / Capabilities / Settings —
-S.** `agent-detail-view.tsx` already has the `extraTabs` mechanism this
-session built for the Access tab. Restructure the existing tabs into four:
-Overview (identity, what it's bound to), Work (a status board of this
-agent's tasks — `getTaskAgentColumnsData`/`getAgentUsageRollup` already
-compute exactly this data for the tasks board's own agent columns; this is
-a second renderer of an existing query, not a new one), Capabilities
-(skills + connectors, from this session's earlier work), Settings (the
-existing form). No new data model.
+S/M**, corrected against the actual tab list. `agent-detail-view.tsx`
+already renders six tabs today: Overview, Capabilities, Sessions, Memory,
+Access, Settings (`:275-285`) — Access arrived this session via the
+`extraTabs` mechanism; Capabilities already exists and is not something to
+invent. Restructure toward Overview / Work / Capabilities / Settings by
+CONSOLIDATING what overlaps (Access's content likely belongs inside
+Overview; Sessions and Memory may fold into Work or stay as sub-sections —
+a judgement call for whoever builds this, stated in their own report rather
+than assumed here) rather than by building four tabs beside six existing
+ones.
+
+The Work tab itself needs a genuinely new query, not a reused one:
+`getAgentUsageRollup` (cost/spend numbers) is already called from this page
+(`agents/[agentId]/page.tsx:60-61`), but `getTaskAgentColumnsData`
+(`tasks/actions.ts:272-283`) takes a list of task ids and returns per-task
+run counts — it does not group by status, and nothing calls it from the
+agent page today. `Tasks.agent` and `Tasks.status` are both real fields
+already, so grouping by status is a straightforward query over them; it is
+new work, sized S rather than free, and the roadmap said otherwise before
+this correction.
 
 **Done when.** A channel open at full width shows exactly one moving
 boundary (the divider) and no nested boxes; Canvas and History are one
@@ -2238,15 +2264,34 @@ go find.
 
 This is R14-P2.4 ("The Activity view"), UNCHANGED in mechanism — three
 tabs over `listUserMentions` and thread/reaction queries that already
-exist — given the concrete visual the reference screenshot asks for: a
-left rail (Inbox / Projects / Agents, with Channels beneath, mirroring the
-sidebar's own sections rather than inventing new ones) and a chronological
-list where each row states its OWN relationship to the reader before its
-content — "Thread in #general", "Mentioned in #eng", "DM from Ritik" — the
-exact three-line pattern in the screenshot, each label driven by
-`InboxItemKind` (already a closed, typed set in
-`components/inbox/inbox-list.tsx`) rather than free text. No new data path;
-this is P2.4's own scope, drawn rather than left to a later pass.
+exist. Verified against the reference screenshot and the running code
+BOTH, because the two gaps turned out to be different sizes than they
+looked:
+
+**The left rail is NOT a gap.** `components/sidebar/sidebar.tsx` already
+renders a persistent Inbox / Tasks / Projects / Agents ("Plan" tab) plus a
+Channels tab, mounted around every page in the workspace including this
+one (`layout.tsx:129`). Nothing new to build there — the screenshot's rail
+is this app's existing sidebar, already present.
+
+**The real gap is the right-side split pane.** Today a row in
+`components/inbox/inbox-list.tsx` is a dead end: clicking it, or selecting
+it with the keyboard, calls `router.push(focused.href)` (`:141`) and
+`&lt;Link href={item.href}&gt;` (`:270-280`) — a full navigation away from the
+list, never an inline preview. The screenshot shows the opposite: the list
+stays on the left and the selected item's thread renders on the right,
+in place. Building that pane is genuinely new work — reuse
+`components/teams/thread-pane.tsx`'s rendering for a `channel_mention`/
+thread row and a comparable single-message view for a plain `mention`, but
+mount it as this route's OWN right pane rather than pushing into the
+channel route, so selecting the next item in the list is a state change,
+not a page load.
+
+Once the split pane exists, each row still states its OWN relationship to
+the reader before its content — "Thread in #general", "Mentioned in #eng",
+"DM from Ritik" — the exact pattern in the screenshot, each label driven by
+`InboxItemKind` (already a closed, typed set) rather than free text. No new
+read query for the list itself; the new work is entirely the preview pane.
 
 ---
 
