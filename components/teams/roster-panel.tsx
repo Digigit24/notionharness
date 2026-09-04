@@ -1,8 +1,8 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Bot, Crown, MailX, Trash2, User, UserPlus } from 'lucide-react'
+import { Bot, Crown, MailX, PanelRightClose, PanelRightOpen, Trash2, User, UserPlus } from 'lucide-react'
 import type { TeamTask } from '@/lib/broker'
 import type { TeamRoomMessage, TeamSlotHealth } from '@/lib/teams/reliability'
 import { Button } from '@/components/ui/button'
@@ -35,6 +35,19 @@ import {
  * channel gains members of both kinds and splitting it into two pickers would
  * make adding a person feel like a different feature from adding an agent. */
 type AddKind = 'agent' | 'user'
+
+/**
+ * Where the open/closed choice is remembered.
+ *
+ * Per browser, not per channel: "do I want the roster taking 15rem" is a
+ * preference about the layout, not about one room, and having it reset every
+ * time you walk into a different channel would make it feel broken.
+ *
+ * localStorage rather than a column on the user: a preference this cheap must
+ * never cost a request to read or a request to write (D0), and it is read
+ * during hydration where a round trip would be a visible reflow.
+ */
+const ROSTER_OPEN_KEY = 'notionharness.channel.roster.open'
 
 /**
  * The roster: who is in the channel, who leads, and how to change that.
@@ -91,6 +104,32 @@ export function RosterPanel({
   const [addingId, setAddingId] = useState<number | null>(null)
   const [displayName, setDisplayName] = useState('')
   const [busy, setBusy] = useState(false)
+  /**
+   * Shut by default, so the conversation gets the width.
+   *
+   * The roster is a control surface — who is in the room, who leads — and it
+   * is consulted far less often than the thread beside it is read. Rendering
+   * it collapsed on the server and opening it in an effect (rather than
+   * reading storage in the initial state) keeps the markup the server sent and
+   * the markup the client hydrates identical; the reverse would be a
+   * hydration mismatch on every load.
+   */
+  const [collapsed, setCollapsed] = useState(true)
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem(ROSTER_OPEN_KEY) === 'open') setCollapsed(false)
+    } catch {
+      // A browser with storage blocked simply gets the default.
+    }
+  }, [])
+  const setOpen = (open: boolean) => {
+    setCollapsed(!open)
+    try {
+      window.localStorage.setItem(ROSTER_OPEN_KEY, open ? 'open' : 'closed')
+    } catch {
+      // Remembering is a nicety; toggling must work either way.
+    }
+  }
   // Fetched on demand, not with every poll. Undeliverable mail only changes
   // when somebody removes a slot, so shipping the list on a six-second cadence
   // would be a payload that is almost always empty and always identical.
@@ -131,11 +170,55 @@ export function RosterPanel({
   const alreadyMembers = new Set(slots.map((s) => s.userId).filter((id): id is number => id != null))
   const addableUsers = users.filter((u) => !alreadyMembers.has(u.id))
 
+  if (collapsed) {
+    return (
+      <aside className="flex w-9 shrink-0 flex-col items-center gap-1.5 overflow-y-auto pt-0.5">
+        <button
+          type="button"
+          title={`Members · ${slots.length} — show the roster`}
+          onClick={() => setOpen(true)}
+          className="rounded p-1 text-black/45 hover:bg-black/[.06] hover:text-black/70 dark:text-white/45 dark:hover:bg-white/[.10] dark:hover:text-white/70"
+        >
+          <PanelRightOpen size={14} />
+        </button>
+        {/* The rail is not decoration: liveness is the one thing on this panel
+            that changes while you are reading, so a lost member still shows a
+            red ring with the roster shut. */}
+        {slots.map((slot) => {
+          const state = healthOf.get(slot.id)
+          return (
+            <button
+              key={slot.id}
+              type="button"
+              onClick={() => setOpen(true)}
+              title={`${slot.displayName}${state ? ` — ${SLOT_STATE_LABEL[state.state]}` : ''}`}
+              className={cn(
+                'flex size-6 shrink-0 items-center justify-center rounded text-[10px] font-semibold text-white',
+                state?.state === 'lost' && 'ring-2 ring-red-500/70',
+              )}
+              style={{ backgroundColor: colourOf(slot) }}
+            >
+              {initialsOf(slot.displayName)}
+            </button>
+          )
+        })}
+      </aside>
+    )
+  }
+
   return (
     <aside className="flex w-60 shrink-0 flex-col gap-3 overflow-y-auto">
       <div>
-        <h2 className="mb-1.5 text-xs font-medium text-black/50 dark:text-white/50">
-          Members · {slots.length}
+        <h2 className="mb-1.5 flex items-center gap-1 text-xs font-medium text-black/50 dark:text-white/50">
+          <span className="flex-1">Members · {slots.length}</span>
+          <button
+            type="button"
+            title="Hide the roster and give the width back to the conversation"
+            onClick={() => setOpen(false)}
+            className="rounded p-0.5 hover:bg-black/[.06] dark:hover:bg-white/[.10]"
+          >
+            <PanelRightClose size={13} />
+          </button>
         </h2>
         <ul className="space-y-1">
           {slots.map((slot) => {

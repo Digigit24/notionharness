@@ -371,6 +371,11 @@ export async function teamSendMessage(
         taskId: input.task ?? null,
         threadRootId: input.threadRootId ?? null,
         mentions,
+        // Stamped with the run that wrote it, so "see the full run" on this
+        // message opens the exact transcript behind it. Without this an
+        // agent's own reply could only be approximated from its slot's
+        // session, which may by then be a later turn entirely.
+        runId: caller.runId,
       })
 
       // JSON rather than the sentence this used to return. Threads and

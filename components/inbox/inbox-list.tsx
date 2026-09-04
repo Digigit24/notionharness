@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { AlertTriangle, AtSign, Check, FileDiff, RotateCcw, ShieldAlert, X } from 'lucide-react'
+import { AlertTriangle, AtSign, Check, FileDiff, Hash, RotateCcw, ShieldAlert, X } from 'lucide-react'
 import { useKeyboardShortcut } from '@/lib/keyboard/use-keyboard-shortcut'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -19,12 +19,18 @@ import {
   denyApprovalInbox,
   dismissMentionInbox,
   dismissRunInbox,
+  markChannelMentionRead,
   retryRunInbox,
 } from '@/app/(app)/workspace/[workspaceSlug]/inbox/actions'
 import type { ApprovalOption } from '@/collections/Approvals'
 import { formatTimestamp } from '@/lib/relative-time'
 
-export type InboxItemKind = 'approval' | 'failed_run' | 'review_run' | 'mention'
+// `channel_mention` is a separate kind from `mention` on purpose: they come
+// from different producers (a channel message vs. a Payload notification),
+// clear through different mechanisms (a per-slot read cursor vs. isRead), and
+// only one of them has a #channel to name. Folding them together would mean
+// one of those three behaviours becoming a lie.
+export type InboxItemKind = 'approval' | 'failed_run' | 'review_run' | 'mention' | 'channel_mention'
 
 export interface InboxItem {
   id: string
@@ -38,6 +44,9 @@ export interface InboxItem {
   runId?: number
   canRetry?: boolean
   notificationId?: number
+  /** The mentioning message. The only id the channel-mention action takes —
+   * team and slot are re-derived from it server-side. */
+  channelMessageId?: number
 }
 
 const KIND_META: Record<InboxItemKind, { label: string; icon: typeof ShieldAlert }> = {
@@ -45,6 +54,7 @@ const KIND_META: Record<InboxItemKind, { label: string; icon: typeof ShieldAlert
   failed_run: { label: 'Failed run', icon: AlertTriangle },
   review_run: { label: 'Review-ready', icon: FileDiff },
   mention: { label: 'Mention', icon: AtSign },
+  channel_mention: { label: 'Channel', icon: Hash },
 }
 
 export function InboxList({ items: initialItems, workspaceSlug }: { items: InboxItem[]; workspaceSlug: string }) {
@@ -111,6 +121,11 @@ export function InboxList({ items: initialItems, workspaceSlug }: { items: Inbox
       if (!focused) return
       if (focused.kind === 'mention' && focused.notificationId != null) {
         void runAction(focused.id, () => dismissMentionInbox(workspaceSlug, focused.notificationId!))
+      } else if (focused.kind === 'channel_mention' && focused.channelMessageId != null) {
+        // The room moves this same cursor on arrival, but doing it here too is
+        // what stops the row reappearing when the user navigates back onto a
+        // cached RSC payload. GREATEST() makes the double write a no-op.
+        void runAction(focused.id, () => markChannelMentionRead(workspaceSlug, focused.channelMessageId!))
       } else if (focused.kind === 'review_run' && focused.runId != null) {
         void runAction(focused.id, () => dismissRunInbox(workspaceSlug, focused.runId!))
       }
@@ -158,6 +173,8 @@ export function InboxList({ items: initialItems, workspaceSlug }: { items: Inbox
         void runAction(focused.id, () => dismissRunInbox(workspaceSlug, focused.runId!))
       } else if (focused.kind === 'mention' && focused.notificationId != null) {
         void runAction(focused.id, () => dismissMentionInbox(workspaceSlug, focused.notificationId!))
+      } else if (focused.kind === 'channel_mention' && focused.channelMessageId != null) {
+        void runAction(focused.id, () => markChannelMentionRead(workspaceSlug, focused.channelMessageId!))
       }
     },
     'list',
@@ -168,7 +185,7 @@ export function InboxList({ items: initialItems, workspaceSlug }: { items: Inbox
       <EmptyState
         icon={<Check />}
         title="Inbox zero"
-        description="Nothing needs you right now — approvals, failed runs, review-ready diffs, and mentions all show up here the moment they do."
+        description="Nothing needs you right now — approvals, failed runs, review-ready diffs, and every mention of you across every channel all show up here the moment they do."
       />
     )
   }
@@ -191,6 +208,7 @@ export function InboxList({ items: initialItems, workspaceSlug }: { items: Inbox
             onRetry={() => runAction(item.id, () => retryRunInbox(workspaceSlug, item.runId!))}
             onDismissRun={() => runAction(item.id, () => dismissRunInbox(workspaceSlug, item.runId!))}
             onDismissMention={() => runAction(item.id, () => dismissMentionInbox(workspaceSlug, item.notificationId!))}
+            onMarkChannelRead={() => runAction(item.id, () => markChannelMentionRead(workspaceSlug, item.channelMessageId!))}
           />
         ))}
       </ul>
@@ -208,6 +226,7 @@ function InboxRow({
   onRetry,
   onDismissRun,
   onDismissMention,
+  onMarkChannelRead,
 }: {
   item: InboxItem
   isFocused: boolean
@@ -218,6 +237,7 @@ function InboxRow({
   onRetry: () => void
   onDismissRun: () => void
   onDismissMention: () => void
+  onMarkChannelRead: () => void
 }) {
   const meta = KIND_META[item.kind]
   const Icon = meta.icon
@@ -243,6 +263,7 @@ function InboxRow({
               onClick={() => {
                 if (item.kind === 'review_run') onDismissRun()
                 if (item.kind === 'mention') onDismissMention()
+                if (item.kind === 'channel_mention') onMarkChannelRead()
               }}
               className="truncate text-sm font-medium text-foreground hover:underline"
             >
@@ -291,6 +312,16 @@ function InboxRow({
         {item.kind === 'mention' && (
           <Button type="button" size="xs" variant="outline" disabled={isPending} onClick={onDismissMention}>
             Dismiss (e)
+          </Button>
+        )}
+
+        {/* "Mark read", not "Dismiss": the only mechanism a channel message has
+            is the reader's per-slot read cursor, so this catches you up in that
+            channel through this message rather than hiding one row. The label
+            has to say what actually happens — see the action's own note. */}
+        {item.kind === 'channel_mention' && (
+          <Button type="button" size="xs" variant="outline" disabled={isPending} onClick={onMarkChannelRead}>
+            Mark read (e)
           </Button>
         )}
       </div>

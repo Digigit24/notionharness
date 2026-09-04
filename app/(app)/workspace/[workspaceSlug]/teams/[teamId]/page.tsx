@@ -2,11 +2,17 @@ import { notFound } from 'next/navigation'
 import { getCurrentPayloadUser } from '@/lib/current-user'
 import { getPayloadClient } from '@/lib/payload'
 import { getWorkspaceBySlug } from '@/lib/pages-cache'
-import { claimableTasks, listTeamTasks } from '@/lib/broker'
+import {
+  claimableTasks,
+  getRunsForChannelMessages,
+  listChannelUnread,
+  listPendingChannelApprovals,
+  listTeamTasks,
+} from '@/lib/broker'
 import { listTeamRoomMessages, readTeamStopState, sweepTeamSlots } from '@/lib/teams/reliability'
 import { Breadcrumbs } from '@/components/nav/breadcrumbs'
 import { TeamRoom } from '@/components/teams/team-room'
-import { getChannel, isChannelMember, loadChannelFeed, loadSlots } from '../data'
+import { getChannel, isChannelMember, loadChannelFeed, loadSlots, resolveMySlot } from '../data'
 
 /**
  * A channel (R6.4 / R6.5).
@@ -92,6 +98,32 @@ export default async function ChannelPage({
     }
   }
 
+  /**
+   * The runs behind this page of messages, and the caller's unread counts.
+   *
+   * Both are resolved HERE rather than after mount, and both are ONE query.
+   *
+   * `getRunsForChannelMessages` is the plural of `getRunForChannelMessage` and
+   * exists precisely so a feed does not ask per row; asking per row is the
+   * N+1 D0 rules out and would be 200 round trips on a busy channel. Without
+   * it on the server, a reload in the middle of an agent's turn painted a
+   * channel with no sign that anything was running.
+   *
+   * `listChannelUnread` answers unread and mentions separately in one grouped
+   * query. The counts have to be read before the room marks itself read, which
+   * it does within a second of mounting — so they are read here, at open, and
+   * frozen for the same reason the "New" divider is frozen.
+   */
+  const mine = await resolveMySlot(channel.id, user.id)
+  const [runs, unread, approvals] = await Promise.all([
+    getRunsForChannelMessages(feed.map((m) => m.id)),
+    mine ? listChannelUnread([mine.id]) : Promise.resolve([]),
+    // An agent blocked on a permission must be visible on FIRST PAINT, not six
+    // seconds later when the first poll lands — a reload in the middle of a
+    // block is exactly when somebody is looking for the button.
+    listPendingChannelApprovals(channel.id).catch(() => []),
+  ])
+
   return (
     <main className="flex h-full w-full flex-col px-5 py-6">
       <Breadcrumbs
@@ -114,6 +146,12 @@ export default async function ChannelPage({
         initialClaimableIds={claimable.map((t) => t.id)}
         initialHealth={sweep.health}
         initialStop={stop}
+        initialRuns={Object.fromEntries(runs)}
+        initialApprovals={approvals}
+        initialUnread={{
+          unreadCount: unread[0]?.unreadCount ?? 0,
+          mentionCount: unread[0]?.mentionCount ?? 0,
+        }}
         agents={agentsResult.docs.map((a) => ({ id: a.id, name: a.name }))}
         users={[...peopleById.values()].sort((a, b) => a.name.localeCompare(b.name))}
       />

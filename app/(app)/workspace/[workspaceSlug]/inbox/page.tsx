@@ -5,8 +5,8 @@ import { getCurrentPayloadUser } from '@/lib/current-user'
 import { getWorkspaceBySlug } from '@/lib/pages-cache'
 import { hrefForEntity } from '@/lib/entity-links.server'
 import { listPendingApprovalsForUser, type ApprovalDoc } from '@/lib/hermes/approval-helpers'
-import { getRun, listFailedRuns, listReviewReadyRuns } from '@/lib/broker'
-import type { Run } from '@/lib/broker'
+import { getRun, listFailedRuns, listReviewReadyRuns, listUserMentions } from '@/lib/broker'
+import type { Run, UserMention } from '@/lib/broker'
 import type { Activity, Notification } from '@/payload-types'
 import { InboxList, type InboxItem } from '@/components/inbox/inbox-list'
 
@@ -43,6 +43,31 @@ import { InboxList, type InboxItem } from '@/components/inbox/inbox-list'
 //   - mention     — dismissed by marking its backing notification read,
 //                    exactly like opening it does (both call
 //                    dismissMentionInbox/markNotificationsRead).
+//   - channel_mention — see below.
+//
+// CHANNEL MENTIONS (this unit). The product used to land a person on a channel
+// LIST, which answers "which rooms exist" — a question nobody actually opens a
+// product with. "What needs me" is answered here, and cross-channel mentions
+// belong in this list rather than in a fourth attention surface beside
+// approvals and notifications. So they are NOT a new section: they are a new
+// `kind` in the same time-ordered stream, with the same badge/row shape and
+// the same j/k/enter/e keys, because a section boundary is the "filtered
+// board" shape this page's own header calls out as wrong.
+//
+// The data is `lib/broker`'s `listUserMentions`: ONE query over the GIN index
+// on `team_messages.mentions`, joined to the reader's own slots, scoped to
+// this workspace and bounded. No new table, no poll, no second notifications
+// store — and crucially no per-row follow-up query, since the row already
+// carries the channel name and the sender's display name (which is exactly
+// why that function returns them). The Payload-notification `mention` kind
+// above stays as it is: it covers @-mentions inside documents, a different
+// producer entirely, and collapsing the two would mean losing the channel
+// deep-link.
+/** Bounded, per D0: this is a landing surface, and "what needs me" is a recent
+ * question. Matches the 25 the run queries above use so no one source can
+ * crowd the others out of the merged list. */
+const CHANNEL_MENTION_LIMIT = 25
+
 export default async function InboxPage({
   params,
 }: {
@@ -56,13 +81,23 @@ export default async function InboxPage({
   const currentUser = await getCurrentPayloadUser()
   const userId = currentUser?.id ?? null
 
-  const [approvals, failedRuns, reviewRuns] = userId
+  const [approvals, failedRuns, reviewRuns, channelMentions] = userId
     ? await Promise.all([
         listPendingApprovalsForUser(userId).catch(() => []),
         listFailedRuns(userId, 25),
         listReviewReadyRuns(userId, 25),
+        // `userId` is the SERVER-resolved session user, never anything off the
+        // wire, and `workspaceId` scopes it to the workspace this route already
+        // resolved. listUserMentions additionally joins team_members on
+        // user_id, so a caller can only ever see mentions of slots they hold.
+        // `unreadOnly` because the Inbox is what needs you, not an archive.
+        listUserMentions(userId, {
+          workspaceId: workspace.id,
+          limit: CHANNEL_MENTION_LIMIT,
+          unreadOnly: true,
+        }),
       ])
-    : [[], [], []]
+    : [[], [], [], []]
 
   const mentionNotifications = userId
     ? (
@@ -87,9 +122,27 @@ export default async function InboxPage({
     Promise.all(mentionNotifications.map((n) => mentionToItem(payload, n))),
   ])
 
-  const items: InboxItem[] = [...approvalItems, ...failedItems, ...reviewItems, ...mentionItems].sort(
-    (a, b) => new Date(b.time).getTime() - new Date(a.time).getTime(),
-  )
+  // Synchronous: every field a channel-mention row renders is already on the
+  // row listUserMentions returned. Mapping it inside the Promise.all above
+  // would suggest an await that does not exist.
+  // Keyed by message id, because `listUserMentions` joins the reader's slots
+  // and returns one row per (message, slot). Nothing in the roster UI lets one
+  // person hold two slots in one channel, but `addSlotAction` has no
+  // server-side dedupe on `user_id`, so the pair is reachable — and it would
+  // land here as two rows sharing a React key and a `channelMessageId`.
+  const channelMentionItems = [
+    ...new Map(
+      channelMentions.map((m) => [m.messageId, channelMentionToItem(m, workspaceSlug)] as const),
+    ).values(),
+  ]
+
+  const items: InboxItem[] = [
+    ...approvalItems,
+    ...failedItems,
+    ...reviewItems,
+    ...mentionItems,
+    ...channelMentionItems,
+  ].sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime())
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
@@ -204,4 +257,47 @@ async function mentionToItem(
     href,
     notificationId: notification.id,
   }
+}
+
+/**
+ * A channel mention as an Inbox row.
+ *
+ * The link goes to the channel, NOT to the thread, even when the mention is a
+ * threaded reply. `app/(app)/workspace/[workspaceSlug]/teams/[teamId]/page.tsx`
+ * and `components/teams/team-room.tsx` read exactly one deep-link parameter
+ * today — `?view=` — and the thread pane opens only from client state
+ * (`openThread`). Sending a `?thread=` the room ignores would be a link that
+ * looks like it works and does not, so this ships the honest destination and
+ * the room-owning unit is told which parameter to accept (see this unit's
+ * report). Once the room reads it, this is a one-line change here.
+ */
+function channelMentionToItem(mention: UserMention, workspaceSlug: string): InboxItem {
+  // A threaded mention SAYS it is threaded. The feed this link lands on renders
+  // roots only, so for a reply the message you were named in is not on the
+  // page you arrive at — you have to open the thread it lives under. That is
+  // the honest cost of the channel-level link above, and a row that stayed
+  // silent about it would be the "looks like it works and doesn't" failure
+  // this function's own note refuses to ship, just arriving one hop later.
+  const inThread = mention.threadRootId != null
+  return {
+    id: `channel-mention-${mention.messageId}`,
+    kind: 'channel_mention',
+    headline: `${mention.fromDisplayName || 'Someone'} mentioned you in ${
+      inThread ? `a thread in #${mention.channelName}` : `#${mention.channelName}`
+    }`,
+    subline: previewBody(mention.body),
+    time: mention.createdAt,
+    href: `/workspace/${workspaceSlug}/teams/${mention.teamId}`,
+    channelMessageId: mention.messageId,
+  }
+}
+
+/** One line, and a bounded one. The row is a single truncated line of CSS, so
+ * shipping a 40KB message body to the client to render 60 characters of it is
+ * payload nobody sees — and a message with newlines would otherwise collapse
+ * into a run-on anyway. */
+function previewBody(body: string): string | null {
+  const flat = body.replace(/\s+/g, ' ').trim()
+  if (flat.length === 0) return null
+  return flat.length > 200 ? `${flat.slice(0, 199)}…` : flat
 }

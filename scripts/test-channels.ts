@@ -169,6 +169,24 @@ try {
     (withReactions?.reactions[0].actorSlotIds ?? []).includes(alice.id),
   )
 
+  // --- The run behind a message ---
+  // A message written BY A RUN carries it, so "see the full run" on an
+  // agent's reply opens the transcript that actually produced it rather than
+  // approximating from whatever its session is doing now.
+  const stamped = await ch.postChannelMessage({
+    teamId: team.id,
+    fromSlotId: bob.id,
+    body: 'Done — parser is green.',
+    threadRootId: root.id,
+    runId: 4242,
+  })
+  check('a reply records the run that wrote it', stamped.runId === 4242, String(stamped.runId))
+  check(
+    'and it survives a read',
+    (await ch.getChannelMessage(stamped.id))?.runId === 4242,
+  )
+  check('while a message a person wrote has none', root.runId === null, String(root.runId))
+
   const off = await ch.toggleReaction({ messageId: root.id, actorSlotId: alice.id, emoji: '👍' })
   check('reacting again removes it', off.added === false)
   const afterToggle = await ch.getChannelMessage(root.id)

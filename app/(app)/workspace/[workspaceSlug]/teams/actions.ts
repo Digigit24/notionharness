@@ -13,10 +13,14 @@ import {
   deleteTeam,
   getBrokerPool,
   getChannelMessage,
+  getRun,
+  getRunsForChannelMessages,
   getTeamMember,
   getTeamTask,
   listChannelFeed,
   listChannelUnread,
+  listPendingChannelApprovals,
+  listRunEvents,
   listTeamTasks,
   listThread,
   markChannelRead,
@@ -27,6 +31,9 @@ import {
   setTeamLeader,
   toggleReaction,
   updateTeamTaskStatus,
+  type ChannelApproval,
+  type Run,
+  type RunMessageRow,
   type Team,
   type TeamMember,
   type TeamMessageKind,
@@ -47,7 +54,12 @@ import {
   type TeamSlotHealth,
   type TeamStopState,
 } from '@/lib/teams/reliability'
-import { slotColourFor, type RoomFeedMessage, type TeamSlotView } from '@/components/teams/shared'
+import {
+  slotColourFor,
+  subjectFromBody,
+  type RoomFeedMessage,
+  type TeamSlotView,
+} from '@/components/teams/shared'
 import {
   getChannel,
   isChannelMember,
@@ -833,6 +845,16 @@ export interface TeamRoomDelta {
    * members are actually alive instead of all looking identical. */
   health: TeamSlotHealth[]
   stop: TeamStopState
+  /**
+   * Permission requests blocking runs this channel started.
+   *
+   * Carried on the poll rather than fetched separately because an approval
+   * appears mid-run and vanishes on decision — it is live state, on the same
+   * clock as the feed. Riding the existing poll costs no round trip: the query
+   * runs inside the `Promise.all` below, in parallel with reads that are
+   * already slower than it.
+   */
+  approvals: ChannelApproval[]
   /** Slots this poll's sweep declared lost, so the room can say it out loud at
    * the moment it happens rather than leaving it to be noticed. */
   lostSlotIds: number[]
@@ -878,6 +900,9 @@ export async function pollTeamRoomAction(input: {
   // note in `lib/teams/reliability.ts`. A room nobody has open detects nothing.
   const sweep = await sweepTeamSlots(team.id)
 
+  // Started before the await below so it overlaps every other read.
+  const pendingApprovalsPromise = listPendingChannelApprovals(team.id).catch(() => [])
+
   const [messages, feedRoots, tasks, claimable, stop, threadRows] = await Promise.all([
     listTeamRoomMessages(team.id, { since: input.sinceMessageId, limit: 200 }),
     listChannelFeed(team.id, { since: input.feedSince, limit: 200 }),
@@ -886,6 +911,8 @@ export async function pollTeamRoomAction(input: {
     readTeamStopState(team.id),
     input.threadRootId ? listThread(input.threadRootId) : Promise.resolve(null),
   ])
+  // Read alongside, not after. See `approvals` on TeamRoomDelta.
+  const approvals = await pendingApprovalsPromise
 
   // The reliability columns for the window, read once from the same rows the
   // Lanes view already needed. `since` is the older of the two cursors so a
@@ -908,6 +935,7 @@ export async function pollTeamRoomAction(input: {
     claimableIds: claimable.map((t) => t.id),
     health: sweep.health,
     stop,
+    approvals,
     lostSlotIds: sweep.lostSlotIds,
     releasedTaskIds: sweep.releasedTaskIds,
   }
@@ -1071,3 +1099,140 @@ export async function reportTeamTaskDoneAction(input: {
   const tasks = await listTeamTasks(input.teamId)
   return { task: result.task, releasedIds: result.released.map((t) => t.id), tasks }
 }
+
+// --- A mention, followed through (this unit) --------------------------------
+
+/**
+ * The runs behind a page of channel messages, in ONE query.
+ *
+ * `getRunsForChannelMessages` is a single `= ANY($1)` with a `DISTINCT ON`, so
+ * a hundred-row feed costs one round trip rather than a hundred. Calling
+ * `getRunForChannelMessage` per row is the N+1 D0 rules out, and it is the
+ * obvious wrong turn here because the singular function exists right next to
+ * the plural one.
+ *
+ * Returned as a plain object rather than a Map: a `Map` does not survive the
+ * server-action boundary's serialization, and a silently-empty Map on the
+ * client is a bug that looks like "no agent has ever replied".
+ */
+export async function loadChannelRunsAction(input: {
+  workspaceId: number
+  teamId: number
+  messageIds: number[]
+}): Promise<Record<number, { runId: number; sessionId: number | null; status: string }>> {
+  const { team } = await requireAccess(input.workspaceId, input.teamId)
+  // Bounded, and the ids are re-checked against this channel below rather than
+  // trusted: `runs.channel_message_id` has no team column, so an id from
+  // another workspace's room would otherwise return that room's run.
+  const ids = [...new Set(input.messageIds.filter((id) => Number.isSafeInteger(id) && id > 0))].slice(0, 500)
+  if (ids.length === 0) return {}
+  const { rows } = await getBrokerPool().query<{ id: string }>(
+    `SELECT id FROM team_messages WHERE team_id = $1 AND id = ANY($2::bigint[])`,
+    [team.id, ids],
+  )
+  const mine = rows.map((r) => Number(r.id))
+  if (mine.length === 0) return {}
+  const runs = await getRunsForChannelMessages(mine)
+  const out: Record<number, { runId: number; sessionId: number | null; status: string }> = {}
+  for (const [messageId, link] of runs) out[messageId] = link
+  return out
+}
+
+/**
+ * One run's transcript, for the "replying…" row's live stream.
+ *
+ * Shaped as `RunEventSnapshot[]` because that is what `useRunEventStream`'s
+ * loader contract is, and reusing that hook is the whole point: it already
+ * owns SSE reconnect, Last-Event-ID resume, frame coalescing and the
+ * offline/reconnecting states. A second, simpler streaming path in this file
+ * would be a worse copy of all of it.
+ *
+ * The guard is the interesting part. A run id off the wire is hostile, and
+ * `runs` is a global table — so this refuses any run whose
+ * `channel_message_id` is not a message in THIS channel. Without that check,
+ * a member of any channel could read any run's full transcript in the
+ * installation by guessing an integer.
+ */
+export async function loadChannelRunSnapshotAction(input: {
+  workspaceId: number
+  teamId: number
+  runId: number
+}): Promise<Array<{ run: Run; events: RunMessageRow[] }>> {
+  const { team } = await requireAccess(input.workspaceId, input.teamId)
+  // Shape-checked before it touches a query. A server action deserializes
+  // whatever the client sent, so `runId: number` in the signature is a claim,
+  // not a guarantee.
+  if (!Number.isSafeInteger(input.runId) || input.runId <= 0) throw new Error('That is not a run.')
+  const run = await getRun(input.runId)
+  if (!run) return []
+  const { rows } = await getBrokerPool().query<{ ok: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM team_messages m
+        WHERE m.team_id = $1
+          AND m.id = (SELECT channel_message_id FROM runs WHERE id = $2)
+     ) AS ok`,
+    [team.id, input.runId],
+  )
+  if (!rows[0]?.ok) throw new Error('That run did not come from this channel.')
+  const events = await listRunEvents(input.runId)
+  return [{ run, events }]
+}
+
+/**
+ * Turns a message into a task and links the two.
+ *
+ * Subject is the first line and description is the whole body, so nothing the
+ * person wrote is lost by the split and the board card still reads as the
+ * thing that was said. `team_messages.task_id` has existed since 0009 and
+ * nothing wrote it from the UI, which is why a message could be *about* a task
+ * and never say so.
+ *
+ * The UPDATE is scoped by `team_id` as well as by id — the column has no
+ * foreign key to a team, so an id from another room would otherwise be
+ * writable through a channel the caller can legitimately open.
+ */
+export async function createTaskFromMessageAction(input: {
+  workspaceId: number
+  teamId: number
+  messageId: number
+  ownerSlotId?: number | null
+}): Promise<{ task: TeamTask; messageId: number }> {
+  const { team } = await requireAccess(input.workspaceId, input.teamId)
+  const message = await getChannelMessage(input.messageId)
+  if (!message || message.teamId !== team.id) throw new Error('That message is not in this channel.')
+  if (message.taskId != null) throw new Error('That message already has a task.')
+  if (input.ownerSlotId != null) await requireSlot(input.ownerSlotId, team.id)
+
+  const subject = subjectFromBody(message.body)
+  if (!subject) throw new Error('That message has nothing to make a subject from.')
+  const task = await createTeamTask({
+    teamId: team.id,
+    subject,
+    // Only when the body says more than its first line — a description that
+    // repeats the subject verbatim is noise on every card that shows both.
+    description: message.body.trim() === subject ? null : message.body.trim(),
+    ownerSlotId: input.ownerSlotId ?? null,
+    blockedBy: [],
+  })
+  await getBrokerPool().query(`UPDATE team_messages SET task_id = $1 WHERE id = $2 AND team_id = $3`, [
+    task.id,
+    message.id,
+    team.id,
+  ])
+  return { task, messageId: message.id }
+}
+
+/*
+ * NOT AN ACTION: the catch-up counts.
+ *
+ * `listChannelUnread` answers unread and mentions separately in one grouped
+ * query, and the room needs both — but it needs them exactly ONCE, at open,
+ * before `markChannelRead` moves the cursor a second later. That read
+ * therefore happens in the page component (`[teamId]/page.tsx`) and the
+ * numbers arrive as props.
+ *
+ * There was a `channelUnreadAction` here and it has been deleted rather than
+ * left "for later": every exported async function in a `'use server'` module
+ * is a public HTTP endpoint, and shipping one nothing calls is attack surface
+ * with no user.
+ */

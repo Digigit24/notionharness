@@ -2,14 +2,25 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { X } from 'lucide-react'
-import type { TeamMessageKind, TeamTask } from '@/lib/broker'
+import type { ChannelApproval, TeamMessageKind, TeamTask } from '@/lib/broker'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/hooks/use-toast'
 import { formatRelativeTime } from '@/lib/relative-time'
 import { postChannelMessageAction, toggleReactionAction } from '@/app/(app)/workspace/[workspaceSlug]/teams/actions'
-import { isGroupedWith, type RoomFeedMessage, type TeamSlotView } from './shared'
+import {
+  isGroupedWith,
+  runLinkFor,
+  slotById,
+  taskChipFor,
+  type ChannelRunLink,
+  type PendingReply,
+  type RoomFeedMessage,
+  type TeamSlotView,
+} from './shared'
+import { ApprovalStrip } from './approval-strip'
 import { MessageRow } from './message-row'
 import { MessageComposer } from './message-composer'
+import { PendingReplyRow } from './pending-reply-row'
 
 /**
  * A thread, BESIDE the feed.
@@ -25,32 +36,71 @@ import { MessageComposer } from './message-composer'
  */
 export function ThreadPane({
   workspaceId,
+  workspaceSlug,
   teamId,
   rootId,
   messages,
   slots,
   tasks,
+  runs,
+  pending,
+  approvals,
+  currentUserId,
+  onApprovalSettled,
   mySlotId,
   onClose,
   onAppendReply,
+  onDispatched,
   onPatchMessage,
+  onDismissPending,
+  onOpenTask,
 }: {
   workspaceId: number
+  workspaceSlug: string
   teamId: number
   rootId: number
   /** Root first, then replies in order — exactly what `listThread` returns. */
   messages: RoomFeedMessage[]
   slots: TeamSlotView[]
   tasks: TeamTask[]
+  runs: Map<number, ChannelRunLink>
+  /** The whole room's pending replies; this pane renders the ones whose
+   * answer is destined for THIS thread. Passed whole rather than pre-filtered
+   * so the room stays the single owner of that list. */
+  pending: PendingReply[]
+  /** Blocked runs for the whole room; this pane shows the ones belonging to
+   * THIS thread. Same list the channel renders, so approving in one place and
+   * approving in the other are visibly the same request. */
+  approvals: ChannelApproval[]
+  currentUserId: number
+  onApprovalSettled: (externalId: string) => void
   mySlotId: number | null
   onClose: () => void
   onAppendReply: (reply: RoomFeedMessage) => void
+  onDispatched: (input: {
+    message: RoomFeedMessage
+    dispatched: Array<{ slotId: number; displayName: string; runId: number }>
+    skipped: Array<{ slotId: number; displayName: string; reason: string }>
+  }) => void
   onPatchMessage: (id: number, patch: Partial<RoomFeedMessage>) => void
+  onDismissPending: (runId: number) => void
+  onOpenTask: (taskId: number) => void
 }) {
   const scrollerRef = useRef<HTMLDivElement>(null)
-  const taskSubjectById = useMemo(() => new Map(tasks.map((t) => [t.id, t.subject])), [tasks])
   const root = messages[0] ?? null
   const replies = messages.slice(1)
+  /**
+   * The ghosts that belong here.
+   *
+   * A mention dispatched with `thread_root_id = rootId` will answer INTO this
+   * pane, so this is where its live text belongs — the feed shows the same
+   * ghost under the message that started it, and the two are the same run
+   * rendered twice rather than two competing stories.
+   */
+  const threadPending = useMemo(
+    () => pending.filter((row) => row.threadRootId === rootId),
+    [pending, rootId],
+  )
 
   // A thread pane opens at its newest reply — you came here to read the end of
   // a branch, not the start of one you have already seen in the feed.
@@ -79,6 +129,12 @@ export function ThreadPane({
         threadRootId: rootId,
       })
       onAppendReply(result.message)
+      // A reply can name an agent too, and the same silence bug applies to it.
+      onDispatched({
+        message: result.message,
+        dispatched: result.dispatched ?? [],
+        skipped: result.mentionsSkipped ?? [],
+      })
     } catch (error) {
       toast({
         title: 'Reply not sent',
@@ -149,14 +205,37 @@ export function ThreadPane({
               grouped={false}
               slots={slots}
               mySlotId={mySlotId}
-              taskSubject={root.taskId == null ? null : (taskSubjectById.get(root.taskId) ?? null)}
+              taskChip={taskChipFor(tasks, slots, root.taskId)}
+              runSessionId={runLinkFor(root, runs, slots)?.sessionId ?? null}
+              runIsExact={runLinkFor(root, runs, slots)?.exact ?? false}
+              workspaceSlug={workspaceSlug}
+              focused={false}
               threadOpen
               // The root is already open; its own "N replies" button would be a
               // link to where you are standing.
               onOpenThread={() => undefined}
+              onOpenTask={onOpenTask}
+              onMakeTask={null}
               onToggleReaction={(id, emoji) => void toggleReaction(id, emoji)}
               busy={false}
             />
+            {approvals
+              .filter((row) => row.rootMessageId === rootId)
+              .map((row) => {
+                const slot = slotById(slots, row.slotId)
+                return (
+                  <li key={`approval-${row.externalId}`} className="px-3">
+                    <ApprovalStrip
+                      approval={row}
+                      slotName={slot?.displayName ?? null}
+                      canDecide={row.requestedUserId === currentUserId}
+                      holderName={slots.find((s) => s.userId === row.requestedUserId)?.displayName ?? null}
+                      workspaceSlug={workspaceSlug}
+                      onSettled={onApprovalSettled}
+                    />
+                  </li>
+                )
+              })}
             {replies.length > 0 && (
               <li className="my-2 flex items-center gap-2 px-3">
                 <span aria-hidden className="h-px flex-1 bg-black/[.08] dark:bg-white/[.10]" />
@@ -173,11 +252,28 @@ export function ThreadPane({
                 grouped={isGroupedWith(index === 0 ? null : replies[index - 1], reply)}
                 slots={slots}
                 mySlotId={mySlotId}
-                taskSubject={reply.taskId == null ? null : (taskSubjectById.get(reply.taskId) ?? null)}
+                taskChip={taskChipFor(tasks, slots, reply.taskId)}
+                runSessionId={runLinkFor(reply, runs, slots)?.sessionId ?? null}
+                runIsExact={runLinkFor(reply, runs, slots)?.exact ?? false}
+                workspaceSlug={workspaceSlug}
+                focused={false}
                 threadOpen={false}
                 onOpenThread={() => undefined}
+                onOpenTask={onOpenTask}
+                onMakeTask={null}
                 onToggleReaction={(id, emoji) => void toggleReaction(id, emoji)}
                 busy={false}
+              />
+            ))}
+            {threadPending.map((row) => (
+              <PendingReplyRow
+                key={row.runId}
+                workspaceId={workspaceId}
+                workspaceSlug={workspaceSlug}
+                teamId={teamId}
+                pending={row}
+                slots={slots}
+                onDismiss={onDismissPending}
               />
             ))}
           </ul>

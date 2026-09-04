@@ -80,15 +80,27 @@ export {
 } from './teams'
 export {
   getChannelMessage,
+  getRunForChannelMessage,
+  getRunsForChannelMessages,
+  listUserMentions,
   listChannelFeed,
   listChannelUnread,
+  listPendingChannelApprovals,
   listThread,
   markChannelRead,
   parseMentions,
   postChannelMessage,
   toggleReaction,
 } from './channels'
-export type { ChannelMessage, ChannelReaction, ChannelUnread, MentionTarget } from './channels'
+export type {
+  ChannelApproval,
+  ChannelMessage,
+  ChannelMessageRun,
+  ChannelReaction,
+  ChannelUnread,
+  MentionTarget,
+  UserMention,
+} from './channels'
 export type {
   Team,
   TeamMember,

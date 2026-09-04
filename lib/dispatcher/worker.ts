@@ -385,6 +385,9 @@ async function postMentionReply(
     kind: status === 'completed' ? 'answer' : 'status',
     body: body.slice(0, 20_000),
     threadRootId,
+    // Stamped so "see the full run" on this reply opens the run that actually
+    // wrote it, rather than approximating from the slot's session.
+    runId: run.id,
   })
 }
 
@@ -410,17 +413,58 @@ function notifyRunSettled(
     .catch((err) => console.error(`[dispatcher] Failed to push completion notification for run ${run.id}.`, err))
 }
 
+/**
+ * Tells a channel thread that its agent is blocked waiting for a person.
+ *
+ * Without this, a mention-run that hits `permissionMode: 'ask'` renders its
+ * approval card in the WORK thread and the channel shows nothing at all — the
+ * run blocks silently until it times out. That is the same failure as the
+ * original "I mentioned it and nothing happened", arriving by a different
+ * route, and it would read as the feature being broken again.
+ *
+ * Posted as a `status` message so it is visibly not an answer, and best-effort
+ * throughout: failing to announce a block must never also fail the turn that
+ * is blocked.
+ */
+async function announceApprovalInChannel(run: Run, title: string): Promise<void> {
+  if (!run.channelMessageId || !run.sessionId) return
+  try {
+    const { getChannelMessage, postChannelMessage } = await import('@/lib/broker/channels')
+    const { getTeamBindingForSession } = await import('@/lib/broker')
+    const [source, binding] = await Promise.all([
+      getChannelMessage(run.channelMessageId),
+      getTeamBindingForSession(run.sessionId),
+    ])
+    if (!source || !binding) return
+    await postChannelMessage({
+      teamId: binding.teamId,
+      fromSlotId: binding.slotId,
+      kind: 'status',
+      body: `Waiting for approval to ${title}. The channel shows the decision on this thread's row — answer it there, in this thread, or in the Inbox, and I will carry on.`,
+      threadRootId: source.threadRootId ?? source.id,
+    })
+  } catch {
+    // Announcing a block is never worth failing the blocked turn over.
+  }
+}
+
 function buildPermissionCallback(
-  runId: number,
+  run: Run,
   requestedUserId: number,
   permissionTimeoutMs: number
 ) {
+  const runId = run.id
   return async (params: {
     id: string
     title: string
     detail: string
     options: Array<{ optionId: string; kind: string; label?: string }>
   }): Promise<ApprovalOutcome> => {
+    // Say so in the channel BEFORE waiting, not after: the whole point is that
+    // the person sees it while the run is still blocked rather than learning
+    // about it from a timeout.
+    void announceApprovalInChannel(run, params.title)
+
       const approvalId = await createPendingApproval({
       runId,
       externalId: params.id,
@@ -891,7 +935,7 @@ async function executeClaimedRun(
       // timeouts significantly — the turn can now be blocked waiting for a human.
       ...(agent.permissionMode === 'ask'
         ? {
-            permissionCallback: buildPermissionCallback(run.id, run.accountableUser, 5 * 60 * 1000),
+            permissionCallback: buildPermissionCallback(run, run.accountableUser, 5 * 60 * 1000),
             permissionTimeoutMs: 5 * 60 * 1000,
             turnTimeoutMs: 10 * 60 * 1000,
           }

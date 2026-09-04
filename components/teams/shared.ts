@@ -1,4 +1,8 @@
 import type { ChannelMessage, TeamMessageKind, TeamRole, TeamTask, TeamTaskStatus } from '@/lib/broker'
+// A value import, and safe on both sides: `lib/broker/types.ts` is a pure
+// declaration file whose only import is `import type`, so nothing from the
+// driver reaches the browser bundle through it.
+import { TERMINAL_STATUSES, type RunStatus } from '@/lib/broker/types'
 // `import type` and nothing else: `lib/teams/reliability.ts` pulls in `pg` and
 // `node:crypto`, and this module is imported by client components. Types are
 // erased at compile time, so nothing from it reaches the browser bundle.
@@ -447,3 +451,172 @@ export function tasksForSlot(tasks: TeamTask[], slotId: number): TeamTask[] {
 /** Kept so `lanes-view.tsx` can keep taking the reliability row shape it was
  * written against while the channel reads the richer feed row. */
 export type { TeamRoomMessage }
+
+// --- A mention that starts work (this unit) ----------------------------------
+
+/**
+ * The run a channel message started, as `getRunsForChannelMessages` answers it.
+ *
+ * Keyed by the message that NAMED the agent — `runs.channel_message_id`
+ * (migration 0014) points at the trigger, not at the answer. That asymmetry is
+ * the single most important thing to know about this whole feature and it is
+ * why `runLinkFor` below has two cases rather than one.
+ */
+export interface ChannelRunLink {
+  runId: number
+  sessionId: number | null
+  status: string
+}
+
+/** Terminal in the run table's own vocabulary. Duplicated as a predicate
+ * rather than re-deriving from timestamps: the status column is the fact. */
+export function isTerminalRunStatus(status: string): boolean {
+  return TERMINAL_STATUSES.includes(status as RunStatus)
+}
+
+/**
+ * Where "See full run" points for a given message.
+ *
+ * TWO cases, and the second one is a compromise that is stated rather than
+ * hidden:
+ *
+ *  1. The message that named the agent HAS a run row against it, so the link
+ *     is exact — that run, in that session.
+ *  2. An agent's REPLY has no run row of its own. `team_messages` carries no
+ *     `run_id` — that column now EXISTS. A message written by an agent, whether
+ *     the dispatcher posted it as a backstop or the agent posted it itself
+ *     with `team_send_message`, carries the run that wrote it, so a reply
+ *     links to its exact transcript. The old fallback to the slot's session
+ *     stays for messages written before the column existed, and says so.
+ *
+ * Returns null when there is nothing honest to link to — a person's message,
+ * or an agent slot that has no session yet.
+ */
+export function runLinkFor(
+  message: { id: number; fromSlotId: number | null; runId?: number | null },
+  runs: Map<number, ChannelRunLink>,
+  slots: TeamSlotView[],
+): { sessionId: number; exact: boolean; runId?: number } | null {
+  // The message's OWN run, when it has one. This is the exact answer and it
+  // beats both cases below.
+  if (message.runId != null) {
+    const own = runs.get(message.id)
+    const sessionId = own?.sessionId ?? slotById(slots, message.fromSlotId)?.sessionId ?? null
+    if (sessionId != null) return { sessionId, exact: true, runId: message.runId }
+  }
+  const direct = runs.get(message.id)
+  if (direct?.sessionId != null) return { sessionId: direct.sessionId, exact: true }
+  const from = slotById(slots, message.fromSlotId)
+  if (from && from.agentId != null && from.sessionId != null) {
+    return { sessionId: from.sessionId, exact: false }
+  }
+  return null
+}
+
+/**
+ * An agent that was woken and has not answered yet — the "replying…" row.
+ *
+ * Held per RUN rather than per message: one message can name two agents, and
+ * two ghosts under one line is the correct picture of what is happening.
+ */
+export interface PendingReply {
+  /** The message that named the agent. The ghost renders under this row. */
+  messageId: number
+  /** The thread the answer will land in — the trigger's root, or itself. */
+  threadRootId: number
+  slotId: number
+  displayName: string
+  runId: number
+  sessionId: number | null
+  /**
+   * `replyCount` on the thread root at the moment this ghost appeared.
+   *
+   * The answer arrives as a THREAD REPLY, which the feed never contains (the
+   * feed is roots only), so "has it answered yet" cannot be asked of the feed
+   * rows directly. The root's reply count is the one signal that does travel
+   * with the feed, and it is the database's own count rather than anything
+   * this client tallies.
+   */
+  baselineReplyCount: number
+}
+
+/** A mention that deliberately woke nobody, with the reason the server gave. */
+export interface SkippedMention {
+  messageId: number
+  slotId: number
+  displayName: string
+  reason: string
+}
+
+// --- Slash commands ----------------------------------------------------------
+
+export interface SlashCommandSpec {
+  name: string
+  /** Rendered after the name in the palette, e.g. "@member subject". */
+  args: string
+  hint: string
+}
+
+/**
+ * The four commands, and nothing invented.
+ *
+ * Every one of them is a call this room already makes: `/task` and `/assign`
+ * are `createTeamTaskAction`, `/canvas` is the header's own Canvas toggle, and
+ * `/status` prints the health and board numbers the room is already holding —
+ * it deliberately does NOT post anything, because a status line typed into the
+ * feed is a message somebody then has to read past.
+ */
+export const SLASH_COMMANDS: SlashCommandSpec[] = [
+  { name: 'task', args: '<subject>', hint: 'Open a task on the board' },
+  { name: 'assign', args: '@member <subject>', hint: 'Open a task already owned by a member' },
+  { name: 'canvas', args: '', hint: "Open the channel's canvas" },
+  { name: 'status', args: '', hint: 'Who is working, and what is claimable' },
+]
+
+/**
+ * The command being typed, if the composer holds one.
+ *
+ * Position 0 ONLY. A "/" anywhere else is a path, a date or a fraction, and
+ * the mention scanner made the same call about "@" for the same reason.
+ * `complete` is true once a separator has been typed, which is what tells the
+ * palette to stop filtering and start showing the one command in play.
+ */
+export function slashCommandAt(value: string): { name: string; rest: string; complete: boolean } | null {
+  if (!value.startsWith('/')) return null
+  const firstLine = value.slice(1)
+  const match = /^([a-zA-Z]*)([\s\S]*)$/.exec(firstLine)
+  if (!match) return null
+  const [, name, remainder] = match
+  return { name: name.toLowerCase(), rest: remainder.trimStart(), complete: remainder.length > 0 }
+}
+
+/** The subject line a message becomes when it is turned into a task: the first
+ * non-empty line, capped. The rest of the body becomes the description, so
+ * nothing is lost by the split. */
+export function subjectFromBody(body: string): string {
+  const line = body.split('\n').find((l) => l.trim().length > 0) ?? body
+  const clean = line.trim().replace(/\s+/g, ' ')
+  return clean.length > 120 ? `${clean.slice(0, 117)}…` : clean
+}
+
+/** The task a message is about, resolved for the inline chip. Null rather
+ * than a placeholder when the task has been deleted out from under the
+ * message — a chip for a task that is not on the board would be a link to
+ * nowhere. */
+export function taskChipFor(
+  tasks: TeamTask[],
+  slots: TeamSlotView[],
+  taskId: number | null,
+): { id: number; subject: string; status: TeamTaskStatus; ownerName: string | null; ownerColour: string | null } | null {
+  if (taskId == null) return null
+  const task = tasks.find((t) => t.id === taskId)
+  if (!task) return null
+  const owner = slotById(slots, task.ownerSlotId)
+  return {
+    id: task.id,
+    subject: task.subject,
+    status: task.status,
+    ownerName: owner?.displayName ?? null,
+    ownerColour: owner ? colourOf(owner) : null,
+  }
+}

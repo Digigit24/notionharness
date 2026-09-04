@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Columns3, Hash, Lock, MessageSquare, Network, NotebookPen, OctagonX } from 'lucide-react'
-import type { TeamTask } from '@/lib/broker'
+import type { ChannelApproval, TeamTask } from '@/lib/broker'
 import type { TeamRoomMessage, TeamSlotHealth, TeamStopState } from '@/lib/teams/reliability'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -10,14 +10,29 @@ import { toast } from '@/hooks/use-toast'
 import { formatRelativeTime } from '@/lib/relative-time'
 import {
   clearTeamStopAction,
+  createTaskFromMessageAction,
+  createTeamTaskAction,
   joinChannelAction,
+  loadChannelRunsAction,
   loadThreadAction,
   markChannelReadAction,
   pollTeamRoomAction,
   stopTeamRoomAction,
 } from '@/app/(app)/workspace/[workspaceSlug]/teams/actions'
 import type { Channel } from '@/app/(app)/workspace/[workspaceSlug]/teams/data'
-import { formatSilence, type RoomFeedMessage, type TeamAgentOption, type TeamSlotView, type TeamUserOption } from './shared'
+import {
+  SLOT_STATE_LABEL,
+  formatSilence,
+  isTerminalRunStatus,
+  subjectFromBody,
+  type ChannelRunLink,
+  type PendingReply,
+  type RoomFeedMessage,
+  type SkippedMention,
+  type TeamAgentOption,
+  type TeamSlotView,
+  type TeamUserOption,
+} from './shared'
 import { ChannelView } from './channel-view'
 import { ThreadPane } from './thread-pane'
 import { CanvasPane } from './canvas-pane'
@@ -74,6 +89,9 @@ export function TeamRoom({
   initialClaimableIds,
   initialHealth,
   initialStop,
+  initialRuns,
+  initialApprovals,
+  initialUnread,
   agents,
   users,
 }: {
@@ -88,6 +106,23 @@ export function TeamRoom({
   initialClaimableIds: number[]
   initialHealth: TeamSlotHealth[]
   initialStop: TeamStopState
+  /**
+   * messageId -> the run that message started, for the whole first page, from
+   * ONE query (`getRunsForChannelMessages`). Resolved on the server so the
+   * "See full run" links and any in-flight ghost rows are correct on FIRST
+   * PAINT — a reload in the middle of an agent's turn used to show a channel
+   * with nothing happening in it.
+   */
+  initialRuns: Record<number, { runId: number; sessionId: number | null; status: string }>
+  /**
+   * Permission requests already blocking a run when the page was rendered.
+   *
+   * Server-resolved so a reload in the middle of a block paints the button
+   * immediately rather than six seconds later on the first poll.
+   */
+  initialApprovals: ChannelApproval[]
+  /** The server's own unread/mention counts at open (`listChannelUnread`). */
+  initialUnread: { unreadCount: number; mentionCount: number }
   agents: TeamAgentOption[]
   users: TeamUserOption[]
 }) {
@@ -104,6 +139,33 @@ export function TeamRoom({
   const [threadRootId, setThreadRootId] = useState<number | null>(null)
   const [thread, setThread] = useState<RoomFeedMessage[]>([])
   const [canvasOpen, setCanvasOpen] = useState(false)
+  const [runs, setRuns] = useState<Map<number, ChannelRunLink>>(
+    () => new Map(Object.entries(initialRuns).map(([id, link]) => [Number(id), link])),
+  )
+  /**
+   * Blocked runs, refreshed by the poll that was already running.
+   *
+   * Unlike `runs`, this is NOT ask-once: a run gains an approval in the middle
+   * of its turn and loses it when somebody decides, so it is live state and
+   * rides the room's existing tick. It costs no extra request — see
+   * `listPendingChannelApprovals`.
+   */
+  const [approvals, setApprovals] = useState<ChannelApproval[]>(initialApprovals)
+  const [pending, setPending] = useState<PendingReply[]>([])
+  const [skipped, setSkipped] = useState<SkippedMention[]>([])
+  /**
+   * Runs whose ghost row is finished with, for either reason: the answer
+   * landed, or a person waved it away.
+   *
+   * This set is what stops the row coming straight back. `runs` still holds
+   * the run at whatever status it had when we last asked — and we deliberately
+   * never re-ask, because status is not what retires a ghost — so without a
+   * memory here the hydration effect below would re-add every retired row on
+   * its next pass, with a fresh baseline that could never retire again.
+   */
+  const [retiredRunIds, setRetiredRunIds] = useState<Set<number>>(() => new Set())
+  /** The board card to scroll to and flash, set by a task chip in the feed. */
+  const [focusTaskId, setFocusTaskId] = useState<number | null>(null)
 
   // The server re-renders this component with fresh props after any action
   // that calls revalidatePath (adding a slot, changing the leader). Without
@@ -224,6 +286,7 @@ export function TeamRoom({
         setClaimableIds(delta.claimableIds)
         setHealth(delta.health)
         setStop(delta.stop)
+        setApprovals(delta.approvals)
       } catch {
         // Swallowed on purpose: a failed poll is not an event worth a toast
         // every six seconds. The next tick either works or the page is dead
@@ -306,6 +369,334 @@ export function TeamRoom({
       setJoining(false)
     }
   }, [workspaceId, workspaceSlug, channel.id])
+
+  // --- Mentions that start work ---------------------------------------------
+
+  /**
+   * The reply count of every root we hold, so a ghost can tell when its answer
+   * has actually landed.
+   *
+   * The answer arrives as a THREAD REPLY and the feed is roots only, so the
+   * reply itself never appears in `feed` — the root's count going up is the
+   * one signal that does, and it is the database's own `count(*)`, not a
+   * tally kept here.
+   */
+  const replyCountByRoot = useMemo(() => new Map(feed.map((m) => [m.id, m.replyCount])), [feed])
+
+  /**
+   * Ghost rows, from BOTH sources, in one place.
+   *
+   * `dispatched` on a send is what makes the row appear in the same tick as
+   * the message. `runs` is what makes it survive a reload: a person who
+   * refreshes mid-turn must still see that an agent is working, and before
+   * this the page came back looking like nothing had ever been started.
+   */
+  const addPending = useCallback((rows: PendingReply[]) => {
+    if (rows.length === 0) return
+    setPending((prev) => {
+      const seen = new Set(prev.map((p) => p.runId))
+      const fresh = rows.filter((r) => !seen.has(r.runId))
+      return fresh.length === 0 ? prev : [...prev, ...fresh]
+    })
+  }, [])
+
+  const retire = useCallback((runIds: number[]) => {
+    if (runIds.length === 0) return
+    const ids = new Set(runIds)
+    setPending((prev) => prev.filter((p) => !ids.has(p.runId)))
+    setRetiredRunIds((prev) => {
+      const next = new Set(prev)
+      for (const id of ids) next.add(id)
+      return next
+    })
+  }, [])
+
+  const dismissPending = useCallback((runId: number) => retire([runId]), [retire])
+
+  // Hydration from the runs map: any non-terminal run whose trigger message we
+  // are showing is an agent that is working right now.
+  useEffect(() => {
+    const rows: PendingReply[] = []
+    for (const [messageId, link] of runs) {
+      if (isTerminalRunStatus(link.status)) continue
+      if (retiredRunIds.has(link.runId)) continue
+      if (link.sessionId == null) continue
+      const message = feed.find((m) => m.id === messageId)
+      if (!message) continue
+      // The run carries a session, and a slot IS a session — that is the join
+      // that names the agent without a second query. A run whose session is no
+      // longer on the roster is skipped rather than labelled "unknown member".
+      const slot = slots.find((sl) => sl.sessionId === link.sessionId && sl.agentId != null)
+      if (!slot) continue
+      const rootId = message.threadRootId ?? message.id
+      rows.push({
+        messageId,
+        threadRootId: rootId,
+        slotId: slot.id,
+        displayName: slot.displayName,
+        runId: link.runId,
+        sessionId: link.sessionId,
+        baselineReplyCount: replyCountByRoot.get(rootId) ?? 0,
+      })
+    }
+    addPending(rows)
+  }, [runs, feed, slots, retiredRunIds, replyCountByRoot, addPending])
+
+  /**
+   * Retiring a ghost when its answer lands.
+   *
+   * The root gaining a reply is the proof. NOT the run reaching a terminal
+   * status: a run can finish a beat before its `team_send_message` row is
+   * visible to the next poll, and dropping the row on `done` would blink the
+   * answer out of existence for those few seconds. The dismiss button is the
+   * escape hatch for a run that ends without ever posting.
+   */
+  useEffect(() => {
+    const answered = pending.filter(
+      (row) => (replyCountByRoot.get(row.threadRootId) ?? 0) > row.baselineReplyCount,
+    )
+    // Early return before any setState, so depending on `pending` here cannot
+    // become a render loop.
+    if (answered.length === 0) return
+    retire(answered.map((row) => row.runId))
+  }, [pending, replyCountByRoot, retire])
+
+  /**
+   * Which messages we have already asked about.
+   *
+   * `runs.channel_message_id` is written inside the same server action that
+   * inserts the message, so a message that has no run when we first ask will
+   * never gain one — which makes "ask once per id" correct rather than merely
+   * cheap. One batched call per arriving BATCH; never one per row.
+   */
+  const runsAskedRef = useRef<Set<number>>(new Set(Object.keys(initialRuns).map(Number)))
+  useEffect(() => {
+    // Mount only. `feed` is deliberately NOT a dependency: this seeds the set
+    // with the page the SERVER already resolved runs for, so the effect below
+    // does not immediately re-ask for all two hundred of them. Re-running it on
+    // every feed change would mark newly arrived messages as asked without ever
+    // asking, and their "See full run" links would never appear.
+    for (const message of feed) runsAskedRef.current.add(message.id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    const unasked: number[] = []
+    for (const message of [...feed, ...thread]) {
+      if (runsAskedRef.current.has(message.id)) continue
+      runsAskedRef.current.add(message.id)
+      unasked.push(message.id)
+    }
+    if (unasked.length === 0) return
+    let cancelled = false
+    void loadChannelRunsAction({ workspaceId, teamId: channel.id, messageIds: unasked })
+      .then((found) => {
+        if (cancelled) return
+        const entries = Object.entries(found)
+        if (entries.length === 0) return
+        setRuns((prev) => {
+          const next = new Map(prev)
+          for (const [id, link] of entries) next.set(Number(id), link)
+          return next
+        })
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [feed, thread, workspaceId, channel.id])
+
+  /** What a send tells us: the row, who it woke, and who it deliberately did
+   * not. All three were already on the response and only the first was used. */
+  const onDispatched = useCallback(
+    (input: {
+      message: RoomFeedMessage
+      dispatched: Array<{ slotId: number; displayName: string; runId: number }>
+      skipped: Array<{ slotId: number; displayName: string; reason: string }>
+    }) => {
+      // ROOTS ONLY. `listChannelFeed` selects `thread_root_id IS NULL`, so the
+      // feed is the list of roots and nothing else; merging a thread reply
+      // into it puts the same message on screen twice — once inside the
+      // thread pane and once as a top-level row that no refresh ever removes,
+      // because `mergeFeed` only ever adds. The thread pane's own
+      // `onAppendReply` already puts the reply where it belongs and nudges the
+      // root's reply count.
+      const isReply = input.message.threadRootId != null
+      if (!isReply) mergeFeed([input.message])
+      const rootId = input.message.threadRootId ?? input.message.id
+      addPending(
+        input.dispatched.map((d) => ({
+          messageId: input.message.id,
+          threadRootId: rootId,
+          slotId: d.slotId,
+          displayName: d.displayName,
+          runId: d.runId,
+          sessionId: slots.find((sl) => sl.id === d.slotId)?.sessionId ?? null,
+          // +1 when the message that named the agent is ITSELF a reply.
+          //
+          // `replyCountByRoot` is read from the render this callback closed
+          // over, which is one tick before `onAppendReply`'s bump lands — so
+          // it is the count BEFORE our own reply. Taking it as the baseline
+          // means the very next render sees count > baseline and retires the
+          // ghost instantly: mentioning an agent from the thread pane showed a
+          // "replying…" row for a single frame and then went silent, which is
+          // the exact bug this row exists to remove.
+          baselineReplyCount: (replyCountByRoot.get(rootId) ?? 0) + (isReply ? 1 : 0),
+        })),
+      )
+      if (input.skipped.length > 0) {
+        setSkipped((prev) => [
+          ...prev,
+          ...input.skipped.map((sk) => ({ ...sk, messageId: input.message.id })),
+        ])
+      }
+      // A dispatched run exists NOW; recording it here means the reload path
+      // and the live path agree without waiting for a poll.
+      if (input.dispatched.length > 0) {
+        runsAskedRef.current.add(input.message.id)
+        setRuns((prev) => {
+          const next = new Map(prev)
+          const first = input.dispatched[0]
+          next.set(input.message.id, {
+            runId: first.runId,
+            sessionId: slots.find((sl) => sl.id === first.slotId)?.sessionId ?? null,
+            status: 'queued',
+          })
+          return next
+        })
+      }
+    },
+    [mergeFeed, addPending, slots, replyCountByRoot],
+  )
+
+  /**
+   * A decided request, dropped immediately.
+   *
+   * The POST already returned 200, so waiting for the next poll to notice
+   * would leave a dead control on screen for up to a tick. Filtering locally
+   * is free and the poll agrees with it within the same tick.
+   */
+  const onApprovalSettled = useCallback((externalId: string) => {
+    setApprovals((prev) => prev.filter((row) => row.externalId !== externalId))
+  }, [])
+
+  /** A task chip, followed. The board is the other half of the product and
+   * this is the seam between them. */
+  const openTask = useCallback((taskId: number) => {
+    setFocusTaskId(taskId)
+    selectView('board')
+  }, [selectView])
+
+  const makeTaskFromMessage = useCallback(
+    async (messageId: number): Promise<string | null> => {
+      try {
+        const { task } = await createTaskFromMessageAction({ workspaceId, teamId: channel.id, messageId })
+        setTasks((prev) => (prev.some((t) => t.id === task.id) ? prev : [...prev, task]))
+        // Patched locally rather than re-read: the action told us the id it
+        // wrote, and re-fetching the room to show a chip we already hold is
+        // the round trip on a UI action D0 forbids.
+        patchMessage(messageId, { taskId: task.id })
+        return null
+      } catch (error) {
+        return error instanceof Error ? error.message : 'Something went wrong.'
+      }
+    },
+    [workspaceId, channel.id, patchMessage],
+  )
+
+  /**
+   * Slash commands (item 7).
+   *
+   * Every one of these is a call the room already makes; nothing here is a new
+   * capability with a new code path behind it. `/status` deliberately posts
+   * NOTHING — it answers a question, and answering it by writing a message
+   * into the channel would make everyone else read the answer to a question
+   * they did not ask.
+   */
+  const runCommand = useCallback(
+    async (command: { name: string; rest: string }): Promise<string | null> => {
+      const rest = command.rest.trim()
+
+      if (command.name === 'canvas') {
+        setCanvasOpen(true)
+        return null
+      }
+
+      if (command.name === 'status') {
+        const working = health.filter((h) => h.state === 'running').length
+        const lostNow = health.filter((h) => h.state === 'lost')
+        const waiting = health.filter((h) => h.state === 'awaiting_approval')
+        toast({
+          title: `#${channel.name} · ${slots.length} ${slots.length === 1 ? 'member' : 'members'}`,
+          description:
+            `${working} working · ${claimableIds.length} claimable ${claimableIds.length === 1 ? 'task' : 'tasks'} · ` +
+            `${stop.inFlightRunIds.length} ${stop.inFlightRunIds.length === 1 ? 'turn' : 'turns'} in flight` +
+            (lostNow.length > 0 ? `. Lost: ${lostNow.map((h) => h.displayName).join(', ')}` : '') +
+            (waiting.length > 0
+              ? `. ${SLOT_STATE_LABEL.awaiting_approval}: ${waiting.map((h) => h.displayName).join(', ')}`
+              : ''),
+        })
+        return null
+      }
+
+      if (command.name === 'task') {
+        if (!rest) return 'Say what the task is: /task Fix the flaky login test'
+        // RETURNED, not thrown. The contract this function declares is
+        // `Promise<string | null>` — a string is the reason it did not run,
+        // printed under the composer beside the text that caused it. Throwing
+        // instead escaped the composer's `try/finally` (which has no `catch`),
+        // became an unhandled rejection, and left a refused `/task` looking
+        // exactly like a successful one: nothing on screen either way.
+        try {
+          const task = await createTeamTaskAction({
+            workspaceId,
+            teamId: channel.id,
+            subject: subjectFromBody(rest),
+            description: rest === subjectFromBody(rest) ? undefined : rest,
+            ownerSlotId: null,
+            blockedBy: [],
+          })
+          setTasks((prev) => [...prev, task])
+          return null
+        } catch (error) {
+          return error instanceof Error ? error.message : 'Something went wrong.'
+        }
+      }
+
+      if (command.name === 'assign') {
+        if (!rest.startsWith('@')) return 'Name a member first: /assign @Coder Fix the flaky login test'
+        // Longest display name first, so "@Coder 2" is never eaten by "@Coder"
+        // — the same ordering `parseMentions` and `splitMentions` use, for the
+        // same reason.
+        const ordered = [...slots].sort((a, b) => b.displayName.length - a.displayName.length)
+        const lower = rest.toLowerCase()
+        const target = ordered.find((sl) => lower.startsWith(`@${sl.displayName.toLowerCase()}`))
+        if (!target) return `Nobody in this channel is called ${rest.split(/\s+/)[0]}.`
+        const subject = rest.slice(target.displayName.length + 1).trim()
+        if (!subject) return `Say what ${target.displayName} should do: /assign @${target.displayName} <subject>`
+        try {
+          const task = await createTeamTaskAction({
+            workspaceId,
+            teamId: channel.id,
+            subject: subjectFromBody(subject),
+            description: subject === subjectFromBody(subject) ? undefined : subject,
+            ownerSlotId: target.id,
+            blockedBy: [],
+          })
+          setTasks((prev) => [...prev, task])
+          return null
+        } catch (error) {
+          return error instanceof Error ? error.message : 'Something went wrong.'
+        }
+      }
+
+      // Unreachable through the composer, which refuses an unknown name before
+      // it ever gets here. Kept so a future command added to SLASH_COMMANDS
+      // without a branch fails loudly instead of silently doing nothing.
+      return `/${command.name} is listed but not wired up yet.`
+    },
+    [workspaceId, channel.id, channel.name, slots, health, claimableIds, stop.inFlightRunIds.length],
+  )
 
   const leader = useMemo(() => slots.find((s) => s.role === 'leader') ?? null, [slots])
   const claimableCount = claimableIds.length
@@ -520,16 +911,29 @@ export function TeamRoom({
         {view === 'channel' && (
           <ChannelView
             workspaceId={workspaceId}
+            workspaceSlug={workspaceSlug}
             teamId={channel.id}
             slots={slots}
             mySlotId={mySlotId}
             feed={feed}
             tasks={tasks}
+            runs={runs}
+            pending={pending}
+            skipped={skipped}
+            approvals={approvals}
+            currentUserId={currentUserId}
+            onApprovalSettled={onApprovalSettled}
             unreadBoundary={unreadBoundaryRef.current}
+            unreadAtOpen={initialUnread.unreadCount}
+            mentionsAtOpen={initialUnread.mentionCount}
             threadRootId={threadRootId}
             onOpenThread={openThread}
-            onPosted={(message) => mergeFeed([message])}
+            onDispatched={onDispatched}
             onPatchMessage={patchMessage}
+            onDismissPending={dismissPending}
+            onOpenTask={openTask}
+            onMakeTask={makeTaskFromMessage}
+            onCommand={runCommand}
             onSeen={onSeen}
             onJoin={() => void join()}
             joining={joining}
@@ -554,6 +958,8 @@ export function TeamRoom({
               slots={slots}
               tasks={tasks}
               claimableIds={claimableIds}
+              focusTaskId={focusTaskId}
+              onFocusHandled={() => setFocusTaskId(null)}
               onTasksChanged={setTasks}
             />
           </div>
@@ -565,18 +971,27 @@ export function TeamRoom({
         {view === 'channel' && threadRootId != null && (
           <ThreadPane
             workspaceId={workspaceId}
+            workspaceSlug={workspaceSlug}
             teamId={channel.id}
             rootId={threadRootId}
             messages={thread}
             slots={slots}
             tasks={tasks}
+            runs={runs}
+            pending={pending}
+            approvals={approvals}
+            currentUserId={currentUserId}
+            onApprovalSettled={onApprovalSettled}
             mySlotId={mySlotId}
             onClose={() => {
               setThreadRootId(null)
               setThread([])
             }}
             onAppendReply={appendReply}
+            onDispatched={onDispatched}
             onPatchMessage={patchMessage}
+            onDismissPending={dismissPending}
+            onOpenTask={openTask}
           />
         )}
         {canvasOpen && (

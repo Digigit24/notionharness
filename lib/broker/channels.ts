@@ -48,6 +48,10 @@ export interface ChannelMessage {
   reactions: ChannelReaction[]
   /** Set when this message could not be delivered (R6.6 dead letters). */
   undeliverableReason: string | null
+  /** The run that produced this message, when an agent wrote it. Lets a reply
+   * link to the EXACT run behind it rather than approximating from the slot's
+   * session, which might be a later turn entirely. */
+  runId: number | null
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -73,6 +77,7 @@ function toChannelMessage(row: any): ChannelMessage {
         }))
       : [],
     undeliverableReason: row.undeliverable_reason ?? null,
+    runId: row.run_id == null ? null : Number(row.run_id),
   }
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
@@ -192,6 +197,8 @@ export async function postChannelMessage(input: {
   taskId?: number | null
   threadRootId?: number | null
   mentions?: MentionTarget[]
+  /** Set by the dispatcher when an agent's run produced this message. */
+  runId?: number | null
 }): Promise<ChannelMessage> {
   const pool = getBrokerPool()
   let rootId = input.threadRootId ?? null
@@ -210,8 +217,8 @@ export async function postChannelMessage(input: {
   }
 
   const { rows } = await pool.query<{ id: string }>(
-    `INSERT INTO team_messages (team_id, from_slot_id, to_slot_id, kind, body, task_id, thread_root_id, mentions)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb) RETURNING id`,
+    `INSERT INTO team_messages (team_id, from_slot_id, to_slot_id, kind, body, task_id, thread_root_id, mentions, run_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9) RETURNING id`,
     [
       input.teamId,
       input.fromSlotId,
@@ -221,6 +228,7 @@ export async function postChannelMessage(input: {
       input.taskId ?? null,
       rootId,
       JSON.stringify(input.mentions ?? []),
+      input.runId ?? null,
     ],
   )
   const created = await getChannelMessage(Number(rows[0].id))
@@ -370,4 +378,245 @@ export function parseMentions(
   }
 
   return [...found.values()]
+}
+
+/**
+ * The run started to answer a channel message, if there is one.
+ *
+ * Lets a thread link to the WORK rather than only the summary. A channel reply
+ * is an answer; the tool calls, terminal output and diffs behind it live in the
+ * run's own session, and without this there is no way across — the thread says
+ * what happened and the evidence sits in a place you cannot reach from it.
+ *
+ * Newest first, because a message answered more than once (a deliberate
+ * re-ask) should link to the most recent attempt.
+ */
+export async function getRunForChannelMessage(
+  messageId: number,
+): Promise<{ runId: number; sessionId: number | null; status: string } | null> {
+  const pool = getBrokerPool()
+  const { rows } = await pool.query<{ id: string; session_id: string | null; status: string }>(
+    `SELECT id, session_id, status FROM runs WHERE channel_message_id = $1 ORDER BY id DESC LIMIT 1`,
+    [messageId],
+  )
+  const row = rows[0]
+  if (!row) return null
+  return {
+    runId: Number(row.id),
+    sessionId: row.session_id == null ? null : Number(row.session_id),
+    status: row.status,
+  }
+}
+
+/** What a channel message's run is doing, including anything it is blocked on. */
+export interface ChannelMessageRun {
+  runId: number
+  sessionId: number | null
+  status: string
+}
+
+export async function getRunsForChannelMessages(
+  messageIds: number[],
+): Promise<Map<number, ChannelMessageRun>> {
+  const found = new Map<number, ChannelMessageRun>()
+  if (messageIds.length === 0) return found
+  const pool = getBrokerPool()
+  const { rows } = await pool.query<{
+    channel_message_id: string
+    id: string
+    session_id: string | null
+    status: string
+  }>(
+    `SELECT DISTINCT ON (r.channel_message_id)
+            r.channel_message_id, r.id, r.session_id, r.status
+       FROM runs r
+      WHERE r.channel_message_id = ANY($1::bigint[])
+      ORDER BY r.channel_message_id, r.id DESC`,
+    [messageIds],
+  )
+  for (const row of rows) {
+    found.set(Number(row.channel_message_id), {
+      runId: Number(row.id),
+      sessionId: row.session_id == null ? null : Number(row.session_id),
+      status: row.status,
+    })
+  }
+  return found
+}
+
+/**
+ * A permission request that is blocking a run started FROM this channel.
+ *
+ * Why this exists as its own query rather than riding on
+ * `getRunsForChannelMessages`: that map is fetched once per message id and
+ * never re-fetched, because whether a message started a run is decided at
+ * insert time and can never change. An approval is the opposite — it appears
+ * in the MIDDLE of a run, minutes after the message was posted, and it
+ * disappears again when somebody decides. It has to be read on the same
+ * cadence as the rest of the room.
+ *
+ * It costs no round trip: the room already polls, and this runs inside that
+ * poll's existing `Promise.all` alongside the feed and the task reads. Its
+ * result set is bounded by "pending approvals in one channel", which is
+ * approximately never more than a handful.
+ *
+ * `messageId` is the thread ROOT, not the triggering message, because that is
+ * the row the channel feed actually renders — the feed is roots only. The
+ * trigger id is carried separately for the thread pane.
+ */
+export interface ChannelApproval {
+  /** The feed row this belongs under: the trigger's thread root. */
+  rootMessageId: number
+  /** The message that named the agent, for the thread pane. */
+  triggerMessageId: number
+  runId: number
+  sessionId: number | null
+  /** The slot whose agent is blocked, so the strip can name it. */
+  slotId: number | null
+  /** ACP request id — what `/api/approvals` is POSTed with. */
+  externalId: string
+  title: string
+  detail: string | null
+  options: Array<{ optionId: string; kind: string; label?: string }>
+  /** Only this person may decide. Everyone else sees the block and is told
+   * who is holding it, which is more useful than hiding it from them. */
+  requestedUserId: number
+  createdAt: string
+}
+
+export async function listPendingChannelApprovals(teamId: number): Promise<ChannelApproval[]> {
+  const pool = getBrokerPool()
+  const { rows } = await pool.query<{
+    root_id: string
+    trigger_id: string
+    run_id: string
+    session_id: string | null
+    from_slot_id: string | null
+    external_id: string
+    title: string | null
+    detail: string | null
+    options: unknown
+    requested_user_id: number
+    created_at: Date | string
+  }>(
+    `SELECT COALESCE(m.thread_root_id, m.id) AS root_id,
+            m.id                             AS trigger_id,
+            r.id                             AS run_id,
+            r.session_id,
+            tm.id                            AS from_slot_id,
+            a.external_id,
+            a.title,
+            a.detail,
+            a.options,
+            a.requested_user_id,
+            a.created_at
+       FROM approvals a
+       JOIN runs r          ON r.id = a.run_id
+       JOIN team_messages m ON m.id = r.channel_message_id
+       LEFT JOIN team_members tm ON tm.session_id = r.session_id AND tm.team_id = m.team_id
+      WHERE a.status = 'pending' AND m.team_id = $1
+      ORDER BY a.id`,
+    [teamId],
+  )
+  return rows.map((row) => ({
+    rootMessageId: Number(row.root_id),
+    triggerMessageId: Number(row.trigger_id),
+    runId: Number(row.run_id),
+    sessionId: row.session_id == null ? null : Number(row.session_id),
+    slotId: row.from_slot_id == null ? null : Number(row.from_slot_id),
+    externalId: row.external_id,
+    title: row.title ?? 'Permission requested',
+    detail: row.detail ?? null,
+    options: Array.isArray(row.options)
+      ? (row.options as Array<{ optionId: string; kind: string; label?: string }>)
+      : [],
+    requestedUserId: Number(row.requested_user_id),
+    createdAt: new Date(row.created_at).toISOString(),
+  }))
+}
+
+export interface UserMention {
+  messageId: number
+  teamId: number
+  channelName: string
+  body: string
+  createdAt: string
+  fromSlotId: number | null
+  fromDisplayName: string | null
+  threadRootId: number | null
+  /** True while it sits above the reader's own high-water mark. */
+  unread: boolean
+}
+
+/**
+ * Every message mentioning this person, across every channel they are in.
+ *
+ * The surface that fixes the wrong entry point: nobody opens a product asking
+ * which rooms exist, they ask what needs them. One query over the GIN index on
+ * `mentions`, joined to the reader's own slots — no new table, no second
+ * notifications system.
+ *
+ * Bounded, and ordered newest-first, because "what needs me" is a recent
+ * question and an unbounded list on a landing surface is exactly what D0
+ * forbids.
+ */
+export async function listUserMentions(
+  userId: number,
+  options: { workspaceId?: number; limit?: number; unreadOnly?: boolean } = {},
+): Promise<UserMention[]> {
+  const pool = getBrokerPool()
+  const params: unknown[] = [userId]
+  let scope = ''
+  if (options.workspaceId != null) {
+    params.push(options.workspaceId)
+    scope = ` AND t.workspace_id = $${params.length}`
+  }
+  params.push(Math.min(options.limit ?? 50, 200))
+
+  const { rows } = await pool.query<{
+    id: string
+    team_id: string
+    channel_name: string
+    body: string
+    created_at: Date
+    from_slot_id: string | null
+    from_display_name: string | null
+    thread_root_id: string | null
+    unread: boolean
+  }>(
+    `SELECT m.id,
+            m.team_id,
+            t.name AS channel_name,
+            m.body,
+            m.created_at,
+            m.from_slot_id,
+            sender.display_name AS from_display_name,
+            m.thread_root_id,
+            (m.id > COALESCE(mine.last_read_message_id, 0)) AS unread
+       FROM team_members mine
+       JOIN teams t ON t.id = mine.team_id AND t.archived_at IS NULL
+       JOIN team_messages m
+         ON m.team_id = mine.team_id
+        AND m.mentions @> jsonb_build_array(jsonb_build_object('type', 'slot', 'id', mine.id))
+       LEFT JOIN team_members sender ON sender.id = m.from_slot_id
+      WHERE mine.user_id = $1${scope}
+        -- A mention of yourself is not a thing that needs you.
+        AND m.from_slot_id IS DISTINCT FROM mine.id
+        ${options.unreadOnly ? 'AND m.id > COALESCE(mine.last_read_message_id, 0)' : ''}
+      ORDER BY m.id DESC
+      LIMIT $${params.length}`,
+    params,
+  )
+
+  return rows.map((row) => ({
+    messageId: Number(row.id),
+    teamId: Number(row.team_id),
+    channelName: row.channel_name,
+    body: row.body,
+    createdAt: new Date(row.created_at).toISOString(),
+    fromSlotId: row.from_slot_id == null ? null : Number(row.from_slot_id),
+    fromDisplayName: row.from_display_name,
+    threadRootId: row.thread_root_id == null ? null : Number(row.thread_root_id),
+    unread: row.unread,
+  }))
 }

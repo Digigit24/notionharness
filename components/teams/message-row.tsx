@@ -1,13 +1,17 @@
 'use client'
 
 import { useState } from 'react'
-import { MailX, MessageSquareReply, SmilePlus } from 'lucide-react'
+import Link from 'next/link'
+import { ExternalLink, ListPlus, MailX, MessageSquareReply, SmilePlus } from 'lucide-react'
+import type { TeamTaskStatus } from '@/lib/broker'
 import { cn } from '@/lib/utils'
 import { formatRelativeTime } from '@/lib/relative-time'
 import {
   MESSAGE_KIND_CLASS,
   MESSAGE_KIND_LABEL,
   REACTION_CHOICES,
+  TASK_STATUS_CLASS,
+  TASK_STATUS_LABEL,
   colourOf,
   formatClock,
   initialsOf,
@@ -19,6 +23,17 @@ import {
   type RoomFeedMessage,
   type TeamSlotView,
 } from './shared'
+
+/** The task a message is about, already resolved by the caller. Resolved
+ * there rather than here because the feed holds the task list once and this
+ * component is rendered a hundred times. */
+export interface MessageTaskChip {
+  id: number
+  subject: string
+  status: TeamTaskStatus
+  ownerName: string | null
+  ownerColour: string | null
+}
 
 /**
  * One message in the channel.
@@ -43,9 +58,15 @@ export function MessageRow({
   grouped,
   slots,
   mySlotId,
-  taskSubject,
+  taskChip,
+  runSessionId,
+  runIsExact,
+  workspaceSlug,
+  focused,
   threadOpen,
   onOpenThread,
+  onOpenTask,
+  onMakeTask,
   onToggleReaction,
   busy,
 }: {
@@ -53,9 +74,25 @@ export function MessageRow({
   grouped: boolean
   slots: TeamSlotView[]
   mySlotId: number | null
-  taskSubject: string | null
+  /** Present when `team_messages.task_id` is set AND that task is still on the
+   * board. Null covers both "no task" and "task deleted". */
+  taskChip: MessageTaskChip | null
+  /** The Work session holding the run behind this message, or null when there
+   * is nothing honest to link to. See `runLinkFor` for the two cases. */
+  runSessionId: number | null
+  /** False when the link is the agent's SESSION rather than the exact run —
+   * the tooltip says so rather than overclaiming. */
+  runIsExact: boolean
+  workspaceSlug: string
+  /** Keyboard cursor. Drawn as a ring, never as a background: a focused row
+   * that is also a mention must still read as a mention. */
+  focused: boolean
   threadOpen: boolean
   onOpenThread: (rootId: number) => void
+  onOpenTask: (taskId: number) => void
+  /** Null when this row cannot become a task (a system row, or one that
+   * already has one) — the hover action is then simply absent. */
+  onMakeTask: ((messageId: number) => void) | null
   onToggleReaction: (messageId: number, emoji: string) => void
   busy: boolean
 }) {
@@ -75,9 +112,11 @@ export function MessageRow({
 
   return (
     <li
+      id={`team-message-${message.id}`}
       className={cn(
         'group relative flex gap-2.5 rounded-md px-2 py-0.5 hover:bg-black/[.025] dark:hover:bg-white/[.03]',
         grouped ? 'mt-px' : 'mt-2 first:mt-0',
+        focused && 'ring-2 ring-indigo-500/60 ring-offset-0',
         // A message naming you gets a left edge and a wash, the way every chat
         // client marks one. Loud enough to find by scrolling, quiet enough not
         // to shout over the conversation around it.
@@ -137,8 +176,33 @@ export function MessageRow({
                 {MESSAGE_KIND_LABEL[message.kind]}
               </span>
             )}
-            {taskSubject && (
-              <span className="text-[11px] text-black/45 dark:text-white/45">on “{taskSubject}”</span>
+            {/* The chip, not a quoted subject. A message that is about a task
+                should say what STATE that task is in and who holds it —
+                otherwise the channel and the board are two products that
+                happen to share a database. Clicking jumps to the card. */}
+            {taskChip && (
+              <button
+                type="button"
+                onClick={() => onOpenTask(taskChip.id)}
+                title={`${TASK_STATUS_LABEL[taskChip.status]}${
+                  taskChip.ownerName ? ` · ${taskChip.ownerName}` : ' · unassigned'
+                } — open on the board`}
+                className="inline-flex max-w-[16rem] items-center gap-1 rounded border border-black/10 px-1 py-px text-[10px] hover:border-black/30 dark:border-white/15 dark:hover:border-white/35"
+              >
+                {taskChip.ownerColour ? (
+                  <span
+                    aria-hidden
+                    className="size-1.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: taskChip.ownerColour }}
+                  />
+                ) : (
+                  <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-black/20 dark:bg-white/25" />
+                )}
+                <span className="truncate">{taskChip.subject}</span>
+                <span className={cn('shrink-0 uppercase tracking-wide', TASK_STATUS_CLASS[taskChip.status])}>
+                  {TASK_STATUS_LABEL[taskChip.status]}
+                </span>
+              </button>
             )}
             {/* A dead letter is shown, not hidden. The bug R6.6 fixes was a
                 private message quietly becoming a broadcast; replacing it with
@@ -233,6 +297,33 @@ export function MessageRow({
           </div>
         )}
 
+        {/*
+          THE ROUTE FROM THE ANSWER TO THE WORK.
+
+          A channel reply is a summary; the tool calls, the terminal output and
+          the diffs that produced it live in the run. Without this link the
+          feed is a wall of claims with no way to check any of them, which is
+          the second half of the bug this unit exists to fix.
+
+          Always rendered, never hover-only: "this came from a run you can
+          read" is a fact about the message, and hiding facts behind a hover
+          is how people never learn they exist.
+        */}
+        {runSessionId != null && (
+          <Link
+            href={`/workspace/${workspaceSlug}/work?session=${runSessionId}`}
+            title={
+              runIsExact
+                ? 'Open the run this message started — every tool call, terminal line and diff.'
+                : "Open this member's conversation in Work. `team_messages` carries no run id, so the exact run behind this reply cannot be named — this is the session it ran in."
+            }
+            className="mt-1 mr-2 inline-flex items-center gap-1 rounded px-1 py-0.5 text-xs text-black/45 hover:bg-black/[.05] hover:text-black/70 dark:text-white/45 dark:hover:bg-white/[.08] dark:hover:text-white/70"
+          >
+            <ExternalLink size={11} />
+            See full run
+          </Link>
+        )}
+
         {/* The thread summary. A root that has replies always shows this, open
             or not, because "there is a conversation under this" is a fact
             about the message rather than a hover affordance. */}
@@ -280,6 +371,22 @@ export function MessageRow({
           >
             <MessageSquareReply size={13} />
           </button>
+          {/* One action, not a dialog. "Say a thing, then track the thing" is
+              the move this room is for, and asking for a subject when the
+              message already has one would put a form between the two. The
+              subject is the first line and the body is the description; the
+              chip that appears is the edit surface if either is wrong. */}
+          {onMakeTask && (
+            <button
+              type="button"
+              title="Make this a task on the board"
+              disabled={busy}
+              onClick={() => onMakeTask(message.id)}
+              className="rounded p-1 text-black/50 hover:bg-black/[.06] disabled:opacity-40 dark:text-white/50 dark:hover:bg-white/[.10]"
+            >
+              <ListPlus size={13} />
+            </button>
+          )}
         </div>
       )}
       {isMine && <span className="sr-only">(your message)</span>}

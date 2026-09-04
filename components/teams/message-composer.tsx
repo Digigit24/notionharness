@@ -1,13 +1,26 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Bot, Send, User } from 'lucide-react'
+import { Bot, Send, TriangleAlert, User } from 'lucide-react'
 import type { TeamMessageKind } from '@/lib/broker'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
-import { MESSAGE_KIND_LABEL, colourOf, initialsOf, type TeamSlotView } from './shared'
+import {
+  MESSAGE_KIND_LABEL,
+  SLASH_COMMANDS,
+  colourOf,
+  initialsOf,
+  slashCommandAt,
+  type TeamSlotView,
+} from './shared'
+
+/** What a slash command hands back to the composer. `null` means it ran; a
+ * string is the reason it did not, printed under the box. Deliberately not a
+ * toast: the text that caused it is still sitting in the composer, and the
+ * explanation belongs beside it. */
+export type SlashCommandRunner = (command: { name: string; rest: string }) => Promise<string | null>
 
 const KINDS: TeamMessageKind[] = ['status', 'instruction', 'question', 'answer', 'report']
 
@@ -53,6 +66,8 @@ export function MessageComposer({
   showRecipient,
   autoFocus,
   onSend,
+  onCommand,
+  focusToken,
 }: {
   slots: TeamSlotView[]
   disabled?: boolean
@@ -63,6 +78,15 @@ export function MessageComposer({
   showRecipient: boolean
   autoFocus?: boolean
   onSend: (input: { body: string; kind: TeamMessageKind; toSlotId: number | null }) => Promise<void>
+  /**
+   * Enables slash commands. Absent (the thread pane) means a leading "/" is
+   * just a character — a reply that starts with a path should not be
+   * intercepted by a command palette the thread has no commands for.
+   */
+  onCommand?: SlashCommandRunner
+  /** Bumped by the parent to pull focus here — the "/" shortcut. A token
+   * rather than a boolean so pressing it twice in a row works. */
+  focusToken?: number
 }) {
   const [body, setBody] = useState('')
   const [kind, setKind] = useState<TeamMessageKind>('status')
@@ -71,7 +95,51 @@ export function MessageComposer({
   const [caret, setCaret] = useState(0)
   const [highlight, setHighlight] = useState(0)
   const [pickerDismissed, setPickerDismissed] = useState(false)
+  const [commandError, setCommandError] = useState<string | null>(null)
+  const [commandHighlight, setCommandHighlight] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => {
+    if (focusToken === undefined || focusToken === 0) return
+    const el = textareaRef.current
+    if (!el) return
+    el.focus()
+    // To the END, not to 0: the shortcut is "let me type", and dropping the
+    // caret in front of whatever draft is already there is the classic way a
+    // focus shortcut eats a sentence.
+    const end = el.value.length
+    el.setSelectionRange(end, end)
+    setCaret(end)
+  }, [focusToken])
+
+  /**
+   * The command being typed, and the palette over it.
+   *
+   * The same scanner shape as `mentionQueryAt`, deliberately: one grammar for
+   * "a token that opens a picker" rather than two that drift. Position 0 only
+   * — see `slashCommandAt`.
+   */
+  const slash = useMemo(() => (onCommand ? slashCommandAt(body) : null), [onCommand, body])
+  const commandMatches = useMemo(() => {
+    if (!slash || slash.complete) return []
+    return SLASH_COMMANDS.filter((c) => c.name.startsWith(slash.name))
+  }, [slash])
+  const knownCommand = slash ? SLASH_COMMANDS.find((c) => c.name === slash.name) : undefined
+
+  useEffect(() => setCommandHighlight(0), [slash?.name])
+
+  const completeCommand = useCallback((name: string) => {
+    setBody(`/${name} `)
+    setCommandError(null)
+    requestAnimationFrame(() => {
+      const el = textareaRef.current
+      if (!el) return
+      el.focus()
+      const end = el.value.length
+      el.setSelectionRange(end, end)
+      setCaret(end)
+    })
+  }, [])
 
   const mention = useMemo(() => (pickerDismissed ? null : mentionQueryAt(body, caret)), [body, caret, pickerDismissed])
   const matches = useMemo(() => {
@@ -107,11 +175,49 @@ export function MessageComposer({
   async function send() {
     const text = body.trim()
     if (!text || sending) return
+
+    // A COMMAND IS NEVER POSTED AS A MESSAGE. Typing "/tsak fix the build" and
+    // watching it land in the channel as chat is the failure that teaches
+    // people the command palette cannot be trusted, so an unrecognised name is
+    // refused here — before the network — and the text is left in the box to
+    // be corrected.
+    if (onCommand && slash) {
+      if (!knownCommand) {
+        setCommandError(
+          `Unknown command /${slash.name || '…'}. Try ${SLASH_COMMANDS.map((c) => `/${c.name}`).join(', ')}.`,
+        )
+        return
+      }
+      setSending(true)
+      try {
+        // Caught, not just awaited. A runner is supposed to RETURN its refusal
+        // as a string, but a rejected server action thrown from inside one
+        // would otherwise escape this handler entirely — `send()` is invoked
+        // as `void send()`, so the rejection would be unhandled and a refused
+        // command would look identical to one that worked: the box clears
+        // nothing, and nothing is said.
+        const failure = await onCommand({ name: knownCommand.name, rest: slash.rest }).catch((error: unknown) =>
+          error instanceof Error ? error.message : 'Something went wrong.',
+        )
+        if (failure) {
+          setCommandError(failure)
+          return
+        }
+        setCommandError(null)
+        setBody('')
+        setCaret(0)
+      } finally {
+        setSending(false)
+      }
+      return
+    }
+
     setSending(true)
     try {
       await onSend({ body: text, kind, toSlotId })
       setBody('')
       setCaret(0)
+      setCommandError(null)
     } finally {
       setSending(false)
     }
@@ -127,6 +233,41 @@ export function MessageComposer({
           busy && 'opacity-70',
         )}
       >
+        {/* The command palette. Same position and same shape as the mention
+            picker below it — they are the same interaction with a different
+            sigil, and giving them two different looks would make one of them
+            feel broken. The two can never be open at once: a "/" only counts
+            at position 0, where an "@" cannot also be starting a token. */}
+        {slash && commandMatches.length > 0 && (
+          <ul className="absolute bottom-full left-2 z-20 mb-1 w-80 overflow-hidden rounded-lg border border-black/10 bg-white py-1 shadow-lg dark:border-white/15 dark:bg-[#232323]">
+            {commandMatches.map((command, index) => (
+              <li key={command.name}>
+                <button
+                  type="button"
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    completeCommand(command.name)
+                  }}
+                  className={cn(
+                    'flex w-full items-baseline gap-2 px-2 py-1.5 text-left text-sm',
+                    index === commandHighlight
+                      ? 'bg-black/[.06] dark:bg-white/[.10]'
+                      : 'hover:bg-black/[.04] dark:hover:bg-white/[.07]',
+                  )}
+                >
+                  <span className="shrink-0 font-medium">/{command.name}</span>
+                  {command.args && (
+                    <span className="shrink-0 text-[11px] text-black/35 dark:text-white/35">{command.args}</span>
+                  )}
+                  <span className="min-w-0 flex-1 truncate text-right text-[11px] text-black/45 dark:text-white/45">
+                    {command.hint}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+
         {mention && matches.length > 0 && (
           <ul className="absolute bottom-full left-2 z-20 mb-1 w-64 overflow-hidden rounded-lg border border-black/10 bg-white py-1 shadow-lg dark:border-white/15 dark:bg-[#232323]">
             {matches.map((slot, index) => (
@@ -176,6 +317,27 @@ export function MessageComposer({
           disabled={busy}
           className="resize-none border-0 bg-transparent px-3 py-2.5 shadow-none focus-visible:ring-0"
           onKeyDown={(e) => {
+            if (slash && commandMatches.length > 0) {
+              if (e.key === 'ArrowDown') {
+                e.preventDefault()
+                setCommandHighlight((h) => (h + 1) % commandMatches.length)
+                return
+              }
+              if (e.key === 'ArrowUp') {
+                e.preventDefault()
+                setCommandHighlight((h) => (h - 1 + commandMatches.length) % commandMatches.length)
+                return
+              }
+              if (e.key === 'Tab') {
+                e.preventDefault()
+                completeCommand(commandMatches[commandHighlight].name)
+                return
+              }
+              // Enter deliberately falls through to `send()` rather than
+              // completing: "/task" on its own is a complete command with an
+              // empty argument, and swallowing Enter would make the palette
+              // feel like it had stolen the keystroke.
+            }
             if (mention && matches.length > 0) {
               if (e.key === 'ArrowDown') {
                 e.preventDefault()
@@ -244,13 +406,24 @@ export function MessageComposer({
           )}
           <span className="ml-auto hidden text-[11px] text-black/30 sm:block dark:text-white/30">
             Enter to send · Shift+Enter for a new line · @ to mention
+            {onCommand ? ' · / for commands' : ''}
           </span>
           <Button type="button" size="sm" disabled={busy || !body.trim()} onClick={() => void send()}>
             <Send size={13} />
-            {sending ? 'Sending…' : 'Send'}
+            {sending ? 'Sending…' : knownCommand ? `Run /${knownCommand.name}` : 'Send'}
           </Button>
         </div>
       </div>
+
+      {/* Beside the text that caused it, not in a toast. The draft is still in
+          the box and the correction is one keystroke away; a notification in
+          the corner would make the reader look away from it. */}
+      {commandError && (
+        <p className="mt-1 flex items-start gap-1.5 px-1 text-[11px] text-red-600 dark:text-red-400">
+          <TriangleAlert size={12} className="mt-px shrink-0" />
+          <span>{commandError}</span>
+        </p>
+      )}
     </div>
   )
 }

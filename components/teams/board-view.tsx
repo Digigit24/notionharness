@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, Plus } from 'lucide-react'
 import type { TeamTask, TeamTaskStatus } from '@/lib/broker'
 import { Button } from '@/components/ui/button'
@@ -45,6 +45,8 @@ export function BoardView({
   slots,
   tasks,
   claimableIds,
+  focusTaskId,
+  onFocusHandled,
   onTasksChanged,
 }: {
   workspaceId: number
@@ -52,6 +54,12 @@ export function BoardView({
   slots: TeamSlotView[]
   tasks: TeamTask[]
   claimableIds: number[]
+  /** A card the channel asked us to show — a task chip in the feed was
+   * clicked. Reuses the same jump-and-flash the blocker chips already use, so
+   * arriving from a message and arriving from a dependency look identical. */
+  focusTaskId: number | null
+  /** Cleared once handled, so clicking the same chip twice works. */
+  onFocusHandled: () => void
   onTasksChanged: (tasks: TeamTask[]) => void
 }) {
   const [busyTaskId, setBusyTaskId] = useState<number | null>(null)
@@ -75,13 +83,24 @@ export function BoardView({
 
   /** Jumps to a blocker and marks it for a moment. The graph is only useful if
    * "what is holding this up" is one click, not a scan. */
-  function jumpToTask(id: number) {
+  const jumpToTask = useCallback((id: number) => {
     const el = document.getElementById(`team-task-${id}`)
     el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
     setHighlightId(id)
     if (highlightTimer.current) window.clearTimeout(highlightTimer.current)
     highlightTimer.current = window.setTimeout(() => setHighlightId(null), 1600)
-  }
+  }, [])
+
+  // The view has only just switched when this fires, so the card may not be in
+  // the DOM yet — hence the effect rather than doing it at the call site in
+  // the room. `tasks` participates so a chip for a task that arrives with the
+  // next poll still lands.
+  useEffect(() => {
+    if (focusTaskId == null) return
+    if (!tasks.some((t) => t.id === focusTaskId)) return
+    jumpToTask(focusTaskId)
+    onFocusHandled()
+  }, [focusTaskId, tasks, jumpToTask, onFocusHandled])
 
   function replaceTask(next: TeamTask) {
     onTasksChanged(tasks.map((t) => (t.id === next.id ? next : t)))

@@ -1,0 +1,13 @@
+-- Which run produced this message.
+--
+-- `runs.channel_message_id` points at the message that NAMED an agent, which
+-- links a trigger to its run but leaves the agent's REPLY unlinked. So "see
+-- the full run" on an answer could only fall back to that slot's session and
+-- say it was approximate — the transcript you land in might be a later turn
+-- entirely.
+--
+-- One column on the reply closes it exactly. Nullable and unindexed by
+-- default: the overwhelming majority of messages are typed by people and have
+-- no run at all, and the lookup is always "this message's run", never "this
+-- run's messages".
+ALTER TABLE team_messages ADD COLUMN IF NOT EXISTS run_id BIGINT;

@@ -9,9 +9,15 @@
 // id, same rule app/api/approvals/route.ts already documents.
 import { revalidatePath } from 'next/cache'
 import { getCurrentPayloadUser } from '@/lib/current-user'
+import { getWorkspaceBySlug } from '@/lib/pages-cache'
 import { getApproval, resolveApproval } from '@/lib/hermes/approval-helpers'
-import { getRun, enqueueRun, dismissRun, type Run } from '@/lib/broker'
+import { getChannelMessage, getRun, enqueueRun, dismissRun, markChannelRead, type Run } from '@/lib/broker'
 import { markNotificationsRead } from '@/app/(app)/notifications/actions'
+// Read-only server helpers, deliberately NOT actions — see that file's header
+// note on why an exported async function in a `'use server'` module is a public
+// endpoint. Imported rather than re-implemented so there is exactly one way a
+// slot id is ever chosen for a write.
+import { getChannel, resolveMySlot } from '../teams/data'
 
 function revalidateInbox(workspaceSlug: string) {
   revalidatePath(`/workspace/${workspaceSlug}/inbox`)
@@ -97,5 +103,50 @@ export async function dismissRunInbox(workspaceSlug: string, runId: number): Pro
  * find), so no extra ownership check is needed here. */
 export async function dismissMentionInbox(workspaceSlug: string, notificationId: number): Promise<void> {
   await markNotificationsRead([notificationId])
+  revalidateInbox(workspaceSlug)
+}
+
+/**
+ * Clears a CHANNEL mention — the cross-channel Mentions rows in the Inbox.
+ *
+ * A channel mention clears the way a channel clears: by moving the reader's
+ * own read cursor. `team_messages` has no per-message "acknowledged" flag and
+ * this unit does not get to add one — a second notifications store beside the
+ * `mentions` GIN index is precisely the thing the brief rules out. So this
+ * means what "mark read" means in the room: caught up in #channel through this
+ * message. It therefore also clears any OLDER unread mention in the same
+ * channel, which is why the button reads "Mark read" and not "Dismiss" — the
+ * act is channel-level, and labelling it per-row would be a lie the very next
+ * render exposes. (`markChannelRead` is GREATEST(), so it never rewinds and is
+ * idempotent when the room marks the same message read a moment later.)
+ *
+ * Every id here is re-derived server-side, because all three of them arrive
+ * from a browser:
+ *   - `teamId` is read off the message row, never accepted from the client.
+ *   - the channel must belong to the workspace whose slug was routed to.
+ *   - the slot whose cursor moves is the caller's OWN slot in that channel.
+ * Drop the last check and this endpoint becomes "move anybody's read cursor in
+ * any channel, by id" — the exact shape of the cross-workspace holes this repo
+ * has already been bitten by. The membership test is the real authorisation;
+ * the workspace test is defence in depth and keeps `revalidatePath` honest.
+ */
+export async function markChannelMentionRead(workspaceSlug: string, messageId: number): Promise<void> {
+  const user = await getCurrentPayloadUser()
+  if (!user) throw new Error('You must be logged in.')
+  if (!Number.isSafeInteger(messageId) || messageId <= 0) throw new Error('Invalid message.')
+
+  const workspace = await getWorkspaceBySlug(workspaceSlug)
+  if (!workspace) throw new Error('Workspace not found.')
+
+  const message = await getChannelMessage(messageId)
+  if (!message) throw new Error('Message not found.')
+
+  const channel = await getChannel(message.teamId)
+  if (!channel || channel.workspaceId !== workspace.id) throw new Error('You do not have access to this channel.')
+
+  const slot = await resolveMySlot(channel.id, user.id)
+  if (!slot) throw new Error('You are not a member of this channel.')
+
+  await markChannelRead(slot.id, message.id)
   revalidateInbox(workspaceSlug)
 }
