@@ -78,6 +78,17 @@ export {
   updateTeamMember,
   updateTeamTaskStatus,
 } from './teams'
+export {
+  getChannelMessage,
+  listChannelFeed,
+  listChannelUnread,
+  listThread,
+  markChannelRead,
+  parseMentions,
+  postChannelMessage,
+  toggleReaction,
+} from './channels'
+export type { ChannelMessage, ChannelReaction, ChannelUnread, MentionTarget } from './channels'
 export type {
   Team,
   TeamMember,
