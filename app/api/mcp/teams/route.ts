@@ -130,9 +130,11 @@ function buildServer(caller: TeamCaller) {
     'team_read_thread',
     {
       description:
-        'Read one thread: the message that started it plus every reply, oldest first. Use this after someone ' +
+        'Read one thread: the message that started it plus its replies, oldest first. Use this after someone ' +
         'replies to you, or before answering a follow-up, so you answer the actual question rather than the ' +
-        'summary of it in the feed. Passing a reply id works — it resolves to that reply\'s thread.',
+        "summary of it in the feed. Passing a reply id works — it resolves to that reply's thread. A very long " +
+        'thread comes back as the root plus the most recent replies, with `truncated: true` and how many were ' +
+        'omitted; `total` is always the real length.',
       inputSchema: {
         rootId: z.coerce.number().int().positive().describe('The id of the thread root, or of any reply in it.'),
       },

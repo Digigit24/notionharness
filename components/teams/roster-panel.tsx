@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Crown, MailX, Trash2, UserPlus } from 'lucide-react'
+import { Bot, Crown, MailX, Trash2, User, UserPlus } from 'lucide-react'
 import type { TeamTask } from '@/lib/broker'
 import type { TeamRoomMessage, TeamSlotHealth } from '@/lib/teams/reliability'
 import { Button } from '@/components/ui/button'
@@ -17,10 +17,12 @@ import {
   colourOf,
   formatSilence,
   healthBySlot,
+  initialsOf,
   tasksForSlot,
+  type TeamAgentOption,
   type TeamSlotView,
+  type TeamUserOption,
 } from './shared'
-import type { TeamAgentOption } from './create-team-form'
 import {
   addSlotAction,
   deleteTeamAction,
@@ -29,16 +31,31 @@ import {
   setLeaderAction,
 } from '@/app/(app)/workspace/[workspaceSlug]/teams/actions'
 
+/** What the "add" picker is currently offering. Two lists, one control: a
+ * channel gains members of both kinds and splitting it into two pickers would
+ * make adding a person feel like a different feature from adding an agent. */
+type AddKind = 'agent' | 'user'
+
 /**
- * The roster: who is in the room, who leads, and how to change that.
+ * The roster: who is in the channel, who leads, and how to change that.
  *
  * Present in all three views rather than hidden behind a settings screen,
  * because membership is the thing you adjust while watching the room work —
  * a member that turns out to be redundant, or a leader that needs replacing.
  *
- * Adding an agent that is already in the roster is allowed and is not a
- * mistake: it creates a SECOND slot with its own name, colour and thread. The
- * picker therefore never disables an agent already present.
+ * TWO rules this panel exists to honour.
+ *
+ * A SLOT IS NOT AN AGENT. Adding the same agent twice produces two slots with
+ * two jobs, two threads and two colours, so the picker deliberately never
+ * disables an agent already in the roster and nothing here deduplicates by
+ * agent id. That is R6.1's model, and it is the thing a naive implementation
+ * gets wrong.
+ *
+ * A MEMBER IS NOT NECESSARILY AN AGENT. Migration 0013 made `agent_id`
+ * nullable and added `user_id` with a CHECK that exactly one is set, so a
+ * person holds a slot the same way an agent does — and everything downstream
+ * (tasks, mentions, reactions, unread) already spoke slots, so nothing else
+ * had to change.
  *
  * R6.6 put liveness here rather than on a separate health screen, because this
  * is the list a person is already looking at when they wonder whether a member
@@ -50,23 +67,28 @@ export function RosterPanel({
   workspaceSlug,
   teamId,
   slots,
+  mySlotId,
   tasks,
   health,
   agents,
+  users,
   onSlotsChanged,
 }: {
   workspaceId: number
   workspaceSlug: string
   teamId: number
   slots: TeamSlotView[]
+  mySlotId: number | null
   tasks: TeamTask[]
   health: TeamSlotHealth[]
   agents: TeamAgentOption[]
+  users: TeamUserOption[]
   onSlotsChanged: (slots: TeamSlotView[]) => void
 }) {
   const router = useRouter()
   const healthOf = healthBySlot(health)
-  const [addingAgentId, setAddingAgentId] = useState<number | null>(null)
+  const [addKind, setAddKind] = useState<AddKind>('agent')
+  const [addingId, setAddingId] = useState<number | null>(null)
   const [displayName, setDisplayName] = useState('')
   const [busy, setBusy] = useState(false)
   // Fetched on demand, not with every poll. Undeliverable mail only changes
@@ -89,16 +111,37 @@ export function RosterPanel({
     }
   }
 
+  function pick(kind: AddKind, id: number) {
+    setAddKind(kind)
+    setAddingId(id)
+    if (kind === 'agent') {
+      // Pre-fill with a name that already disambiguates a repeat, so adding
+      // the same agent twice never produces two identical rows.
+      const agent = agents.find((a) => a.id === id)
+      const sameAgent = slots.filter((s) => s.agentId === id).length
+      setDisplayName(agent ? (sameAgent === 0 ? agent.name : `${agent.name} ${sameAgent + 1}`) : '')
+    } else {
+      setDisplayName(users.find((u) => u.id === id)?.name ?? '')
+    }
+  }
+
+  // A person can hold only one slot per channel: `resolveMySlot` picks the
+  // lowest id, so a second slot for the same person would be a row that can
+  // never be spoken from. Agents have no such limit — that is the point.
+  const alreadyMembers = new Set(slots.map((s) => s.userId).filter((id): id is number => id != null))
+  const addableUsers = users.filter((u) => !alreadyMembers.has(u.id))
+
   return (
     <aside className="flex w-60 shrink-0 flex-col gap-3 overflow-y-auto">
       <div>
         <h2 className="mb-1.5 text-xs font-medium text-black/50 dark:text-white/50">
-          Roster · {slots.length} {slots.length === 1 ? 'slot' : 'slots'}
+          Members · {slots.length}
         </h2>
         <ul className="space-y-1">
           {slots.map((slot) => {
             const owned = tasksForSlot(tasks, slot.id)
             const state = healthOf.get(slot.id)
+            const isPerson = slot.userId != null
             return (
               <li
                 key={slot.id}
@@ -111,20 +154,33 @@ export function RosterPanel({
               >
                 <span
                   aria-hidden
-                  className="size-2.5 shrink-0 rounded-full"
+                  className="flex size-6 shrink-0 items-center justify-center rounded text-[10px] font-semibold text-white"
                   style={{ backgroundColor: colourOf(slot) }}
-                />
+                >
+                  {initialsOf(slot.displayName)}
+                </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm">{slot.displayName}</span>
-                  <span className="block truncate text-[11px] text-black/40 dark:text-white/40">
-                    {slot.agentName ?? `agent ${slot.agentId}`}
-                    {owned.length > 0 ? ` · ${owned.length} assigned` : ''}
+                  <span className="flex items-center gap-1">
+                    <span className="min-w-0 truncate text-sm">{slot.displayName}</span>
+                    {slot.id === mySlotId && (
+                      <span className="shrink-0 text-[10px] text-black/35 dark:text-white/35">you</span>
+                    )}
                   </span>
-                  {/* The heartbeat, in the row it describes. `silentForMs` is
-                      null when nothing has ever been observed for this slot,
-                      which is genuinely different from "seen just now" and is
-                      printed as such rather than as 0s. */}
-                  {state && (
+                  <span className="flex items-center gap-1 truncate text-[11px] text-black/40 dark:text-white/40">
+                    {isPerson ? <User size={10} aria-hidden /> : <Bot size={10} aria-hidden />}
+                    <span className="truncate">
+                      {isPerson
+                        ? (slot.userName ?? 'a person')
+                        : (slot.agentName ?? `agent ${slot.agentId ?? '?'}`)}
+                    </span>
+                    {owned.length > 0 && <span className="shrink-0">· {owned.length} assigned</span>}
+                  </span>
+                  {/* The heartbeat, in the row it describes. Only agent slots
+                      have one: liveness is derived from a slot's RUNS, and a
+                      person has none — printing "idle" against a colleague
+                      would be a machine's judgement of a human, from evidence
+                      that does not exist. */}
+                  {state && !isPerson && (
                     <span
                       className={cn('mt-0.5 flex items-center gap-1 text-[11px]', SLOT_STATE_CLASS[state.state])}
                       title={
@@ -151,7 +207,7 @@ export function RosterPanel({
                   type="button"
                   size="icon-xs"
                   variant={slot.role === 'leader' ? 'default' : 'ghost'}
-                  title={slot.role === 'leader' ? 'Leads this team — click to clear' : 'Make leader'}
+                  title={slot.role === 'leader' ? 'Leads this channel — click to clear' : 'Make leader'}
                   disabled={busy}
                   onClick={() =>
                     void run(async () => {
@@ -160,9 +216,7 @@ export function RosterPanel({
                       // Applied locally as well as revalidated, because at
                       // most one row can be leader: recomputing the whole
                       // roster keeps the crown from briefly appearing twice.
-                      onSlotsChanged(
-                        slots.map((s) => ({ ...s, role: s.id === next ? 'leader' : 'member' })),
-                      )
+                      onSlotsChanged(slots.map((s) => ({ ...s, role: s.id === next ? 'leader' : 'member' })))
                     }, 'Could not change the leader')
                   }
                 >
@@ -172,13 +226,12 @@ export function RosterPanel({
                   type="button"
                   size="icon-xs"
                   variant="ghost"
-                  title="Remove slot"
+                  title="Remove from channel"
                   disabled={busy}
                   onClick={() =>
                     void run(async () => {
-                      await removeSlotAction({ workspaceId, workspaceSlug, teamId, slotId: slot.id })
-                      onSlotsChanged(slots.filter((s) => s.id !== slot.id))
-                    }, 'Could not remove the slot')
+                      onSlotsChanged(await removeSlotAction({ workspaceId, workspaceSlug, teamId, slotId: slot.id }))
+                    }, 'Could not remove the member')
                   }
                 >
                   <Trash2 size={12} />
@@ -187,43 +240,45 @@ export function RosterPanel({
             )
           })}
         </ul>
-        {slots.length === 0 && (
-          <p className="text-xs text-black/40 dark:text-white/40">No slots yet.</p>
-        )}
+        {slots.length === 0 && <p className="text-xs text-black/40 dark:text-white/40">Nobody is in this channel.</p>}
       </div>
 
       <div className="space-y-1.5">
         <Select
-          value={addingAgentId == null ? '' : String(addingAgentId)}
+          // Reset to no value after each pick so the SAME agent can be chosen
+          // again immediately. A controlled Select that keeps the last value
+          // would swallow the second click on that agent, which is the one
+          // interaction slots exist for.
+          value=""
           onValueChange={(v) => {
-            const id = Number(v)
-            setAddingAgentId(id)
-            // Pre-fill with a name that already disambiguates a repeat, so
-            // adding the same agent twice never produces two identical rows.
-            const agent = agents.find((a) => a.id === id)
-            const sameAgent = slots.filter((s) => s.agentId === id).length
-            setDisplayName(agent ? (sameAgent === 0 ? agent.name : `${agent.name} ${sameAgent + 1}`) : '')
+            const [kind, raw] = v.split(':')
+            pick(kind === 'user' ? 'user' : 'agent', Number(raw))
           }}
-          disabled={busy || agents.length === 0}
+          disabled={busy || (agents.length === 0 && addableUsers.length === 0)}
         >
           <SelectTrigger className="h-7 w-full text-xs">
-            <SelectValue placeholder="Add an agent as a slot…" />
+            <SelectValue placeholder="Add a member…" />
           </SelectTrigger>
           <SelectContent>
             {agents.map((agent) => (
-              <SelectItem key={agent.id} value={String(agent.id)}>
+              <SelectItem key={`agent-${agent.id}`} value={`agent:${agent.id}`}>
                 {agent.name}
+              </SelectItem>
+            ))}
+            {addableUsers.map((person) => (
+              <SelectItem key={`user-${person.id}`} value={`user:${person.id}`}>
+                {person.name} · person
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
 
-        {addingAgentId != null && (
+        {addingId != null && (
           <div className="space-y-1.5">
             <Input
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
-              placeholder="What this slot is called"
+              placeholder={addKind === 'agent' ? 'What this slot is called' : 'How this person appears here'}
               className="h-7 text-xs"
               disabled={busy}
             />
@@ -234,24 +289,23 @@ export function RosterPanel({
                 disabled={busy || !displayName.trim()}
                 onClick={() =>
                   void run(async () => {
-                    const member = await addSlotAction({
-                      workspaceId,
-                      workspaceSlug,
-                      teamId,
-                      agentId: addingAgentId,
-                      displayName,
-                    })
-                    onSlotsChanged([
-                      ...slots,
-                      { ...member, agentName: agents.find((a) => a.id === member.agentId)?.name ?? null },
-                    ])
-                    setAddingAgentId(null)
+                    onSlotsChanged(
+                      await addSlotAction({
+                        workspaceId,
+                        workspaceSlug,
+                        teamId,
+                        agentId: addKind === 'agent' ? addingId : null,
+                        userId: addKind === 'user' ? addingId : null,
+                        displayName,
+                      }),
+                    )
+                    setAddingId(null)
                     setDisplayName('')
-                  }, 'Could not add the slot')
+                  }, 'Could not add the member')
                 }
               >
                 <UserPlus size={12} />
-                Add slot
+                Add
               </Button>
               <Button
                 type="button"
@@ -259,7 +313,7 @@ export function RosterPanel({
                 variant="ghost"
                 disabled={busy}
                 onClick={() => {
-                  setAddingAgentId(null)
+                  setAddingId(null)
                   setDisplayName('')
                 }}
               >
@@ -295,9 +349,7 @@ export function RosterPanel({
         ) : (
           <div className="rounded-lg border border-black/10 p-2 dark:border-white/10">
             <div className="mb-1 flex items-center gap-1.5">
-              <span className="text-xs font-medium">
-                {deadLetters.length} undelivered
-              </span>
+              <span className="text-xs font-medium">{deadLetters.length} undelivered</span>
               <Button
                 type="button"
                 size="xs"
@@ -338,15 +390,15 @@ export function RosterPanel({
             void run(async () => {
               await deleteTeamAction({ workspaceId, workspaceSlug, teamId })
               router.push(`/workspace/${workspaceSlug}/teams`)
-            }, 'Could not delete the team')
+            }, 'Could not delete the channel')
           }
         >
-          Delete team
+          Delete channel
         </Button>
         <p className="mt-1 text-[11px] text-black/35 dark:text-white/35">
-          Deleting a team removes its slots, mailbox and board. The slots&apos; conversations survive in Work.
-          Removing a single slot hands its unfinished tasks back to the board and marks any unread mail addressed
-          to it undeliverable — those messages are not broadcast to the rest of the room.
+          Deleting a channel removes its members, messages and board. Agent slots&apos; conversations survive in
+          Work. Removing a single member hands its unfinished tasks back to the board and marks any unread mail
+          addressed to it undeliverable — those messages are not broadcast to the rest of the room.
         </p>
       </div>
     </aside>

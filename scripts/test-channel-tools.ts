@@ -289,7 +289,13 @@ try {
   // --- The thread is readable, by a member, and resolves from any id -------
 
   const threadResult = await callTool('team_read_thread', { rootId: root?.id }, memberAuth)
-  const thread = toolJson<{ root: number; count: number; messages: PostedMessage[] }>(threadResult)
+  const thread = toolJson<{
+    root: number
+    count: number
+    total: number
+    truncated?: boolean
+    messages: PostedMessage[]
+  }>(threadResult)
   check('a member can read the thread', thread != null, toolText(threadResult).slice(0, 200))
   check(
     'the thread contains the root and the reply, in order',
@@ -297,6 +303,15 @@ try {
       thread.messages[0].id === root?.id &&
       thread.messages[1].id === reply?.id,
     JSON.stringify(thread?.messages?.map((m) => m.id) ?? null),
+  )
+  // The read is capped (see `THREAD_MAX_MESSAGES`): `total` is the thread's
+  // real length and must always be reported, and a thread this short must not
+  // be marked truncated. Checked over the wire because the cap is what stops a
+  // busy thread returning a tool result larger than the model's context.
+  check(
+    'the thread reports its true length and is not falsely truncated',
+    thread?.total === thread?.count && thread?.truncated === undefined,
+    JSON.stringify({ count: thread?.count, total: thread?.total, truncated: thread?.truncated }),
   )
 
   // Replying to a REPLY must attach to the same thread rather than nesting —

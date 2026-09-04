@@ -1,108 +1,137 @@
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
-import { Users } from 'lucide-react'
+import { Hash, Lock, MessagesSquare } from 'lucide-react'
 import { getPayloadClient } from '@/lib/payload'
 import { getWorkspaceBySlug } from '@/lib/pages-cache'
 import { Breadcrumbs } from '@/components/nav/breadcrumbs'
 import { EmptyState } from '@/components/ui/empty-state'
 import { formatRelativeTime } from '@/lib/relative-time'
-import { CreateTeamForm } from '@/components/teams/create-team-form'
-import { listTeamSummaries } from './actions'
+import { ChannelCreateDialog } from '@/components/teams/channel-create-dialog'
+import { listChannelSummaries } from './actions'
 
 /**
- * Teams — the channel list (R6.4).
+ * Channels — the list (R6.4 / R6.5).
  *
  * A chat client's channel list, not a dashboard of cards: one row per room,
- * unread in bold rather than as a badge, and the numbers that actually
- * distinguish one row from another (who is in it, what is open, when it last
- * said anything). Everything on the row comes from one aggregate query in
- * `listTeamSummaries`.
+ * unread in weight rather than as a badge on everything, and a mention count
+ * as the one thing loud enough to earn a colour. Everything on the row comes
+ * from `listChannelSummaries`, which is two round trips for the whole list
+ * rather than one per channel.
  */
-export default async function TeamsPage({ params }: { params: Promise<{ workspaceSlug: string }> }) {
+export default async function ChannelsPage({ params }: { params: Promise<{ workspaceSlug: string }> }) {
   const { workspaceSlug } = await params
   const workspace = await getWorkspaceBySlug(workspaceSlug)
   if (!workspace) notFound()
 
   const payload = await getPayloadClient()
-  const [teams, agents] = await Promise.all([
-    listTeamSummaries(workspace.id),
-    // The create form needs the agent list up front. Fetched here rather than
-    // behind a click so opening the form costs nothing — the list is small and
-    // is already the shape every other create surface in this app uses.
+  const [channels, agents, workspaceDoc] = await Promise.all([
+    listChannelSummaries(workspace.id),
+    // The create dialog needs both rosters up front. Fetched here rather than
+    // behind a click so opening the form costs nothing — both lists are small
+    // and this is the shape every other create surface in this app uses.
     payload.find({
       collection: 'agents',
       where: { workspace: { equals: workspace.id }, enabled: { equals: true } },
       sort: 'name',
-      limit: 100,
+      limit: 200,
       depth: 0,
       overrideAccess: true,
     }),
+    payload.findByID({
+      collection: 'workspaces',
+      id: workspace.id,
+      depth: 1,
+      overrideAccess: true,
+      disableErrors: true,
+    }),
   ])
 
-  const agentOptions = agents.docs.map((a) => ({ id: a.id, name: a.name }))
+  const peopleById = new Map<number, { id: number; name: string; email: string }>()
+  for (const candidate of [workspaceDoc?.owner, ...(workspaceDoc?.members ?? [])]) {
+    if (candidate && typeof candidate === 'object') {
+      peopleById.set(candidate.id, {
+        id: candidate.id,
+        name: candidate.name || candidate.email,
+        email: candidate.email,
+      })
+    }
+  }
 
   return (
     <main className="w-full px-5 py-8">
       <div className="mb-6">
         <Breadcrumbs
           className="mb-2"
-          segments={[{ label: workspace.name, href: `/workspace/${workspace.slug}` }, { label: 'Teams' }]}
+          segments={[{ label: workspace.name, href: `/workspace/${workspace.slug}` }, { label: 'Channels' }]}
         />
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-semibold">Teams</h1>
+            <h1 className="text-2xl font-semibold">Channels</h1>
             <p className="mt-1 text-sm text-black/50 dark:text-white/50">
-              Rooms where several agents work on one objective. A member is a slot, so the same agent can hold two
-              jobs at once.
+              Rooms where people and agents work on one objective. A member is a slot, so the same agent can hold
+              two jobs at once.
             </p>
           </div>
-          <CreateTeamForm workspaceId={workspace.id} workspaceSlug={workspace.slug} agents={agentOptions} />
+          <ChannelCreateDialog
+            workspaceId={workspace.id}
+            workspaceSlug={workspace.slug}
+            agents={agents.docs.map((a) => ({ id: a.id, name: a.name }))}
+            users={[...peopleById.values()].sort((a, b) => a.name.localeCompare(b.name))}
+          />
         </div>
       </div>
 
-      {teams.length === 0 ? (
+      {channels.length === 0 ? (
         <EmptyState
-          icon={<Users />}
-          title="No teams yet"
-          description="A team is a room: name it, add agents as slots, and pick which one leads."
+          icon={<MessagesSquare />}
+          title="No channels yet"
+          description="A channel is a room: name it, add people and agents, and start talking. Each one gets a board and a canvas of its own."
         />
       ) : (
         <ul className="divide-y divide-black/5 rounded-xl border border-black/10 dark:divide-white/5 dark:border-white/10">
-          {teams.map((team) => {
-            const unread = team.unreadCount > 0
+          {channels.map((channel) => {
+            const unread = (channel.unreadCount ?? 0) > 0
             return (
-              <li key={team.id}>
+              <li key={channel.id}>
                 <Link
-                  href={`/workspace/${workspace.slug}/teams/${team.id}`}
+                  href={`/workspace/${workspace.slug}/teams/${channel.id}`}
                   className="flex items-center gap-3 px-4 py-3 hover:bg-black/[.03] dark:hover:bg-white/[.04]"
                 >
-                  <span
-                    aria-hidden
-                    className="text-black/30 dark:text-white/30"
-                    // A channel list marks a room, not a document. The hash is
-                    // the cheapest way to say "this is a room you talk in".
-                  >
-                    #
+                  <span aria-hidden className="shrink-0 text-black/30 dark:text-white/30">
+                    {/* A padlock, not a hash, for a private room. The list is
+                        the only place the distinction is visible before you
+                        open one. */}
+                    {channel.isPrivate ? <Lock size={13} /> : <Hash size={15} />}
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className={unread ? 'font-semibold' : 'font-medium'}>{team.name}</span>
-                    {team.description && (
-                      <span className="ml-2 truncate text-sm text-black/45 dark:text-white/45">
-                        {team.description}
-                      </span>
+                    <span className={unread ? 'font-semibold' : 'font-medium'}>{channel.name}</span>
+                    {channel.topic && (
+                      <span className="ml-2 truncate text-sm text-black/45 dark:text-white/45">{channel.topic}</span>
                     )}
                     <span className="mt-0.5 block text-xs text-black/45 dark:text-white/45">
-                      {team.memberCount} {team.memberCount === 1 ? 'slot' : 'slots'} · {team.openTaskCount} open{' '}
-                      {team.openTaskCount === 1 ? 'task' : 'tasks'} ·{' '}
-                      {team.workspaceMode === 'shared' ? 'shared worktree' : 'worktree per member'}
+                      {channel.memberCount} {channel.memberCount === 1 ? 'member' : 'members'} ·{' '}
+                      {channel.openTaskCount} open {channel.openTaskCount === 1 ? 'task' : 'tasks'}
+                      {!channel.joined && ' · you are not a member'}
                     </span>
                   </span>
-                  <span className="shrink-0 text-right text-xs text-black/40 dark:text-white/40">
-                    {/* Unread as weight, not as a pill: a count in bold reads
-                        as "there is something here" without adding a second
-                        colour to every row. */}
-                    {unread && <span className="block font-semibold text-black dark:text-white">{team.unreadCount} unread</span>}
-                    {team.lastMessageAt ? formatRelativeTime(team.lastMessageAt) : 'no messages yet'}
+                  <span className="flex shrink-0 items-center gap-2 text-right text-xs text-black/40 dark:text-white/40">
+                    {/* A mention is the only thing loud enough for a pill:
+                        "somebody said something" and "somebody asked YOU" are
+                        different urgencies, and giving both a badge would make
+                        neither mean anything. */}
+                    {channel.mentionCount > 0 && (
+                      <span className="rounded-full bg-red-500 px-1.5 py-px text-[11px] font-medium text-white tabular-nums">
+                        {channel.mentionCount}
+                      </span>
+                    )}
+                    <span>
+                      {unread && (
+                        <span className="block font-semibold text-black dark:text-white">
+                          {channel.unreadCount} unread
+                        </span>
+                      )}
+                      {channel.lastMessageAt ? formatRelativeTime(channel.lastMessageAt) : 'no messages yet'}
+                    </span>
                   </span>
                 </Link>
               </li>

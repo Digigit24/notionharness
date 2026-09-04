@@ -60,9 +60,6 @@ export interface SidebarChannels {
  * is a full page built for a long list. */
 const SIDEBAR_CHANNEL_LIMIT = 30
 
-/** Members rendered under one expanded channel before "+N more". */
-export const SIDEBAR_CHANNEL_MEMBER_LIMIT = 6
-
 interface SlotRow {
   id: string
   team_id: string

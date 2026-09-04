@@ -181,9 +181,27 @@ export async function createTeam(input: {
   return team
 }
 
-export async function listTeams(workspaceId: number): Promise<Team[]> {
+/**
+ * Channels in a workspace, live ones only by default.
+ *
+ * Archiving is what frees a channel's name — `teams_workspace_name_uidx` is a
+ * partial index over non-archived rows — so an archived channel showing up in
+ * a list beside its live replacement is not a cosmetic problem: they have the
+ * same name and nothing on screen distinguishes them. Filtering here rather
+ * than at each call site means every caller benefits, which is the whole
+ * reason it is an option rather than a second query in the sidebar.
+ */
+export async function listTeams(
+  workspaceId: number,
+  options: { includeArchived?: boolean } = {},
+): Promise<Team[]> {
   const pool = getBrokerPool()
-  const { rows } = await pool.query(`SELECT * FROM teams WHERE workspace_id = $1 ORDER BY name`, [workspaceId])
+  const { rows } = await pool.query(
+    `SELECT * FROM teams
+      WHERE workspace_id = $1 ${options.includeArchived ? '' : 'AND archived_at IS NULL'}
+      ORDER BY name`,
+    [workspaceId],
+  )
   return rows.map(toTeam)
 }
 
@@ -453,6 +471,18 @@ export async function markTeamMessagesRead(ids: number[]): Promise<void> {
 
 // --- The task graph ---------------------------------------------------------
 
+/**
+ * Ceiling on a single task read.
+ *
+ * Both task queries run on the channel room's poll, every few seconds, per open
+ * tab. Unbounded, a room with thousands of tasks shipped all of them on every
+ * tick — which is D0's "no unbounded lists" and "no N queries where one will
+ * do" failing together on the most frequently repeated read in the product.
+ * A board nobody can read past a few hundred rows is a paging problem, not a
+ * reason to send the rest.
+ */
+const TASK_PAGE_LIMIT = 500
+
 const TASK_SELECT = `
   SELECT t.*,
          COALESCE(ARRAY_AGG(d.blocked_by) FILTER (WHERE d.blocked_by IS NOT NULL), '{}') AS blocked_by
@@ -509,7 +539,11 @@ export async function getTeamTask(id: number): Promise<TeamTask | null> {
   return rows[0] ? toTask(rows[0]) : null
 }
 
-export async function listTeamTasks(teamId: number, options: { status?: TeamTaskStatus } = {}): Promise<TeamTask[]> {
+/** Bounded because this runs on the room's poll. See `TASK_PAGE_LIMIT`. */
+export async function listTeamTasks(
+  teamId: number,
+  options: { status?: TeamTaskStatus; limit?: number } = {},
+): Promise<TeamTask[]> {
   const pool = getBrokerPool()
   const params: unknown[] = [teamId]
   let where = 'WHERE t.team_id = $1'
@@ -517,7 +551,11 @@ export async function listTeamTasks(teamId: number, options: { status?: TeamTask
     params.push(options.status)
     where += ` AND t.status = $${params.length}`
   }
-  const { rows } = await pool.query(`${TASK_SELECT} ${where} GROUP BY t.id ORDER BY t.id`, params)
+  params.push(Math.min(options.limit ?? TASK_PAGE_LIMIT, TASK_PAGE_LIMIT))
+  const { rows } = await pool.query(
+    `${TASK_SELECT} ${where} GROUP BY t.id ORDER BY t.id LIMIT $${params.length}`,
+    params,
+  )
   return rows.map(toTask)
 }
 
@@ -545,8 +583,9 @@ export async function claimableTasks(teamId: number): Promise<TeamTask[]> {
              AND blocker.status NOT IN ('done', 'cancelled')
         )
       GROUP BY t.id
-      ORDER BY t.id`,
-    [teamId],
+      ORDER BY t.id
+      LIMIT $2`,
+    [teamId, TASK_PAGE_LIMIT],
   )
   return rows.map(toTask)
 }

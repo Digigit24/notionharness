@@ -121,12 +121,23 @@ export function LanesView({
                   )}
                 </div>
                 <p className="mt-0.5 truncate text-xs text-black/45 dark:text-white/45">
-                  {slot.agentName ?? `agent ${slot.agentId}`}
+                  {/* A member is an agent OR a person since migration 0013, so
+                      this cannot assume an agent id exists — printing
+                      "agent null" for a colleague is the exact bug the
+                      nullable column introduces if nobody looks. */}
+                  {slot.userId != null
+                    ? (slot.userName ?? 'a person')
+                    : (slot.agentName ?? `agent ${slot.agentId ?? '?'}`)}
                 </p>
                 {/* Presence first, work second. When a member is lost, what it
                     was holding is the second question — whether anyone is
                     behind the lane at all is the first. */}
-                {state && (
+                {/* Liveness is derived from a slot's RUNS, and a person has
+                    none — so a human member gets no heartbeat line rather than
+                    a machine-flavoured "idle · never seen" verdict on a
+                    colleague, which would be a number invented for a question
+                    the evidence cannot answer. */}
+                {state && slot.userId == null && (
                   <p className={cn('mt-0.5 flex items-center gap-1 text-xs', SLOT_STATE_CLASS[state.state])}>
                     <span aria-hidden className={cn('size-1.5 shrink-0 rounded-full', SLOT_STATE_DOT[state.state])} />
                     {SLOT_STATE_LABEL[state.state]}
@@ -184,7 +195,9 @@ export function LanesView({
                     Open thread
                   </Link>
                 ) : (
-                  <span className="text-xs text-black/40 dark:text-white/40">No conversation bound</span>
+                  <span className="text-xs text-black/40 dark:text-white/40">
+                    {slot.userId != null ? 'A person — no runtime thread' : 'No conversation bound'}
+                  </span>
                 )}
               </footer>
             </section>

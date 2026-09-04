@@ -102,6 +102,43 @@ try {
   const mentions = ch.parseMentions('can @Bob take this one?', roster)
   check('a mention resolves to a slot id', mentions.length === 1 && mentions[0].id === bob.id, JSON.stringify(mentions))
 
+  // A PREFIX NAME MUST NOT BE MATCHED INSIDE A LONGER ONE.
+  //
+  // The first implementation tested `body.includes('@' + name)` per roster
+  // entry and never consumed a match, so "@Bob 2" also contained "@Bob" and
+  // BOTH slots were indexed — the prefix-named member collecting mention
+  // badges for messages that never named them. This product generates exactly
+  // that collision itself: the create dialog auto-names a second slot for one
+  // agent "<name> 2".
+  const bobTwo = await teams.addTeamMember({ teamId: team.id, agentId, displayName: 'Bob 2' })
+  const rosterWithPrefix = (await teams.listTeamMembers(team.id)).map((m) => ({
+    id: m.id,
+    displayName: m.displayName,
+  }))
+  const prefixed = ch.parseMentions('ping @Bob 2 about it', rosterWithPrefix)
+  check(
+    'a longer name is not also matched as its prefix',
+    prefixed.length === 1 && prefixed[0].id === bobTwo.id,
+    JSON.stringify(prefixed),
+  )
+  const shorter = ch.parseMentions('ping @Bob about it', rosterWithPrefix)
+  check(
+    'and the shorter name still matches on its own',
+    shorter.length === 1 && shorter[0].id === bob.id,
+    JSON.stringify(shorter),
+  )
+  const both = ch.parseMentions('@Bob and @Bob 2 both', rosterWithPrefix)
+  check(
+    'naming both really does mention both',
+    both.length === 2,
+    JSON.stringify(both),
+  )
+  check(
+    'an unknown handle mentions nobody',
+    ch.parseMentions('hello @Nobody at all', rosterWithPrefix).length === 0,
+  )
+  await teams.removeTeamMember(bobTwo.id)
+
   await ch.postChannelMessage({
     teamId: team.id,
     fromSlotId: alice.id,

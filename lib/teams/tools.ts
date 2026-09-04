@@ -99,6 +99,12 @@ import { runTeamToolOnce, touchAndReadTeamSlot } from './reliability'
 const STATUS_REPEAT_WINDOW_MS = 60_000
 const MESSAGE_REPEAT_WINDOW_MS = 10 * 60_000
 
+/** Most messages one `team_read_thread` answer may contain (the root plus the
+ * newest replies). Chosen against the neighbours rather than in isolation:
+ * `listChannelFeed` and `readTeamInbox` cap at 500, and a thread is a narrower
+ * thing than a whole feed, so it caps lower. */
+const THREAD_MAX_MESSAGES = 200
+
 /** The authenticated identity behind one MCP request: a slot, not an agent.
  * The same agent can hold two slots in one team with different jobs, so every
  * decision below keys on `slotId`. */
@@ -413,11 +419,40 @@ export async function teamReadThread(caller: TeamCaller, input: { rootId: number
   const rootId = first.threadRootId ?? first.id
   if (first.threadRootId != null) messages = await listThread(first.threadRootId)
 
+  // BOUNDED. `listThread` takes no limit — every other reader in this codebase
+  // caps (`listChannelFeed` 500, `readTeamInbox` 500, `listTeamMessages` 1000)
+  // and this was the one that did not. A busy thread is exactly the thing an
+  // agent is told to read before answering, and each body may be 100k chars,
+  // so an uncapped answer is a tool result that can be larger than the model's
+  // context — which does not degrade, it fails the call outright.
+  //
+  // The ROOT is always kept and the newest replies are preferred: the root is
+  // the question being answered and the tail is the state of the conversation,
+  // while the middle is the part a reader can most afford to lose. The omission
+  // is REPORTED rather than silent, so a model cannot mistake a truncated
+  // thread for the whole of it.
+  //
+  // HONEST LIMIT: this bounds what crosses the wire, not what the query reads.
+  // The `LIMIT`/`OFFSET` belongs in `listThread` itself, in
+  // `lib/broker/channels.ts`, which this unit does not own.
+  const total = messages.length
+  const page = total > THREAD_MAX_MESSAGES ? [messages[0], ...messages.slice(total - (THREAD_MAX_MESSAGES - 1))] : messages
+
   return JSON.stringify(
     {
       root: rootId,
-      count: messages.length,
-      messages: messages.map(summariseChannelMessage),
+      /** How many messages are in this response. */
+      count: page.length,
+      /** How many are in the thread. Greater than `count` means it was cut. */
+      total,
+      ...(total > page.length
+        ? {
+            truncated: true,
+            omitted: total - page.length,
+            note: `Showing the root and the ${THREAD_MAX_MESSAGES - 1} most recent replies; ${total - page.length} older replies are not included.`,
+          }
+        : {}),
+      messages: page.map(summariseChannelMessage),
     },
     null,
     2,

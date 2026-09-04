@@ -4,6 +4,7 @@ import { getPayloadClient } from '@/lib/payload'
 import { getSession } from '@/lib/session'
 import { getCurrentPayloadUser } from '@/lib/current-user'
 import { getSidebarPages, getWorkspaceBySlug } from '@/lib/pages-cache'
+import { getSidebarChannels } from '@/components/sidebar/channels-data'
 import { getUnreadNotificationCount } from '@/app/(app)/notifications/actions'
 import { getAmbientStatus } from '@/app/(app)/workspace/[workspaceSlug]/actions'
 import { Sidebar } from '@/components/sidebar/sidebar'
@@ -43,7 +44,7 @@ export default async function WorkspaceLayout({
   const memberIds = (workspace.members ?? []).map((m) => (typeof m === 'number' ? m : m.id))
   if (ownerId !== currentUser.id && !memberIds.includes(currentUser.id)) notFound()
 
-  const [workspaces, pages, ambientStatus, unreadNotificationCount] = await Promise.all([
+  const [workspaces, pages, ambientStatus, unreadNotificationCount, channels] = await Promise.all([
     payload.find({
       collection: 'workspaces',
       where: { or: [{ owner: { equals: currentUser.id } }, { members: { contains: currentUser.id } }] },
@@ -54,6 +55,13 @@ export default async function WorkspaceLayout({
     getSidebarPages(workspace.id),
     getAmbientStatus(workspace.id),
     getUnreadNotificationCount(),
+    // The Channels tab's rows and unread badges. Joins the existing Promise.all
+    // rather than adding a fifth sequential await, and it is three queries
+    // internally rather than one per channel — the sidebar renders on every
+    // page in the product, so an N+1 here would be the most-repeated one there
+    // is (D0). A failure degrades the tab to a "Browse channels" link instead
+    // of taking the whole shell down with it.
+    getSidebarChannels(workspace.id, currentUser.id).catch(() => null),
   ])
 
   return (
@@ -67,6 +75,7 @@ export default async function WorkspaceLayout({
           currentUserId={currentUser?.id ?? null}
           unreadNotificationCount={unreadNotificationCount}
           ambientStatus={ambientStatus}
+          channels={channels}
         />
         <div className="flex min-w-0 flex-1 flex-col">
           {!HERMES_BASE_URL && <HermesNotConfiguredBanner />}

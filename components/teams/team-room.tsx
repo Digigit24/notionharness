@@ -1,8 +1,8 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Columns3, MessageSquare, Network, OctagonX } from 'lucide-react'
-import type { Team, TeamTask } from '@/lib/broker'
+import { Columns3, Hash, Lock, MessageSquare, Network, NotebookPen, OctagonX } from 'lucide-react'
+import type { TeamTask } from '@/lib/broker'
 import type { TeamRoomMessage, TeamSlotHealth, TeamStopState } from '@/lib/teams/reliability'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -10,16 +10,20 @@ import { toast } from '@/hooks/use-toast'
 import { formatRelativeTime } from '@/lib/relative-time'
 import {
   clearTeamStopAction,
-  markRoomReadAction,
+  joinChannelAction,
+  loadThreadAction,
+  markChannelReadAction,
   pollTeamRoomAction,
   stopTeamRoomAction,
 } from '@/app/(app)/workspace/[workspaceSlug]/teams/actions'
-import { formatSilence, type TeamSlotView } from './shared'
-import { ChannelFeed } from './channel-feed'
+import type { Channel } from '@/app/(app)/workspace/[workspaceSlug]/teams/data'
+import { formatSilence, type RoomFeedMessage, type TeamAgentOption, type TeamSlotView, type TeamUserOption } from './shared'
+import { ChannelView } from './channel-view'
+import { ThreadPane } from './thread-pane'
+import { CanvasPane } from './canvas-pane'
 import { LanesView } from './lanes-view'
 import { BoardView } from './board-view'
 import { RosterPanel } from './roster-panel'
-import type { TeamAgentOption } from './create-team-form'
 
 type RoomView = 'channel' | 'lanes' | 'board'
 
@@ -36,52 +40,104 @@ const VIEWS: Array<{ id: RoomView; label: string; icon: typeof MessageSquare }> 
 const POLL_MS = 6000
 
 /**
- * The room: one set of data, three views over it (R6.4).
+ * How many recent roots each poll re-reads.
  *
- * All three read the SAME arrays held here — messages, tasks, slots — so
- * switching views is a render, never a fetch. That is also why view state is
- * local rather than a route segment or a search param the server reads: a
- * round trip to change tab is the exact latency D0 rules out. The choice is
- * still mirrored into the URL with `history.replaceState` so a reload or a
- * shared link lands on the same view without Next re-rendering the page.
+ * A reaction and a reply do not create a new root, so an append-only cursor
+ * would never notice either arriving on a message already on screen. The
+ * client therefore asks for a bounded WINDOW of its newest roots to be
+ * refreshed as well as for anything after them — bounded so the payload of an
+ * idle room stays a few dozen small rows rather than the whole conversation.
+ */
+const FEED_REFRESH_WINDOW = 40
+
+/**
+ * The room: one set of data, three views over it, and two optional panes.
+ *
+ * All three views read the SAME arrays held here, so switching view is a
+ * render and never a fetch. That is also why view state is local rather than a
+ * route segment the server reads: a round trip to change tab is the exact
+ * latency D0 rules out. The choice is still mirrored into the URL with
+ * `history.replaceState` so a reload or a shared link lands on the same view
+ * without Next re-rendering the page.
+ *
+ * The CHANNEL is the default, because a channel is what this is.
  */
 export function TeamRoom({
   workspaceId,
   workspaceSlug,
-  team,
+  channel,
+  currentUserId,
   slots: initialSlots,
+  initialFeed,
   initialMessages,
   initialTasks,
   initialClaimableIds,
   initialHealth,
   initialStop,
   agents,
+  users,
 }: {
   workspaceId: number
   workspaceSlug: string
-  team: Team
+  channel: Channel
+  currentUserId: number
   slots: TeamSlotView[]
+  initialFeed: RoomFeedMessage[]
   initialMessages: TeamRoomMessage[]
   initialTasks: TeamTask[]
   initialClaimableIds: number[]
   initialHealth: TeamSlotHealth[]
   initialStop: TeamStopState
   agents: TeamAgentOption[]
+  users: TeamUserOption[]
 }) {
   const [view, setView] = useState<RoomView>('channel')
   const [slots, setSlots] = useState(initialSlots)
+  const [feed, setFeed] = useState(initialFeed)
   const [messages, setMessages] = useState(initialMessages)
   const [tasks, setTasks] = useState(initialTasks)
   const [claimableIds, setClaimableIds] = useState(initialClaimableIds)
-  const [focusSlotId, setFocusSlotId] = useState<number | null>(null)
   const [health, setHealth] = useState(initialHealth)
   const [stop, setStop] = useState(initialStop)
   const [stopping, setStopping] = useState(false)
+  const [joining, setJoining] = useState(false)
+  const [threadRootId, setThreadRootId] = useState<number | null>(null)
+  const [thread, setThread] = useState<RoomFeedMessage[]>([])
+  const [canvasOpen, setCanvasOpen] = useState(false)
 
   // The server re-renders this component with fresh props after any action
   // that calls revalidatePath (adding a slot, changing the leader). Without
   // this the roster would show stale rows after a refresh.
   useEffect(() => setSlots(initialSlots), [initialSlots])
+
+  // LOWEST id, not the first row, because `loadSlots` sorts the leader to the
+  // top while the server's `resolveMySlot` is `ORDER BY id LIMIT 1`. Nothing
+  // stops the database holding two slots for one person (the 0013 CHECK is
+  // agent-XOR-user, not one-slot-per-person; only the pickers refuse it), and
+  // if that ever happens the client must pick the same row the server writes
+  // reactions and the read cursor against — otherwise "you reacted" and the
+  // unread divider would both be reading somebody else's slot.
+  const mySlot = useMemo(
+    () => slots.filter((s) => s.userId === currentUserId).reduce<TeamSlotView | null>((lowest, s) => (lowest && lowest.id < s.id ? lowest : s), null),
+    [slots, currentUserId],
+  )
+  const mySlotId = mySlot?.id ?? null
+
+  /**
+   * Where the "new messages" line goes, frozen at open.
+   *
+   * Read once, from the cursor as it stood on the first paint. It deliberately
+   * does not follow `mySlot.lastReadMessageId`: marking the feed read moves
+   * that forward within a second of arriving, and a live boundary would erase
+   * the divider at exactly the moment somebody is looking for where they left
+   * off.
+   */
+  const unreadBoundaryRef = useRef<number | null>(
+    initialSlots
+      .filter((s) => s.userId === currentUserId)
+      .reduce<TeamSlotView | null>((lowest, s) => (lowest && lowest.id < s.id ? lowest : s), null)
+      ?.lastReadMessageId ?? null,
+  )
 
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get('view')
@@ -101,6 +157,18 @@ export function TeamRoom({
   const lastMessageIdRef = useRef(lastMessageId)
   lastMessageIdRef.current = lastMessageId
 
+  const feedSince = useMemo(() => {
+    if (feed.length === 0) return 0
+    const first = feed[Math.max(0, feed.length - FEED_REFRESH_WINDOW)]
+    // Minus one, because `listChannelFeed` is `id > since` and the window has
+    // to include the row it starts at.
+    return Math.max(0, first.id - 1)
+  }, [feed])
+  const feedSinceRef = useRef(feedSince)
+  feedSinceRef.current = feedSince
+  const threadRootIdRef = useRef(threadRootId)
+  threadRootIdRef.current = threadRootId
+
   /** Appends only rows we do not already hold. The poll and an optimistic send
    * can both deliver the same message — the send returns the inserted row, and
    * the next poll reads forward from a cursor that may predate it. */
@@ -114,35 +182,48 @@ export function TeamRoom({
     })
   }, [])
 
+  /** REPLACES by id and appends the rest. A refreshed root carries new
+   * reaction and reply counts, so keeping the row we already had would be the
+   * whole point of the refresh window thrown away. */
+  const mergeFeed = useCallback((incoming: RoomFeedMessage[]) => {
+    if (incoming.length === 0) return
+    setFeed((prev) => {
+      const byId = new Map(prev.map((m) => [m.id, m]))
+      for (const message of incoming) byId.set(message.id, message)
+      return [...byId.values()].sort((a, b) => a.id - b.id)
+    })
+  }, [])
+
+  const patchMessage = useCallback((id: number, patch: Partial<RoomFeedMessage>) => {
+    setFeed((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)))
+    setThread((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)))
+  }, [])
+
   useEffect(() => {
     let cancelled = false
     let inFlight = false
     const tick = async () => {
-      // A backgrounded tab polling a room nobody is looking at is pure waste.
+      // A backgrounded tab polling a room nobody is looking at is pure waste,
+      // and the in-flight guard stops a slow tick from stacking requests on a
+      // busy room.
       if (document.hidden || inFlight) return
       inFlight = true
       try {
         const delta = await pollTeamRoomAction({
           workspaceId,
-          teamId: team.id,
+          teamId: channel.id,
           sinceMessageId: lastMessageIdRef.current,
+          feedSince: feedSinceRef.current,
+          threadRootId: threadRootIdRef.current,
         })
         if (cancelled) return
         mergeMessages(delta.messages)
+        mergeFeed(delta.feed)
+        if (delta.thread) setThread(delta.thread)
         setTasks(delta.tasks)
         setClaimableIds(delta.claimableIds)
         setHealth(delta.health)
         setStop(delta.stop)
-        if (delta.messages.length > 0) {
-          // Reading a room while looking at it is what "read" means; anything
-          // that arrives while the tab is hidden stays unread and keeps the
-          // channel list bold.
-          void markRoomReadAction({
-            workspaceId,
-            teamId: team.id,
-            messageIds: delta.messages.map((m) => m.id),
-          }).catch(() => undefined)
-        }
       } catch {
         // Swallowed on purpose: a failed poll is not an event worth a toast
         // every six seconds. The next tick either works or the page is dead
@@ -156,13 +237,75 @@ export function TeamRoom({
       cancelled = true
       window.clearInterval(handle)
     }
-  }, [workspaceId, team.id, mergeMessages])
+  }, [workspaceId, channel.id, mergeMessages, mergeFeed])
 
-  useEffect(() => {
-    const unread = initialMessages.filter((m) => m.readAt == null).map((m) => m.id)
-    if (unread.length === 0) return
-    void markRoomReadAction({ workspaceId, teamId: team.id, messageIds: unread }).catch(() => undefined)
-  }, [workspaceId, team.id, initialMessages])
+  /**
+   * Marking read, once per new high-water mark.
+   *
+   * `ChannelView` decides WHEN the feed has been seen — visible tab, channel
+   * view mounted, bottom of the list in the viewport. This only makes sure the
+   * same id is not written on every intersection callback: `markChannelRead`
+   * is a `GREATEST` update, so a repeat is harmless, but it is still a request
+   * per scroll event.
+   */
+  const markedRef = useRef(0)
+  const onSeen = useCallback(
+    (messageId: number) => {
+      if (messageId <= markedRef.current) return
+      markedRef.current = messageId
+      void markChannelReadAction({ workspaceId, teamId: channel.id, messageId }).catch(() => undefined)
+    },
+    [workspaceId, channel.id],
+  )
+
+  const openThread = useCallback(
+    (rootId: number) => {
+      setThreadRootId(rootId)
+      // Seeded from what the feed already holds so the pane paints its root
+      // instantly, then filled in by the fetch. Opening a thread should not
+      // look like a loading screen when the root is on screen behind it.
+      const root = feed.find((m) => m.id === rootId)
+      setThread(root ? [root] : [])
+      void loadThreadAction({ workspaceId, teamId: channel.id, rootId })
+        .then((rows) => setThread(rows))
+        .catch(() => undefined)
+    },
+    [workspaceId, channel.id, feed],
+  )
+
+  const appendReply = useCallback(
+    (reply: RoomFeedMessage) => {
+      setThread((prev) => (prev.some((m) => m.id === reply.id) ? prev : [...prev, reply]))
+      // The root's "N replies" is a computed column, so it is nudged here
+      // rather than waiting up to six seconds for the poll to recompute it.
+      // The next refresh replaces it with the database's own answer.
+      if (reply.threadRootId != null) {
+        setFeed((prev) =>
+          prev.map((m) =>
+            m.id === reply.threadRootId
+              ? { ...m, replyCount: m.replyCount + 1, lastReplyAt: reply.createdAt }
+              : m,
+          ),
+        )
+      }
+    },
+    [],
+  )
+
+  const join = useCallback(async () => {
+    setJoining(true)
+    try {
+      setSlots(await joinChannelAction({ workspaceId, workspaceSlug, teamId: channel.id }))
+    } catch (error) {
+      toast({
+        title: 'Could not join the channel',
+        description: error instanceof Error ? error.message : undefined,
+        variant: 'destructive',
+      })
+    } finally {
+      setJoining(false)
+    }
+  }, [workspaceId, workspaceSlug, channel.id])
 
   const leader = useMemo(() => slots.find((s) => s.role === 'leader') ?? null, [slots])
   const claimableCount = claimableIds.length
@@ -182,7 +325,7 @@ export function TeamRoom({
   const stopRoom = useCallback(async () => {
     setStopping(true)
     try {
-      const result = await stopTeamRoomAction({ workspaceId, teamId: team.id })
+      const result = await stopTeamRoomAction({ workspaceId, teamId: channel.id })
       toast({
         title:
           result.stopped.length === 0
@@ -212,19 +355,36 @@ export function TeamRoom({
     } finally {
       setStopping(false)
     }
-  }, [workspaceId, team.id])
+  }, [workspaceId, channel.id])
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <header className="mb-3 flex flex-wrap items-center gap-3">
         <div className="min-w-0 flex-1">
-          <h1 className="truncate text-2xl font-semibold">{team.name}</h1>
-          <p className="mt-0.5 text-sm text-black/50 dark:text-white/50">
-            {team.description ? `${team.description} · ` : ''}
-            {slots.length} {slots.length === 1 ? 'slot' : 'slots'} ·{' '}
-            {team.workspaceMode === 'shared' ? 'shared worktree' : 'worktree per member'}
+          <h1 className="flex items-center gap-1.5 truncate text-2xl font-semibold">
+            <span aria-hidden className="text-black/25 dark:text-white/25">
+              {channel.isPrivate ? <Lock size={18} /> : <Hash size={20} />}
+            </span>
+            {channel.name}
+          </h1>
+          <p className="mt-0.5 truncate text-sm text-black/50 dark:text-white/50">
+            {channel.topic ? `${channel.topic} · ` : channel.description ? `${channel.description} · ` : ''}
+            {slots.length} {slots.length === 1 ? 'member' : 'members'} ·{' '}
+            {channel.workspaceMode === 'shared' ? 'shared worktree' : 'worktree per member'}
           </p>
         </div>
+
+        <Button
+          type="button"
+          size="sm"
+          variant={canvasOpen ? 'default' : 'outline'}
+          onClick={() => setCanvasOpen((open) => !open)}
+          title="The channel's document — a real page, created the first time you open it"
+        >
+          <NotebookPen size={14} />
+          Canvas
+        </Button>
+
         {/*
           Stop is a header control, not a per-lane one, because the thing it
           stops is the room. It is disabled when nothing is in flight rather
@@ -246,6 +406,7 @@ export function TeamRoom({
           <OctagonX size={14} />
           {stopping ? 'Stopping…' : inFlight === 0 ? 'Stop room' : `Stop room (${inFlight})`}
         </Button>
+
         <nav className="inline-flex items-center gap-0.5 rounded-lg border border-black/10 p-0.5 dark:border-white/10">
           {VIEWS.map(({ id, label, icon: Icon }) => (
             <button
@@ -272,22 +433,29 @@ export function TeamRoom({
         the database's own answer (`claimableTasks`), not a guess. A stalled
         leader degrades the team to self-service, and the UI has to say so
         rather than continuing to look busy.
+
+        Shown outside the Channel view only. In a chat client the space above
+        the conversation belongs to the conversation; the delegation state is
+        what Lanes and Board are for, and a permanent paragraph over the feed
+        is the thing that stops it feeling like a messaging product.
       */}
-      <p className="mb-3 rounded-lg border border-black/10 px-3 py-2 text-xs text-black/55 dark:border-white/10 dark:text-white/55">
-        {leader ? (
-          <>
-            <span className="font-medium text-black/75 dark:text-white/75">{leader.displayName}</span> leads this room.
-            The board is still authoritative: {claimableCount}{' '}
-            {claimableCount === 1 ? 'task is' : 'tasks are'} claimable by any idle member right now, so a stalled
-            leader degrades the team to self-service instead of stopping it.
-          </>
-        ) : (
-          <>
-            No leader assigned — members self-serve from the board. {claimableCount}{' '}
-            {claimableCount === 1 ? 'task is' : 'tasks are'} claimable right now.
-          </>
-        )}
-      </p>
+      {view !== 'channel' && (
+        <p className="mb-3 rounded-lg border border-black/10 px-3 py-2 text-xs text-black/55 dark:border-white/10 dark:text-white/55">
+          {leader ? (
+            <>
+              <span className="font-medium text-black/75 dark:text-white/75">{leader.displayName}</span> leads this
+              room. The board is still authoritative: {claimableCount}{' '}
+              {claimableCount === 1 ? 'task is' : 'tasks are'} claimable by any idle member right now, so a stalled
+              leader degrades the team to self-service instead of stopping it.
+            </>
+          ) : (
+            <>
+              No leader assigned — members self-serve from the board. {claimableCount}{' '}
+              {claimableCount === 1 ? 'task is' : 'tasks are'} claimable right now.
+            </>
+          )}
+        </p>
+      )}
 
       {/*
         R6.6 — the reliability line. Present only when there is something to
@@ -336,7 +504,7 @@ export function TeamRoom({
                 variant="ghost"
                 className="ml-auto"
                 onClick={() =>
-                  void clearTeamStopAction({ workspaceId, teamId: team.id })
+                  void clearTeamStopAction({ workspaceId, teamId: channel.id })
                     .then(() => setStop((prev) => ({ ...prev, requestedAt: null, requestedBy: null })))
                     .catch(() => undefined)
                 }
@@ -349,21 +517,26 @@ export function TeamRoom({
       )}
 
       <div className="flex min-h-0 flex-1 gap-4">
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          {view === 'channel' && (
-            <ChannelFeed
-              workspaceId={workspaceId}
-              workspaceSlug={workspaceSlug}
-              teamId={team.id}
-              slots={slots}
-              messages={messages}
-              tasks={tasks}
-              focusSlotId={focusSlotId}
-              onFocusSlot={setFocusSlotId}
-              onAppendMessage={(m) => mergeMessages([m])}
-            />
-          )}
-          {view === 'lanes' && (
+        {view === 'channel' && (
+          <ChannelView
+            workspaceId={workspaceId}
+            teamId={channel.id}
+            slots={slots}
+            mySlotId={mySlotId}
+            feed={feed}
+            tasks={tasks}
+            unreadBoundary={unreadBoundaryRef.current}
+            threadRootId={threadRootId}
+            onOpenThread={openThread}
+            onPosted={(message) => mergeFeed([message])}
+            onPatchMessage={patchMessage}
+            onSeen={onSeen}
+            onJoin={() => void join()}
+            joining={joining}
+          />
+        )}
+        {view === 'lanes' && (
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <LanesView
               workspaceSlug={workspaceSlug}
               slots={slots}
@@ -371,27 +544,61 @@ export function TeamRoom({
               tasks={tasks}
               health={health}
             />
-          )}
-          {view === 'board' && (
+          </div>
+        )}
+        {view === 'board' && (
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <BoardView
               workspaceId={workspaceId}
-              teamId={team.id}
+              teamId={channel.id}
               slots={slots}
               tasks={tasks}
               claimableIds={claimableIds}
               onTasksChanged={setTasks}
             />
-          )}
-        </div>
+          </div>
+        )}
+
+        {/* Both panes sit BESIDE the feed, never over it. A thread you cannot
+            read the room from, and a canvas that hides the conversation it is
+            about, are the two mistakes this layout exists to avoid. */}
+        {view === 'channel' && threadRootId != null && (
+          <ThreadPane
+            workspaceId={workspaceId}
+            teamId={channel.id}
+            rootId={threadRootId}
+            messages={thread}
+            slots={slots}
+            tasks={tasks}
+            mySlotId={mySlotId}
+            onClose={() => {
+              setThreadRootId(null)
+              setThread([])
+            }}
+            onAppendReply={appendReply}
+            onPatchMessage={patchMessage}
+          />
+        )}
+        {canvasOpen && (
+          <CanvasPane
+            workspaceId={workspaceId}
+            workspaceSlug={workspaceSlug}
+            teamId={channel.id}
+            channelName={channel.name}
+            onClose={() => setCanvasOpen(false)}
+          />
+        )}
 
         <RosterPanel
           workspaceId={workspaceId}
           workspaceSlug={workspaceSlug}
-          teamId={team.id}
+          teamId={channel.id}
           slots={slots}
+          mySlotId={mySlotId}
           tasks={tasks}
           health={health}
           agents={agents}
+          users={users}
           onSlotsChanged={setSlots}
         />
       </div>

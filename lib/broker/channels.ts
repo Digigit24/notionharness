@@ -111,15 +111,50 @@ const MESSAGE_SELECT = `
 /** The channel feed: roots only, oldest first. */
 export async function listChannelFeed(
   teamId: number,
-  options: { limit?: number; since?: number } = {},
+  options: { limit?: number; since?: number; before?: number } = {},
 ): Promise<ChannelMessage[]> {
   const pool = getBrokerPool()
+  const limit = Math.min(options.limit ?? 200, 500)
+
+  // `before` reads BACKWARDS from a point, which is what opening a channel
+  // actually wants: the most recent messages, not the oldest.
+  //
+  // Without it the feed was `id > since` only, so a channel with more than one
+  // page of history painted from the BEGINNING of the conversation — you
+  // opened a busy room and were shown its first day. Slack scrolls back from
+  // now; so does this. The rows come back newest-first from the database and
+  // are reversed here so callers always receive oldest-first, which is the one
+  // order a feed can render without thinking about it.
+  if (options.before !== undefined) {
+    const { rows } = await pool.query(
+      `${MESSAGE_SELECT}
+        WHERE m.team_id = $1 AND m.thread_root_id IS NULL AND m.id < $2
+        ORDER BY m.id DESC
+        LIMIT $3`,
+      [teamId, options.before, limit],
+    )
+    return rows.map(toChannelMessage).reverse()
+  }
+
+  // No cursor at all means "the latest page", for the same reason.
+  if (options.since === undefined) {
+    const { rows } = await pool.query(
+      `${MESSAGE_SELECT}
+        WHERE m.team_id = $1 AND m.thread_root_id IS NULL
+        ORDER BY m.id DESC
+        LIMIT $2`,
+      [teamId, limit],
+    )
+    return rows.map(toChannelMessage).reverse()
+  }
+
+  // An explicit `since` is the poll: everything new, forwards.
   const { rows } = await pool.query(
     `${MESSAGE_SELECT}
       WHERE m.team_id = $1 AND m.thread_root_id IS NULL AND m.id > $2
       ORDER BY m.id
       LIMIT $3`,
-    [teamId, options.since ?? 0, Math.min(options.limit ?? 200, 500)],
+    [teamId, options.since, limit],
   )
   return rows.map(toChannelMessage)
 }
@@ -286,21 +321,53 @@ export async function toggleReaction(input: {
 /**
  * Parses `@name` out of a body against a roster.
  *
- * Deliberately resolves to SLOT ids: a slot is the thing tools and tasks take,
- * and the same agent may hold two slots, so resolving to an agent would
- * reintroduce the ambiguity slots exist to remove. The body text stays
- * canonical — this is an index, not a rewrite.
+ * Resolves to SLOT ids deliberately: a slot is what tools and tasks take, and
+ * the same agent may hold two slots, so resolving to an agent would reintroduce
+ * the ambiguity slots exist to remove. The body text stays canonical — this is
+ * an index, not a rewrite.
+ *
+ * SCANS AND CONSUMES, left to right, longest name first. The obvious
+ * implementation — test `body.includes('@' + name)` for each roster entry —
+ * is wrong in a way that sorting alone does not fix, because nothing is ever
+ * consumed: "@Coder 2" contains the substring "@Coder", so BOTH slots get
+ * mentioned and the prefix-named member gets a mention badge for a message
+ * that never named them. That is not hypothetical here — the create dialog
+ * auto-names a second slot for one agent "Coder 2", so this product generates
+ * the collision itself.
+ *
+ * Matching at a position and skipping past it is the only shape that cannot
+ * double-count. `components/teams/shared.ts`'s `splitMentions` renders with the
+ * same rule, so what is highlighted and what is indexed agree.
  */
 export function parseMentions(
   body: string,
   roster: Array<{ id: number; displayName: string }>,
 ): MentionTarget[] {
+  // Longest first, so "@Coder 2" is matched as itself rather than as "@Coder"
+  // followed by a stray "2".
+  const ordered = [...roster]
+    .filter((member) => member.displayName.trim().length > 0)
+    .sort((a, b) => b.displayName.length - a.displayName.length)
+  if (ordered.length === 0) return []
+
+  const lower = body.toLowerCase()
   const found = new Map<number, MentionTarget>()
-  // Longest names first, so "@Test Agent Deep" is not eaten by "@Test".
-  const ordered = [...roster].sort((a, b) => b.displayName.length - a.displayName.length)
-  for (const member of ordered) {
-    const needle = `@${member.displayName}`.toLowerCase()
-    if (body.toLowerCase().includes(needle)) found.set(member.id, { type: 'slot', id: member.id })
+
+  let index = lower.indexOf('@')
+  while (index !== -1) {
+    let consumed = 0
+    for (const member of ordered) {
+      const name = member.displayName.toLowerCase()
+      if (lower.startsWith(name, index + 1)) {
+        found.set(member.id, { type: 'slot', id: member.id })
+        consumed = name.length
+        break
+      }
+    }
+    // Past the whole match on a hit, past the '@' on a miss. Either way the
+    // scan always advances, so a name containing '@' cannot loop.
+    index = lower.indexOf('@', index + 1 + consumed)
   }
+
   return [...found.values()]
 }
