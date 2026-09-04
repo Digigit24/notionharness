@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { FileText, FolderOpen } from 'lucide-react'
+import { FileText } from 'lucide-react'
 import { DetailLayout, type DetailLayoutTab } from '@/components/layout/detail-layout'
 import { ProjectWorktreesTab } from '@/components/projects/project-worktrees-tab'
 import type { ProjectGitOverview } from '@/app/(app)/workspace/[workspaceSlug]/projects/[projectId]/worktree-actions'
@@ -13,20 +13,20 @@ import { ProjectOverviewTab, type ProjectStatusCount } from './project-overview-
 import { ProjectRunsTab } from './project-runs-tab'
 import { ProjectSettingsTab } from './project-settings-tab'
 import { ProjectResourcesTab } from './project-resources-tab'
+import { ProjectFilesTab } from '@/components/repo/project-files-tab'
 import type { ProjectRunRow } from '@/app/(app)/workspace/[workspaceSlug]/projects/[projectId]/actions'
 import type { Agent, Page, Project, ProjectResource, User, Workspace } from '@/payload-types'
 
 // ROADMAP B-1 — the project detail page's own DetailLayout wiring. Header
 // and right rail persist across tabs (DetailLayout's own contract); tab
 // state lives in the URL via DetailLayout's built-in `?tab=` handling, not
-// reinvented here. Overview/Tasks/Runs/Resources are real tabs; Pages and
-// Files are honest degraded states (see each tab's own comment for exactly
-// why), not faked trees/browsers. Resources (Phase C, closing the C1.1/C3
-// gap once `project_resources` was actually migrated+registered — see
-// AGENTS.md) is deliberately separate from Files: Resources only ever
-// declares WHICH repo/directory a project is bound to (a `project_resources`
-// row), never browses its actual file contents — that's what Files still
-// can't do (no worktree infra keyed by project, only by run).
+// reinvented here. Overview/Tasks/Runs/Resources are real tabs; Pages is an
+// honest degraded state (see its own comment for exactly why), not a faked
+// tree. Resources (Phase C, closing the C1.1/C3 gap once
+// `project_resources` was actually migrated+registered — see AGENTS.md)
+// stays deliberately separate from Files: Resources declares WHICH
+// repo/directory a project is bound to (a `project_resources` row), and
+// Files — added by R9 — reads that binding's contents through git.
 export function ProjectDetailView({
   workspace,
   project,
@@ -147,7 +147,25 @@ export function ProjectDetailView({
     },
   ]
 
-  // Four tabs, not eight.
+  // R9.4 — Files is back, and only when there is something in it.
+  //
+  // The condition is `isRepo`, which `getProjectGitOverview` computes by
+  // asking the FILESYSTEM, not by reading the `kind` column: a binding
+  // labelled `git_repo` whose clone failed is not a repository, and a folder
+  // somebody ran `git init` in is. A project with no repository gets no tab
+  // at all rather than an empty state — the previous version of this file
+  // removed Files for exactly that reason ("a tab that never has content is
+  // worse than no tab"), and that reasoning still holds; what changed is that
+  // there is now content when a repository exists.
+  if (gitOverview?.resources.some((resource) => resource.isRepo)) {
+    tabs.push({
+      key: 'files',
+      label: 'Files',
+      content: <ProjectFilesTab workspaceSlug={workspace.slug} projectId={currentProject.id} />,
+    })
+  }
+
+  // Four tabs (five with a repository), not eight.
   //
   // Resources, Worktrees and Settings were each a tab holding a short list or
   // a small form — the kind of thing you check while looking at something
@@ -155,9 +173,11 @@ export function ProjectDetailView({
   // behind a row of chrome and cost a click to answer "which repo is this?".
   // In the rail they are all visible at once, beside whatever tab is open.
   //
-  // Files was an empty state explaining a feature that does not exist yet.
+  // Files was an empty state explaining a feature that did not exist yet.
   // A tab that never has content is worse than no tab: it advertises a place
-  // to look and then wastes the look. It returns when it has something in it.
+  // to look and then wastes the look. R9 built the content, so it is back —
+  // above, and conditionally, which is the same rule stated the other way
+  // round.
   const rightRail = (
     <div className="flex flex-col gap-5 text-sm">
       <section>
