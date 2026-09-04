@@ -1780,11 +1780,319 @@ cold cache, and nothing in the editor paints empty before it paints content.
 
 ---
 
+## R14 — Channels: Slack parity, and the ten things Slack cannot do
+
+R6 built a channel and R12-P3 makes it real-time. Both stop at the point
+where a person who has used Slack for ten years opens ours and starts
+reaching for things that are not there. This pillar is that list, taken from
+the code rather than from a feature matrix: every item below names the
+table, file or dependency it lands on, and none of them needs a dependency
+we do not already ship.
+
+Two things are true at once and this pillar holds both. First, the channel
+is missing table stakes — message search, edit, pins, DMs — and no amount of
+agent cleverness covers for their absence. Second, because the coworkers in
+this channel are metered, run in worktrees, produce diffs and wait on
+approvals, we can show things in a message row that Slack structurally
+cannot. P1–P5 are parity. P6 is the part that is only possible here.
+
+**What already exists, and is NOT re-specified below.** Threads, reactions,
+mentions of users/agents/teams, per-slot unread high-water marks, dead
+letters, the approval strip, slash commands (`/task /assign /canvas
+/status`), board/lanes/canvas views, optimistic send (R12-P3.1), typing
+indicators (R12-P3.2), NOTIFY/SSE push with the poll as fallback
+(R12-P3.3), and local drafts (R12-P3.6). Anything in this pillar that needs
+ephemeral fan-out rides the R12-P3.3 subscription and adds no second one.
+
+**Effort marks.** S = hours, M = one to two days, L = three to five days.
+Every item carries one, and the pillar's honest total is roughly six to
+eight weeks of one person's time with P6 included, four without.
+
+**D0 applies.** No item may add a per-message query. Where an item adds a
+column, the `MESSAGE_SELECT` lateral in `lib/broker/channels.ts` grows one
+join, not one round trip.
+
+---
+
+### R14-P1 — Table stakes: find it, fix it, keep it
+
+**R14-P1.1 Message search — S/M.** `lib/search.ts` indexes pages, tasks,
+projects, agents, comments, run transcripts and skills, and not
+`team_messages` — the one table people actually ask "where did someone say
+X" about. Same live `to_tsvector` pattern as the others, a "Messages" group
+in the command bar, and `in:#channel from:@name before:` filters parsed
+client-side into the query. Results deep-link by message id (P1.4).
+
+**R14-P1.2 Edit and delete — S.** `edited_at` and `deleted_at` on
+`team_messages`; a deleted row is a tombstone ("message deleted") so thread
+replies keep their parent. The hover action bar in
+`components/teams/message-row.tsx` gains two actions. Only the authoring
+slot may edit or delete, and an agent slot never edits a human's row. An
+edit is a new `body` and a marker, not a new row — the id is what pins,
+links and tasks point at.
+
+**R14-P1.3 Pins — S.** `team_message_pins(team_id, message_id, pinned_by,
+pinned_at)`, a pin action on the row, and a Pins tab in
+`components/teams/roster-panel.tsx`, which already has tabs. A pinned row
+shows a small marker in the feed. Newcomers to a channel read the pins
+first; this is the cheapest onboarding feature that exists.
+
+**R14-P1.4 Permalinks, quote and share — S.** "Copy link" produces
+`/teams/<id>#m=<messageId>`; the room already `scrollIntoView`s the first
+unread, so landing on an anchor is the same code path with a highlight
+flash. "Share to channel" posts a new message carrying `quoted_message_id`,
+rendered as a quoted card above the body. The quote is a reference, not a
+copy, so an edit to the original shows through.
+
+**R14-P1.5 Channel details — S.** `topic`, `description` and `archived_at`
+on `teams`. Topic in the channel header; an About tab in the roster panel
+with created-by, members and roles, Leave and Archive. The create dialog
+gains two optional fields. An archived channel is read-only and drops out
+of the sidebar's default list, and nothing in it is deleted.
+
+**R14-P1.6 Mute and notification level — S.** Per-slot `notify_level`:
+`all | mentions | none`. The sidebar counter (`components/sidebar/
+channels-data.ts`) and `lib/push/send.ts` both read it, so a muted channel
+neither badges nor pushes. Today every channel shouts equally, which is the
+same as none of them being heard.
+
+**R14-P1.7 Emoji picker, autocomplete and custom emoji — S/M.** Reactions
+work; the picker does not exist. A picker with search and a recently-used
+row; `:thu` autocomplete in the composer using the same palette component
+the mention and slash menus use; a workspace `emoji` upload collection for
+custom ones, rendered by short name.
+
+**Done when.** A word said once in any channel three months ago is found
+from the command bar in under a second, a typo is fixed without a
+follow-up message, a channel's three most important messages are one tab
+away, and a muted channel is silent on every device.
+
+---
+
+### R14-P2 — People: where they are, and how to reach one of them
+
+**R14-P2.1 Direct messages and group DMs — M.** The schema reserved this in
+migration 0013: a DM is a channel of two (or a few), never a second meaning
+for `to_slot_id`. A team with `kind = 'dm'`, member slots for each person,
+no name, no create dialog — a "Message" action on a person anywhere in the
+app finds or creates it. Own sidebar section, sorted by last activity.
+Threads, reactions, unread, search and pins come for free because it is
+the same table.
+
+**R14-P2.2 Presence — S.** `last_seen_at` on the viewer's slot, written by
+the R12-P3.3 heartbeat that already exists for reconnect, never by a
+dedicated request. Online within two minutes, away after, and the value is
+delivered on the same subscription as everything else — zero new
+infrastructure. See P6.7 for what agent presence becomes.
+
+**R14-P2.3 Custom status and Do Not Disturb — S.** `status_emoji`,
+`status_text`, `status_expires_at`, `dnd_until` on `users`. Status shows
+beside the name in the roster and on mention hover. `sendPushToUser` is the
+single push entry point; one check against `dnd_until` before it sends,
+and the notification is still written so nothing is lost. The
+notification-preferences page already exists to host the controls.
+
+**R14-P2.4 The Activity view — M.** `listUserMentions` exists and
+`components/inbox/inbox-list.tsx` is the surface. Three tabs: Mentions,
+Threads (every thread the viewer posted in, with unread reply counts — one
+query over `thread_root_id`), and Reactions (to the viewer's messages).
+Thread replies gain an "also send to #channel" checkbox, and a reply sent
+that way is one row with a `thread_root_id` AND a broadcast flag, not two
+rows.
+
+**R14-P2.5 Sidebar sections, stars and reorder — M.** Favourites already
+exist for pages; extend the flag to teams. A per-user sidebar layout
+(custom sections, collapsed state, order) stored as one JSON document in
+`SavedViews`, which already exists, with `@dnd-kit` — already a dependency
+— for the drag. Unread and mention counts roll up to a collapsed section.
+
+**R14-P2.6 Keyboard-first — S/M.** `lib/keyboard` and the command bar
+exist. Cmd+K jumps to channels and DMs alongside pages; Alt+↑/↓ next
+channel; Alt+Shift+↓ next unread; Esc marks the channel read; ↑ in an
+empty composer edits the viewer's last message (P1.2). Power users judge a
+chat surface on this alone.
+
+**Done when.** Two people can talk without creating a channel, a person's
+absence is visible before a message is sent to them, and a full day in
+channels is possible without touching the mouse.
+
+---
+
+### R14-P3 — Time: later, and on a schedule
+
+**R14-P3.1 Reminders — M.** `reminders(user_id, entity_type, entity_id,
+fire_at, fired_at)`, created from any message, page, task or run: 20
+minutes, 1 hour, tomorrow 09:00, custom. The dispatcher tick already loops;
+it delivers due reminders as a Notification plus `sendPushToUser`. No
+Hermes cron, no second scheduler — the mechanism exists.
+
+**R14-P3.2 Scheduled send — S.** A message row with `send_at` in the future
+is excluded from `listChannelFeed` and posted by the same tick when due.
+The composer gains a caret beside Send with the P3.1 presets; a scheduled
+message sits in a "Scheduled" strip above the composer where it can be
+edited or cancelled. Reuses P3.1's mechanism entirely.
+
+**R14-P3.3 Saved items — M.** `saved_items(user_id, entity_type,
+entity_id, saved_at)` across messages, pages, tasks and runs; a bookmark
+action on each; a Saved tab in the Inbox. `lib/entity-links.ts` already
+turns any of those into a card, so the list is a query and a map. Slack
+calls this "Later"; it is the single feature most people say they cannot
+work without.
+
+**Done when.** "Remind me about this thread tomorrow" is two clicks, a
+message written at midnight lands at nine, and a saved list survives a
+reload on another device.
+
+---
+
+### R14-P4 — Rich messages: what a body can carry
+
+**R14-P4.1 Markdown-lite — M.** Bold, italic, inline code, fenced code
+blocks, quotes and lists, rendered by a small deterministic renderer —
+NOT BlockSuite, which R6.5 reserved for documents. `shiki` is already a
+dependency for highlighting. Cmd+B/I and ``` toggling in the composer.
+Agent messages already arrive in markdown and are shown raw today; this
+fixes both authors at once.
+
+**R14-P4.2 Attachments — M.** Payload upload collections and `sharp` are
+installed; `components/thread/Attachment.tsx` already renders attachments
+for agent threads. Drag-drop or paste into the composer creates a media
+document and an `attachments` array on the message; images inline at a
+bounded height, files as chips with size and type. Access follows the
+channel's access, not the file's.
+
+**R14-P4.3 Link unfurls — M.** Internal first: a pasted page, task, run or
+message URL becomes a card, and `lib/entity-links.server.ts` already
+resolves those. External: a server action that fetches OpenGraph tags into
+an `unfurls(url, title, description, image, fetched_at)` cache table with a
+size and time cap, so one paste is one fetch and the feed never fetches.
+Unfurl on send, never on render — D0.
+
+**Done when.** A code snippet, a screenshot and a link to a task all look
+like what they are, and none of them costs the feed a render-time request.
+
+---
+
+### R14-P5 — The workflow builder — L
+
+Slack's Workflow Builder is a form over triggers and actions. Every trigger
+and every action it offers already exists here as code: new message in a
+channel, a reaction added, a schedule (Hermes crons), a task changing
+status (the dispatcher), a run finishing; and post a message, create a
+task, assign it, start an agent, send a push. What is missing is the table
+and the form.
+
+`workflows(team_id, trigger, condition, action, enabled, created_by)` with
+a settings page of trigger → condition → action rows, and one function in
+the dispatcher tick that evaluates enabled workflows against the events it
+already sees. Conditions are a small, closed set (message matches, reaction
+is, status becomes, from slot is) — no expression language. This is the one
+L item in the pillar and it makes P6.9 and P6.10 configuration rather than
+features.
+
+**Done when.** "When someone reacts 🎫 in #support, open a task assigned to
+@triage and reply in thread with the link" is built by a non-engineer in
+under a minute and runs without anyone restarting anything.
+
+---
+
+### R14-P6 — What Slack cannot do, and we can for almost nothing
+
+None of these is a moonshot. Each one is a column or a chip in front of
+something the harness already records because agents, not people, wrote
+the messages.
+
+**R14-P6.1 Expand-to-diff on agent messages — S.** Every agent message
+carries `run_id`; `@git-diff-view/react` and `lib/hermes/unified-diff.ts`
+already render diffs. An agent's "done, refactored the auth module" gains
+a disclosure that unfolds the actual diff beneath the row, fetched on
+expand only. Slack shows words. We show the work.
+
+**R14-P6.2 Approve or deny from the push notification — S.** `web-push`
+supports action buttons and the `approval` push event already exists. Two
+buttons on the lock screen resolve the approval through the existing
+approvals route without opening the app. No chat product can do this,
+because no chat product owns the agent runtime.
+
+**R14-P6.3 Promote a thread to a page — S/M.** One action turns a thread
+into a BlockSuite page, with `lib/provenance.ts` stamping which message
+each block came from and who wrote it. Slack Canvas is a document that
+forgets where it came from; ours is a live CRDT page with native databases
+and a back-link to the conversation that produced it.
+
+**R14-P6.4 Ask the workspace, with citations — S (after P1.1).**
+`components/ask/ask-view.tsx` and transcript search exist. Slack sells
+this as a paid add-on; here it is a search over messages, pages and run
+transcripts plus a prompt. "What did we decide about rate limiting" answers
+with the thread, the page and the run that implemented it, each linked.
+
+**R14-P6.5 A cost meter per channel, thread and agent — S.**
+`lib/broker/usage.ts` already meters tokens per run. A chip in the channel
+header — spend today, tokens — with drill-down per agent and per thread.
+Coworkers that are billed by the token should have a price on the wall.
+
+**R14-P6.6 `/term` — a shared terminal in the channel — M.** `node-pty` and
+`components/thread/TerminalBlock.tsx` exist. `/term` opens a pane bound to
+the team's worktree that every member sees live and the room's leader may
+type into; it closes with the pane and leaves a transcript row. A "let me
+show you" for engineering that a voice huddle cannot be.
+
+**R14-P6.7 Diagnostic presence — S.** Slack presence is a green dot. An
+agent slot's dot reads from run status and the reliability tables that
+already exist: "working on #142 · 3 min", "waiting for your approval",
+"failed — dead-lettered". The roster dot and its tooltip, nothing more.
+
+**R14-P6.8 Two-way task chip on messages — S.** `/task` creates a task
+from a message and `TaskLinks` records the pair. The chip on the message
+now shows the task's live status and moves when the board moves. Slack
+Lists link one way and go stale; here the chat row is a view of the task.
+
+**R14-P6.9 Reaction as command — S, or P5 configuration.** 👀 claims a
+message for triage, ✅ closes its linked task, 🤖 hands it to the channel's
+leader agent, 📌 pins it. The reactions table exists; the dispatcher tick
+reads new reactions and acts. Each of these is a paid workflow in Slack.
+
+**R14-P6.10 Scheduled agent stand-ups — S.** Hermes crons exist. "Every
+weekday 09:00, @scribe posts what changed in #eng" — from worktree
+commits, closed tasks and dead-lettered runs — is a cron whose prompt
+template is the whole feature. A Slack workflow posts static text; this
+posts a synthesised, linked report.
+
+**Done when.** A person watching a channel for one minute can see what an
+agent changed, what it cost, what it is waiting on, and approve it from
+their phone — without opening a second tab.
+
+---
+
+### R14 — Ordering, and why
+
+1. **P1.1 search, then P6.4 ask** — search is the base and the second is a
+   prompt over it.
+2. **P1.2, P1.3, P1.4** — edit, pins, permalinks: all S, all table stakes,
+   all done in one sitting.
+3. **P2.2 and P6.7 together** — human and diagnostic presence share the
+   heartbeat; build them as siblings.
+4. **P3.1 then P3.2** — reminders and scheduled send are one mechanism.
+5. **P6.1 and P6.2** — expand-to-diff and approve-from-push are the demo
+   that makes someone say "this is not Slack".
+6. **P2.1 DMs** — the schema has been waiting since 0013.
+7. Everything else in phase order; P5 last, once the triggers it wraps have
+   all been exercised by hand.
+
+**Not in this pillar.** Voice or video (a WebRTC signalling server is a
+different product); Slack Connect between workspaces (R11's reasoning
+applies — a sync problem, not a chat one); a message-level CRDT (D0, R6.5
+and the R12/R13 exclusions all stand — the feed stays a list of rows).
+
+---
+
 ## What these three roadmaps do NOT include, deliberately
 
 - **No new product surface.** Not one of these phases adds a feature. If a
   phase finds itself designing a screen that does not exist yet, it has
   drifted.
+  R14 is the deliberate exception: it is the one pillar whose purpose IS
+  new surface, and it is bounded by its own "Not in this pillar" list.
 - **No GitHub sync.** R11 stays deferred, for the reason recorded there.
 - **No CRDT anywhere new.** R13 touches tables and properties; it does not
   move a feed into Yjs. D0's first rule is unchanged.
