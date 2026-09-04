@@ -2064,8 +2064,203 @@ their phone — without opening a second tab.
 
 ---
 
+### R14-P0 — The shell: one channel, not four containers
+
+Everything below R14-P1 assumed the channel's chrome was settled. It is not.
+Verified against the actual render tree today
+(`components/teams/team-room.tsx`, `channel-view.tsx`, `thread-pane.tsx`,
+`canvas-pane.tsx`): a message sits inside a rounded, bordered feed container,
+inside the room's flex row, inside the page's own padding — three visible
+boxes before the message itself, plus a fourth when the thread or canvas pane
+is open, each with its own `rounded-xl border`. Slack has exactly one visible
+boundary: the divider between panes. This phase closes that gap before
+building anything else on top of it, because every item after this one
+mounts inside this shell.
+
+**R14-P0.1 Flatten the chrome — S.** Remove the nested `rounded-xl border`
+wrappers from the feed, thread and canvas containers in favour of the page's
+own edge and the `PaneDivider` hairlines already built in R12-P3.4. One
+outer boundary (the window/page edge), one moving boundary (the divider),
+nothing else. The message row, the composer and the header keep their own
+internal spacing; what goes away is the box drawn AROUND each pane.
+
+**R14-P0.2 Canvas, History and Messages as tabs, not a side pane toggle —
+M.** Slack's own pattern (confirmed against the reference screenshot): a
+tab strip under the channel name — **Messages** (default), **Canvas**, plus
+whatever else a channel has. Today `canvasOpen` is a boolean that opens a
+THIRD pane beside the feed and the thread (`team-room.tsx`); this replaces
+that with a tab bar reusing the same `DetailLayoutTab` shape
+`agent-detail-view.tsx` already has for `extraTabs`. Selecting Canvas
+REPLACES the feed in the main pane rather than sitting beside it — the
+thread pane, when open, still docks to the right of whichever tab is active,
+because a thread is a conversation about whatever you're looking at, not a
+second view of it. The URL carries the active tab (`?view=` already exists
+for channel/lanes/board — this is a sibling switch, not a new mechanism).
+
+**R14-P0.3 History becomes a tab, not a route.** The Work route today is a
+separate page (`/work?session=`) that a "See full run" link navigates away
+to. That stays as the deep-link target for a specific run (bookmarkable,
+shareable), but the channel gains its own **History** tab — the same
+session list Work's rail shows, scoped to sessions bound to this channel's
+slots, rendered in place. This is R14-P0.2's tab bar with one more tab, not
+a second surface: `Messages | Canvas | History`, each occupying the same
+main pane. Opening a specific run from History pushes into the run-detail
+slide-over (P0.5), not to a fourth page.
+
+**R14-P0.4 The composer gets a real toolbar and file attachments — M.**
+Two genuinely separate pieces of work, verified separately rather than
+assumed:
+- **Markdown-lite (R14-P4.1)**: bold/italic/code/quote/list, Cmd+B/I,
+  \`\`\` fencing — a small deterministic renderer, not BlockSuite (R6.5
+  still stands). Shiki is already a dependency.
+- **Attachments are NOT "flip a flag" work, despite what the existing
+  R14-P4.2 entry implies.** Verified: `sharp` is installed and wired into
+  `payload.config.ts`, but **no Payload collection anywhere has
+  `upload: true`** — there is no Media/Files collection at all today.
+  `components/thread/Attachment.tsx` is presentational only (it takes
+  `url`/`name`/`size` as props; it fetches nothing and stores nothing).
+  So this needs a genuinely new `collections/Media.ts` (`upload: true`,
+  workspace-scoped access, image variants via the already-wired `sharp`),
+  a presigned-or-direct upload action, and the composer wired to
+  drag-drop/paste into it. Corrected in place here so the phase's own
+  estimate stops understating the work.
+
+**R14-P0.5 A reusable run-detail slide-over, built once, used everywhere —
+M.** The exact ask behind the "view run" screenshot. Today "See full run"
+navigates to `/work?session=`, leaving the channel. `useRunEventStream`
+(the hook `pending-reply-row.tsx` already uses to stream a ghost row's
+output) takes a bare `runId` and a loader — it has no assumption about
+being mounted on the Work page specifically. So: one new component,
+`components/runs/run-detail-sheet.tsx`, a right-side sheet (Radix
+`Dialog.Content` styled to slide from the edge — no new dependency; this
+repo already ships Radix Dialog) that mounts `useRunEventStream` for
+whatever `runId` it's given and renders the SAME tool-call/bash-step/result
+list the transcript already knows how to draw. "See full run" in the
+channel opens this sheet in place; Work's own page can later open the same
+component instead of duplicating the layout — one implementation, two
+entry points, matching this session's own rule about not building a second
+way to do something the first way already does correctly.
+
+**R14-P0.6 Runtime catalog picker — S/M**, corrected against R12-P4.2's own
+scope. `components/runtimes/add-profile-form.tsx` today is a bare text
+field for a command name — there is no catalog of known runtime kinds to
+pick from. New: a static `lib/runtimes/catalog.ts` (name, icon, the
+command/args a fresh install actually needs, a "CLI needed" vs "Ready"
+badge computed from the SAME probe this app already runs) rendered as a
+searchable list + detail pane, matching the reference screenshots exactly.
+Picking one pre-fills `AddRuntimeProfileForm` rather than replacing it — a
+person who already knows their command can still type one. D2 still
+governs: this catalog describes how to REACH a runtime; it asserts nothing
+about that runtime's capabilities, which still come only from its own ACP
+handshake.
+
+**R14-P0.7 Agent detail page: Overview / Work / Capabilities / Settings —
+S.** `agent-detail-view.tsx` already has the `extraTabs` mechanism this
+session built for the Access tab. Restructure the existing tabs into four:
+Overview (identity, what it's bound to), Work (a status board of this
+agent's tasks — `getTaskAgentColumnsData`/`getAgentUsageRollup` already
+compute exactly this data for the tasks board's own agent columns; this is
+a second renderer of an existing query, not a new one), Capabilities
+(skills + connectors, from this session's earlier work), Settings (the
+existing form). No new data model.
+
+**Done when.** A channel open at full width shows exactly one moving
+boundary (the divider) and no nested boxes; Canvas and History are one
+click away as tabs, never a second pane fighting the thread for space; a
+file dropped into the composer appears as a real attachment on the sent
+message; and "see full run" never leaves the channel.
+
+---
+
+### R14-P0.8 — A task is a thread, and the popup that creates one
+
+**The decision this section exists to state plainly.** Two task systems
+already exist and this does NOT merge them, because they answer different
+questions. `collections/Tasks.ts` (Payload) is a project task — it has a
+`project`, an `assignee`, an `agent`, a `page` — and it is what the task
+board shows. `team_tasks` (the broker) is a channel's own lightweight
+coordination item — `createTeamTask` takes a subject and an owner slot,
+nothing else, and `team_messages.task_id` already points at THAT table, not
+at `collections/Tasks.ts`. Collapsing them would mean either giving every
+room task a project it doesn't have, or giving every project task a
+channel it doesn't need — both wrong, for the same reason R11 declined to
+sync GitHub issues into this app's tasks: two owners of one fact is a sync
+problem, not a feature.
+
+So: the popup this section builds creates a **project task**
+(`collections/Tasks.ts`) when a project is chosen, and it is that row —
+never `team_tasks` — that gains the thread. A new nullable column,
+`tasks.channelThreadRootId` (a bigint referencing `team_messages.id`, unfka'd
+across the Payload/broker boundary exactly the way `Invitations.channelId`
+and `AccessGrants.objectId` already are), is the whole schema change. A
+project task with no thread behaves exactly as it does today; nothing
+about the existing task board changes.
+
+**R14-P0.8.1 The "New task" button and its popup — S/M.** A button beside
+the composer in both the channel and the thread pane. The popup: a prompt
+textarea (becomes the task's description), a project picker, an optional
+agent picker (scoped to that project, reusing whatever the task board's own
+assignment picker already uses), and Create. On submit: a `tasks` row is
+created, a NEW thread root is posted in the current channel ("📋 <title> —
+opened as a task", carrying the real chip from R14-P6.8, not a stub), and
+`channelThreadRootId` is set to that root's id in the same transaction. If
+an agent was picked, the existing dispatch path (`enqueueRun`) starts it
+against that task exactly as assigning a task from the board already does
+— this button is a second ENTRY POINT into dispatch, not a second dispatch
+mechanism.
+
+**R14-P0.8.2 Opening a task shows its thread, and vice versa — S.** The
+task detail view gains a "View thread" link when `channelThreadRootId` is
+set; the channel's thread pane, when opened on that root, shows a task chip
+at the top with live status (R14-P6.8's two-way chip, generalised from
+"message promoted to task" to "task authored with a thread from the
+start" — one chip component, two ways to arrive at the same state).
+
+**R14-P0.8.3 Subtasks, from the thread — S.** A "Create subtask" button
+inside a task-carrying thread, same popup as P0.8.1 with the project
+pre-filled and locked. On submit: a new `tasks` row, a
+`task-links` row (`fromTask` = parent, `toTask` = new, `linkType =
+'parentOf'` — the exact vocabulary `collections/TaskLinks.ts` already
+declares, unused by any UI today), and the reply posted as a THREAD REPLY
+under the parent's existing root rather than a new thread — a task's whole
+family of subtasks lives in one conversation, which is the point of making
+a task a thread in the first place rather than just a linked record.
+
+**Done when.** Creating a task from a channel with a project and an agent
+selected starts a real run against that task, in a thread you can watch
+without leaving the channel; opening that task later shows the same
+thread; and a subtask created from inside it is a reply, not a new room to
+go find.
+
+---
+
+### R14-P0.9 — Inbox: the Activity view, drawn
+
+This is R14-P2.4 ("The Activity view"), UNCHANGED in mechanism — three
+tabs over `listUserMentions` and thread/reaction queries that already
+exist — given the concrete visual the reference screenshot asks for: a
+left rail (Inbox / Projects / Agents, with Channels beneath, mirroring the
+sidebar's own sections rather than inventing new ones) and a chronological
+list where each row states its OWN relationship to the reader before its
+content — "Thread in #general", "Mentioned in #eng", "DM from Ritik" — the
+exact three-line pattern in the screenshot, each label driven by
+`InboxItemKind` (already a closed, typed set in
+`components/inbox/inbox-list.tsx`) rather than free text. No new data path;
+this is P2.4's own scope, drawn rather than left to a later pass.
+
+---
+
 ### R14 — Ordering, and why
 
+0. **P0 first, all of it, before P1.1.** Every phase below renders inside
+   the channel's own shell — P0.1/P0.2 IS that shell. Building search
+   result rows, pins, or a cost chip against the current nested-container
+   layout would mean re-touching every one of them the day the shell
+   changes, which is exactly the rework this ordering rule exists to avoid.
+   P0.8 (task-as-thread) and P0.9 (inbox) are listed here rather than off
+   on their own because they were commissioned together and share the
+   run-detail sheet (P0.5) as a dependency — P0.9's rows link into it the
+   same way P0.8's thread view does.
 1. **P1.1 search, then P6.4 ask** — search is the base and the second is a
    prompt over it.
 2. **P1.2, P1.3, P1.4** — edit, pins, permalinks: all S, all table stakes,
