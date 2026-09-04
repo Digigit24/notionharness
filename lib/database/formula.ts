@@ -202,15 +202,16 @@ export function parseFormula(source: string): Node {
 
   function orExpr(): Node {
     let left = andExpr()
-    let op: string | null
-    while ((op = matchOp('or', '||'))) left = { kind: 'binary', op: 'or', left, right: andExpr() }
+    // Both spellings parse to one node: `||` and `or` are the same operator,
+    // and carrying the spelling into the AST would mean the evaluator had to
+    // know about it too.
+    while (matchOp('or', '||')) left = { kind: 'binary', op: 'or', left, right: andExpr() }
     return left
   }
 
   function andExpr(): Node {
     let left = equality()
-    let op: string | null
-    while ((op = matchOp('and', '&&'))) left = { kind: 'binary', op: 'and', left, right: equality() }
+    while (matchOp('and', '&&')) left = { kind: 'binary', op: 'and', left, right: equality() }
     return left
   }
 

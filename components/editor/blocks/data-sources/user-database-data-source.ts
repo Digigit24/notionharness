@@ -1,9 +1,19 @@
 import { propertyPresets, type PropertyMetaConfig, type TypeInstance } from '@/lib/blocksuite-data-view'
 import type { InsertToPosition } from '@/lib/blocksuite-affine-shared'
-import { signal, type ReadonlySignal } from '@preact/signals-core'
+import { computed, signal, type ReadonlySignal } from '@preact/signals-core'
 import { GenericDataSource, type GenericField, type GenericRecord } from './generic-data-source'
 import { showClientError } from '@/lib/client-notify'
 import { relationPropertyConfig } from './relation-property'
+import { formulaPropertyConfig, rollupPropertyConfig } from './computed-property'
+import {
+  evaluateComputed,
+  keyOf,
+  type ComputedSpec,
+  type DatabaseLike,
+  type PropertyLike,
+  type RollupAggregation,
+} from '@/lib/database/computed'
+import { toCell } from '@/lib/database/values'
 import { openRecordDetailPanel } from '../native-database/record-detail-panel'
 import { html, nothing } from 'lit'
 
@@ -66,6 +76,11 @@ export class UserDatabaseDataSource extends GenericDataSource {
       propertyPresets.multiSelectPropertyConfig,
       propertyPresets.datePropertyConfig,
       relationPropertyConfig,
+      // R13-P2 - computed properties. Listed last because they are the two
+      // that read the rest of the row rather than holding a value of their
+      // own, and the property picker reads top to bottom.
+      formulaPropertyConfig,
+      rollupPropertyConfig,
     ] as PropertyMetaConfig[]
   }
 
@@ -353,12 +368,145 @@ export class UserDatabaseDataSource extends GenericDataSource {
     })
   }
 
+  // --- computed properties (R13-P2) ---------------------------------------
+  //
+  // A formula or rollup cell holds no stored value: it is derived from this
+  // row, and - for a rollup - from rows in another database entirely. So the
+  // values live here, recomputed as a SET rather than one cell at a time.
+  //
+  // Why a whole-table pass instead of computing a cell when it is drawn: a
+  // formula over a rollup over a relation would otherwise resolve recursively
+  // per cell, which is the read-time N+1 D0 forbids with a memo table on top.
+  // `evaluateComputed` topologically sorts the properties and walks the rows
+  // once, so a two-thousand-row table is one pass rather than two thousand
+  // dependency resolutions.
+  //
+  // Signal-backed for the same reason `_targetDatabaseCache` is: cell
+  // renderers extend `SignalWatcher`, so reading this inside `render()` IS the
+  // subscription.
+  //
+  // DERIVED, not cached. `computed()` recomputes exactly when one of the
+  // signals it read has changed - the fields, the rows, or the relation cache -
+  // and not once otherwise. A hand-rolled cache with an explicit
+  // `recomputeDerived()` was the first version of this and it was wrong in the
+  // way every manual invalidation is wrong: every future edit path is a new
+  // chance to forget the call, and the symptom is a stale number that looks
+  // like a real one.
+  private readonly _computed = computed<Map<string, Map<string, unknown>>>(() => {
+    const databases = this._databasesForComputation()
+    if (databases.length === 0) return new Map()
+    const evaluated = evaluateComputed(databases)
+    const next = new Map<string, Map<string, unknown>>()
+    for (const [key, perRow] of evaluated) {
+      const cells = new Map<string, unknown>()
+      for (const [rowId, value] of perRow) cells.set(rowId, toCell(value))
+      next.set(key, cells)
+    }
+    return next
+  })
+
+  /** This database plus every target database already in the relation cache.
+   * A rollup whose target has not been fetched yet evaluates against no rows
+   * and renders empty, then recomputes when `loadTargetDatabase` resolves -
+   * which is the right order round: blocking a table's first paint on a second
+   * database's fetch is exactly what D0 rules out. */
+  private _databasesForComputation(): DatabaseLike[] {
+    const databaseId = this._databaseId
+    if (databaseId == null) return []
+    const toPropertyLike = (field: GenericField): PropertyLike => ({
+      id: field.id,
+      name: field.name,
+      type: field.type,
+      options: {
+        targetDatabaseId: field.options?.targetDatabaseId,
+        computed: this._computedSpecOf(field),
+      },
+    })
+    const self: DatabaseLike = {
+      id: databaseId,
+      properties: this._fields.value.map(toPropertyLike),
+      rows: this._records.value.map((record) => ({ id: record.id, cells: record.fields })),
+    }
+    const targets: DatabaseLike[] = []
+    for (const [id, entry] of this._targetDatabaseCache.value) {
+      if (id === databaseId) continue
+      targets.push({
+        id,
+        properties: entry.fields.map(toPropertyLike),
+        rows: entry.records.map((record) => ({ id: record.id, cells: record.fields })),
+      })
+    }
+    return [self, ...targets]
+  }
+
+  /**
+   * A field's computed definition, read out of the shape the property type
+   * actually stores.
+   *
+   * BlockSuite keeps a property's configuration in its own `data` bag, which
+   * this data source persists inside `field.options`. Rather than teach
+   * `lib/database` about that layout, the translation happens here - the same
+   * edge-of-the-data-source translation every other backend-native shape gets
+   * in this file.
+   */
+  private _computedSpecOf(field: GenericField): ComputedSpec | undefined {
+    const options = field.options as Record<string, unknown> | undefined
+    if (field.type === 'formula') {
+      const expression = typeof options?.expression === 'string' ? options.expression : ''
+      return expression.trim() === '' ? undefined : { kind: 'formula', expression }
+    }
+    if (field.type === 'rollup') {
+      const relationPropertyId = typeof options?.relationPropertyId === 'string' ? options.relationPropertyId : null
+      const targetPropertyId = typeof options?.targetPropertyId === 'string' ? options.targetPropertyId : null
+      // An unconfigured rollup is not an error - it is one somebody has not
+      // finished defining - so it computes to nothing rather than to a failure.
+      if (!relationPropertyId || !targetPropertyId) return undefined
+      return {
+        kind: 'rollup',
+        relationPropertyId,
+        targetPropertyId,
+        aggregation: (typeof options?.aggregation === 'string'
+          ? options.aggregation
+          : 'count_values') as RollupAggregation,
+      }
+    }
+    return undefined
+  }
+
+  /** The relation properties a rollup can read through. */
+  relationProperties(): Array<{ id: string; name: string; targetDatabaseId?: number }> {
+    return this._fields.value
+      .filter((field) => field.type === 'relation' && field.options?.targetDatabaseId != null)
+      .map((field) => ({ id: field.id, name: field.name, targetDatabaseId: field.options?.targetDatabaseId }))
+  }
+
+  /** The properties on the far side of a relation, loading that database if
+   * this is the first time anything has asked for it. */
+  async targetPropertiesFor(relationPropertyId: string): Promise<Array<{ id: string; name: string; type: string }>> {
+    const relation = this._fieldById(relationPropertyId)
+    const targetDatabaseId = relation?.options?.targetDatabaseId
+    if (targetDatabaseId == null) return []
+    const entry = await this.loadTargetDatabase(targetDatabaseId)
+    // A rollup over another computed property is legal - the dependency graph
+    // orders it - so nothing is filtered out here.
+    return entry.fields.map((field) => ({ id: field.id, name: field.name, type: field.type }))
+  }
+
   // --- cells --------------------------------------------------------------
   // Values are stored exactly as BlockSuite hands them over, keyed by field
   // id — no name/id or color-token translation needed, since this data
   // source owns the storage format.
 
   cellValueGet(rowId: string, propertyId: string): unknown {
+    // A computed property has no stored cell. Reading `fields[propertyId]` for
+    // one would return whatever an older version of this code happened to
+    // write there, which is worse than returning nothing.
+    const field = this._fieldById(propertyId)
+    if (field && (field.type === 'formula' || field.type === 'rollup')) {
+      const databaseId = this._databaseId
+      if (databaseId == null) return null
+      return this._computed.value.get(keyOf(databaseId, propertyId))?.get(rowId) ?? null
+    }
     return this._recordById(rowId)?.fields[propertyId]
   }
 

@@ -449,7 +449,8 @@ export function validateFormula(expression: string): { at: number; message: stri
     return null
   } catch (error) {
     if (error && typeof error === 'object' && 'at' in error) {
-      return { at: Number((error as { at: unknown }).at), message: (error as Error).message }
+      const detail = error as { at?: unknown; message?: unknown }
+      return { at: Number(detail.at ?? 0), message: String(detail.message ?? 'That formula cannot be read.') }
     }
     return { at: 0, message: error instanceof Error ? error.message : 'That formula cannot be read.' }
   }
