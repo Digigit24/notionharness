@@ -1,9 +1,19 @@
+// P5.3 — `RunWorktreeManager` now takes a Postgres advisory lock around every
+// mutating operation (`lib/run-worktrees/lock.ts`), so this script needs the
+// same env-before-import sequencing every other DB-touching script in this
+// repo uses (see `scripts/reclaim-worktrees.ts`) — `DATABASE_URI` has to be
+// in `process.env` before `../lib/run-worktrees/manager` is imported, since
+// that import chain reaches `lib/broker/db.ts` at module-eval time.
+import nextEnv from '@next/env'
+nextEnv.loadEnvConfig(process.cwd())
+
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { RunWorktreeManager } from '../lib/run-worktrees/manager'
+const { RunWorktreeManager } = await import('../lib/run-worktrees/manager')
+const { closeBrokerPool } = await import('../lib/broker/db')
 
 const exec = promisify(execFile)
 const repo = await mkdtemp(join(tmpdir(), 'notionforge-worktree-source-'))
@@ -25,4 +35,5 @@ await exec('git', ['add', '.'], { cwd: one.worktreePath }); await exec('git', ['
 await exec('git', ['add', '.'], { cwd: two.worktreePath }); await exec('git', ['commit', '-m', 'two'], { cwd: two.worktreePath })
 if ((await readFile(join(one.worktreePath, 'two.txt')).catch(() => null)) !== null) throw new Error('worktrees are not isolated')
 await manager.remove(one); await manager.remove(two)
+await closeBrokerPool()
 console.log('Run worktree concurrency/isolation smoke test passed')

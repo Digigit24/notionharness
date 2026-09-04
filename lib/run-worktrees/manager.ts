@@ -1,6 +1,5 @@
 /**
- * Shared bare clone + isolated per-run worktrees. The mutex is in-process by
- * design (see R12-P5.3 for why that stopped being sufficient, and the fix).
+ * Shared bare clone + isolated per-run worktrees.
  *
  * R12-P5.1 — every git invocation here goes through `lib/git/repo.ts`'s
  * hardened `git()`/`gitBare()` (explicit cwd, a timeout, `windowsHide`,
@@ -14,12 +13,22 @@
  * on boot — see `app/api/dispatcher/tick/route.ts`) removes `agent/run/*`
  * branches left behind by a worker that died between creating one and the
  * run ever settling.
+ *
+ * R12-P5.3 — the mutex is real across processes, not just in-process. This
+ * file used to say "the mutex is in-process by design", which was true only
+ * while exactly one Node process ever touched a given bare clone — false the
+ * moment a dev server and a dispatcher loop (or two dispatcher workers) share
+ * one machine, which this project does today. `withLock` below still
+ * serialises same-process callers with no I/O (see its own comment for why
+ * that layer stays), but the actual cross-process exclusion is
+ * `./lock.ts`'s Postgres advisory lock.
  */
 import { access, mkdir, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { git, gitBare } from '@/lib/git/repo'
 import { isAppFailure, raise } from '@/lib/failures'
 import { logger } from '@/lib/logger'
+import { withRepoLock } from './lock'
 
 const RUN_ID_RE = /^[A-Za-z0-9_-]+$/
 
@@ -88,6 +97,12 @@ export function describeRunWorktree(rootDir: string, source: string, runId: stri
   }
 }
 
+// P5.3 — two layers, cheapest first. `locks` serialises calls made by THIS
+// process with no I/O at all, so two run-creations racing inside one
+// dispatcher never both reach for a database connection just to find out
+// they need to wait anyway — only one `pg_advisory_lock` connection is ever
+// held per process at a time, not one per concurrent local caller.
+// `withRepoLock` (./lock.ts) is what makes the mutex true ACROSS processes.
 const locks = new Map<string, Promise<void>>()
 
 async function withLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
@@ -97,7 +112,9 @@ async function withLock<T>(key: string, operation: () => Promise<T>): Promise<T>
   const queued = prior.then(() => current)
   locks.set(key, queued)
   await prior
-  try { return await operation() } finally {
+  try {
+    return await withRepoLock(key, operation)
+  } finally {
     release()
     if (locks.get(key) === queued) locks.delete(key)
   }
@@ -340,54 +357,60 @@ export async function reapOrphanedWorktrees(barePath: string, liveRunIds: Readon
     return report
   }
 
-  const worktreeByBranch = await listWorktreeBranches(barePath)
+  // P5.3 — the same cross-process lock `create()`/`remove()` take, so the
+  // reaper (run once on boot, possibly by more than one process at once if a
+  // dev server and a dispatcher loop both start around the same time) cannot
+  // interleave with an in-flight `create()` on the same bare clone.
+  await withRepoLock(barePath, async () => {
+    const worktreeByBranch = await listWorktreeBranches(barePath)
 
-  await gitBare(barePath, ['worktree', 'prune']).then(
-    () => {
-      report.prunedWorktrees = true
-    },
-    (err) => {
-      report.failures.push({ branch: '(prune)', error: err instanceof Error ? err.message : String(err) })
-    },
-  )
+    await gitBare(barePath, ['worktree', 'prune']).then(
+      () => {
+        report.prunedWorktrees = true
+      },
+      (err) => {
+        report.failures.push({ branch: '(prune)', error: err instanceof Error ? err.message : String(err) })
+      },
+    )
 
-  const out = await gitBare(barePath, ['for-each-ref', '--format=%(refname:short)', 'refs/heads/agent/run']).catch(
-    () => '',
-  )
-  const branches = out
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
+    const out = await gitBare(barePath, ['for-each-ref', '--format=%(refname:short)', 'refs/heads/agent/run']).catch(
+      () => '',
+    )
+    const branches = out
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
 
-  for (const branch of branches) {
-    const match = RUN_BRANCH_RE.exec(branch)
-    if (!match) continue
-    const runId = match[1]
-    if (liveRunIds.has(runId)) continue
+    for (const branch of branches) {
+      const match = RUN_BRANCH_RE.exec(branch)
+      if (!match) continue
+      const runId = match[1]
+      if (liveRunIds.has(runId)) continue
 
-    const worktreePath = worktreeByBranch.get(branch)
-    if (worktreePath) {
-      logger.warn('reaping an orphaned run worktree — no matching run row, force-removing whatever it held', {
-        barePath,
-        branch,
-        worktreePath,
-      })
+      const worktreePath = worktreeByBranch.get(branch)
+      if (worktreePath) {
+        logger.warn('reaping an orphaned run worktree — no matching run row, force-removing whatever it held', {
+          barePath,
+          branch,
+          worktreePath,
+        })
+        try {
+          await gitBare(barePath, ['worktree', 'remove', '--force', worktreePath])
+          report.removedWorktrees.push(worktreePath)
+        } catch (err) {
+          report.failures.push({ branch, error: err instanceof Error ? err.message : String(err) })
+          continue
+        }
+      }
+
       try {
-        await gitBare(barePath, ['worktree', 'remove', '--force', worktreePath])
-        report.removedWorktrees.push(worktreePath)
+        await gitBare(barePath, ['branch', '--delete', '--force', branch])
+        report.removedBranches.push(branch)
       } catch (err) {
         report.failures.push({ branch, error: err instanceof Error ? err.message : String(err) })
-        continue
       }
     }
-
-    try {
-      await gitBare(barePath, ['branch', '--delete', '--force', branch])
-      report.removedBranches.push(branch)
-    } catch (err) {
-      report.failures.push({ branch, error: err instanceof Error ? err.message : String(err) })
-    }
-  }
+  })
 
   // Named with real content (which branches, how many), not "cleaning up" —
   // P5.6 applies to an automated path exactly as much as to a button.

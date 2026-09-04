@@ -7,12 +7,20 @@
 // error".
 //
 //   npx tsx scripts/test-orphan-reaper.ts
+//
+// P5.3 — `RunWorktreeManager` and `reapOrphanedWorktrees` both take a
+// Postgres advisory lock now, so — same as `scripts/test-run-worktrees.ts`
+// — env has to load before `../lib/run-worktrees/manager` is imported.
+import nextEnv from '@next/env'
+nextEnv.loadEnvConfig(process.cwd())
+
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { RunWorktreeManager, reapOrphanedWorktrees, barePathFor } from '../lib/run-worktrees/manager'
+const { RunWorktreeManager, reapOrphanedWorktrees, barePathFor } = await import('../lib/run-worktrees/manager')
+const { closeBrokerPool } = await import('../lib/broker/db')
 
 const exec = promisify(execFile)
 
@@ -77,7 +85,9 @@ async function main() {
   console.log('Orphan reaper test passed:', { removed: report.removedBranches })
 }
 
-main().catch((err) => {
-  console.error(err)
-  process.exitCode = 1
-})
+main()
+  .catch((err) => {
+    console.error(err)
+    process.exitCode = 1
+  })
+  .finally(() => closeBrokerPool())
