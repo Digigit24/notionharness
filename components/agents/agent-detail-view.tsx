@@ -19,7 +19,7 @@ import { formatTimestamp } from '@/lib/relative-time'
 
 // ROADMAP B-1 (Detail) — the real, linkable home for one agent, conformed to
 // the shared <DetailLayout> primitive (components/layout/detail-layout.tsx)
-// the same way runs/[runId]/review already is (see review-panel.tsx). Three
+// the same way runs/[runId]/review already is (see components/review/). Three
 // URL-backed tabs:
 //   - Overview: read-only metadata summary. Deliberately does not rebuild
 //     the editor form — that's what Settings is for.

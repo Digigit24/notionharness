@@ -227,7 +227,18 @@ function buildPromptText(task: Task | null, agent: Agent, run: Run): string {
   // task-authored content available to hand the agent today. Richer prompt
   // construction (task description, linked page content, thread context)
   // is real future work, not something to fake here.
-  parts.push(task ? `Task: ${task.title}` : run.prompt || 'No task is attached to this run.')
+  if (task) parts.push(`Task: ${task.title}`)
+
+  // The run's own prompt, ALWAYS, not just when there is no task.
+  //
+  // This used to be `task ? title : prompt`, so a run that had both — a task
+  // AND something specific to say — silently discarded the something. That is
+  // not hypothetical: R5.3 batches a reviewer's line comments into one prompt
+  // and enqueues it against the run's task, and every word of it was being
+  // dropped on the floor. The agent received "Task: <title>" and no idea why
+  // it had been woken up.
+  if (run.prompt) parts.push(run.prompt)
+  if (!task && !run.prompt) parts.push('No task is attached to this run.')
   return parts.join('\n\n')
 }
 

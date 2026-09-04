@@ -430,9 +430,29 @@ export async function claimableTasks(teamId: number): Promise<TeamTask[]> {
 export async function claimTeamTask(taskId: number, slotId: number): Promise<TeamTask | null> {
   const pool = getBrokerPool()
   const { rows } = await pool.query(
+    // The dependency check is repeated from `claimableTasks` ON PURPOSE, and
+    // it must stay here rather than only there.
+    //
+    // `claimableTasks` decides what to OFFER; this decides what may be TAKEN.
+    // Without the check in the UPDATE, a member could claim a task whose
+    // prerequisites are unfinished — by holding a stale board, by racing a
+    // dependency that had not settled yet, or simply by calling the tool
+    // directly, since `team_claim_task` takes an id. That would quietly break
+    // the invariant the whole design rests on (R6.3: the board is
+    // authoritative), and it would break it in the least visible way: work
+    // started too early looks like work.
     `UPDATE team_tasks
         SET owner_slot_id = $2, status = 'claimed', updated_at = now()
-      WHERE id = $1 AND owner_slot_id IS NULL AND status IN ('open', 'blocked')
+      WHERE id = $1
+        AND owner_slot_id IS NULL
+        AND status IN ('open', 'blocked')
+        AND NOT EXISTS (
+          SELECT 1
+            FROM team_task_deps dep
+            JOIN team_tasks blocker ON blocker.id = dep.blocked_by
+           WHERE dep.task_id = team_tasks.id
+             AND blocker.status NOT IN ('done', 'cancelled')
+        )
       RETURNING id`,
     [taskId, slotId],
   )
@@ -509,4 +529,27 @@ export async function reportTeamTaskDone(input: {
   } finally {
     client.release()
   }
+}
+
+
+/**
+ * Returns a task to the pool.
+ *
+ * Setting a task's status back to `open` is not enough on its own:
+ * `owner_slot_id` stays set, and both `claimableTasks` and `claimTeamTask`
+ * require it to be NULL. The task then shows as open on the board and is
+ * unclaimable by anyone, forever — a dead end reachable by an ordinary status
+ * change, which is why releasing is its own operation rather than something a
+ * caller is expected to remember to do in two statements.
+ */
+export async function releaseTeamTask(taskId: number): Promise<void> {
+  const pool = getBrokerPool()
+  await pool.query(
+    `UPDATE team_tasks
+        SET owner_slot_id = NULL,
+            status = CASE WHEN status IN ('done', 'cancelled') THEN status ELSE 'open' END,
+            updated_at = now()
+      WHERE id = $1`,
+    [taskId],
+  )
 }

@@ -235,13 +235,20 @@ export async function pushSession(
     return { pushed: true, detail: `Pushed ${branch}, but gh is not available to open a pull request.` }
   }
   const title = options.title?.trim() || `Changes from ${branch}`
-  const args = ['pr', 'create', '--head', branch, '--title', title, '--body', options.body?.trim() || '']
-  const out = await git(repo.dir, ['!gh', ...args]).catch(() => null)
-  // `git()` only runs git, so the PR is created through the same execFile
-  // helper via `gh` directly rather than smuggling it through a git arg.
-  void out
-  const { runGh } = await import('@/lib/git/repo')
-  const created = await runGh(repo.dir, args, 120_000)
-  const url = created.trim().split('\n').find((line) => line.startsWith('http')) ?? undefined
+  // `gh` directly, through the same execFile helper `readGhStatus` uses. An
+  // earlier version of this smuggled the arguments through `git(...)` with a
+  // sentinel first element, which actually ran `git !gh pr create`, failed,
+  // and had its failure swallowed — a wasted process spawn on every pull
+  // request, invisible because the real call came straight after it.
+  const created = await runGh(
+    repo.dir,
+    ['pr', 'create', '--head', branch, '--title', title, '--body', options.body?.trim() || ''],
+    120_000,
+  )
+  // `gh pr create` prints the new PR's URL on its own line.
+  const url = created
+    .trim()
+    .split(String.fromCharCode(10))
+    .find((line) => line.startsWith('http'))
   return { pushed: true, prUrl: url, detail: url ? `Opened ${url}` : `Pushed ${branch}.` }
 }

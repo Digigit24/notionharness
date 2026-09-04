@@ -604,12 +604,51 @@ export interface Notification {
  */
 export interface Artifact {
   id: number;
-  task: number | Task;
+  /**
+   * The tenancy boundary. Every artifact belongs to exactly one workspace.
+   */
+  workspace: number | Workspace;
   name: string;
   /**
-   * Reference to the artifact's content — a URL for now.
+   * 'page' points at a real BlockSuite document; 'html' carries its body in htmlContent.
    */
-  url: string;
+  kind: 'page' | 'html';
+  /**
+   * The document itself, when kind is "page". The artifact is only a pointer — docState, search text and history stay in Pages.
+   */
+  page?: (number | null) | Page;
+  /**
+   * BlockSuite block id inside `page` that the authoring run owns and appends under. Set by lib/artifacts.ts; never edited by hand.
+   */
+  pageSubtreeBlockId?: string | null;
+  /**
+   * The document body, when kind is "html". Rendered sandboxed and never same-origin (R8.7).
+   */
+  htmlContent?: string | null;
+  /**
+   * The field the R8.3 placement rule turns on. Empty means loose — the artifact sits in the Artifacts inbox. Setting it MOVES the artifact (and its page) into that project and out of the inbox.
+   */
+  project?: (number | null) | Project;
+  /**
+   * chat_sessions.id of the conversation that produced this, if any. Not a foreign key — see the field comment.
+   */
+  session?: number | null;
+  /**
+   * runs.id of the run that produced this, if any. Not a foreign key — see the `session` field comment.
+   */
+  run?: number | null;
+  /**
+   * Which agent authored it, so the Artifacts list can be filtered by author. Empty for an artifact a human made.
+   */
+  createdByAgent?: (number | null) | Agent;
+  /**
+   * The task this came out of, if it came out of one. Optional since R8.2.
+   */
+  task?: (number | null) | Task;
+  /**
+   * Legacy P2.1 external reference. Page and HTML artifacts leave this empty; their address derives from the record.
+   */
+  url?: string | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -1220,8 +1259,17 @@ export interface NotificationsSelect<T extends boolean = true> {
  * via the `definition` "artifacts_select".
  */
 export interface ArtifactsSelect<T extends boolean = true> {
-  task?: T;
+  workspace?: T;
   name?: T;
+  kind?: T;
+  page?: T;
+  pageSubtreeBlockId?: T;
+  htmlContent?: T;
+  project?: T;
+  session?: T;
+  run?: T;
+  createdByAgent?: T;
+  task?: T;
   url?: T;
   updatedAt?: T;
   createdAt?: T;

@@ -69,6 +69,7 @@ export {
   listTeams,
   markTeamMessagesRead,
   readTeamInbox,
+  releaseTeamTask,
   removeTeamMember,
   reportTeamTaskDone,
   sendTeamMessage,

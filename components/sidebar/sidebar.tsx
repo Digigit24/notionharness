@@ -3,27 +3,7 @@
 import { useEffect, useMemo, useOptimistic, useState, useTransition } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import Link from 'next/link'
-import {
-  Bot,
-  ChevronDown,
-  ChevronRight,
-  ChevronsLeft,
-  ChevronsRight,
-  FolderKanban,
-  History,
-  Activity,
-  GitPullRequest,
-  Home,
-  Inbox,
-  ListTodo,
-  LogOut,
-  MessageCircle,
-  Plus,
-  Search,
-  Settings,
-  Trash2,
-  type LucideIcon,
-} from 'lucide-react'
+import { Activity, Bot, ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight, FolderKanban, GitPullRequest, History, Home, Inbox, ListTodo, LogOut, MessageCircle, Package, Plus, Search, Settings, Trash2, Users, type LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { ThemeToggle } from '@/components/theme/theme-toggle'
 import { authClient } from '@/lib/auth-client'
@@ -73,6 +53,10 @@ const SECTION_LINKS: Array<{ href: string; label: string; icon: LucideIcon }> = 
   { href: '/projects', label: 'Projects', icon: FolderKanban },
   { href: '/agents', label: 'Agents', icon: Bot },
   { href: '/work', label: 'Work', icon: MessageCircle },
+  // R6.4 and R8 both shipped their routes without a way in, which is the same
+  // mistake the comment below already records for Review and Active runs.
+  { href: '/teams', label: 'Teams', icon: Users },
+  { href: '/artifacts', label: 'Artifacts', icon: Package },
   // Both of these routes existed and were reachable only sideways — Review
   // through the mode-switcher pill, Active runs from the home page and the
   // ambient bar. A route nobody can navigate to is a route nobody uses.
