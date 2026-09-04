@@ -19,6 +19,7 @@ import { Comments } from './collections/Comments'
 import { Activity } from './collections/Activity'
 import { Notifications } from './collections/Notifications'
 import { Artifacts } from './collections/Artifacts'
+import { Plugins } from './collections/Plugins'
 import { RuntimeProfiles } from './collections/RuntimeProfiles'
 import { Runtimes } from './collections/Runtimes'
 import { Agents } from './collections/Agents'
@@ -54,6 +55,7 @@ export default buildConfig({
     Activity,
     Notifications,
     Artifacts,
+    Plugins,
     RuntimeProfiles,
     Runtimes,
     Agents,

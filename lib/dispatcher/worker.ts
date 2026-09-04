@@ -45,6 +45,7 @@ import { hrefForEntity } from '@/lib/entity-links.server'
 import { sendPushToUser } from '@/lib/push/send'
 import type { RunEvent } from '@/lib/run-events'
 import { redactError } from '@/lib/redact'
+import { resolvePluginsForRun } from '@/lib/plugins/resolve'
 import type { Agent, Task } from '@/payload-types'
 import type { ApprovalOption } from '@/collections/Approvals'
 import type { ApprovalOutcome } from '@/lib/run-events'
@@ -350,6 +351,31 @@ async function executeClaimedRun(
     ? await payload.findByID({ collection: 'tasks', id: run.taskId, overrideAccess: true, disableErrors: true }).catch(() => null)
     : null
 
+  // R4.1 — the tools this product gives this agent, resolved per run and
+  // scoped to this agent specifically. Deliberately not written into the
+  // runtime's own config: a server added there is available to every agent
+  // that runtime ever runs, forever, with no way to revoke it for one agent
+  // and not another. These exist for the duration of the session and no
+  // longer.
+  //
+  // A failure to resolve them is not a failure of the run. An agent with no
+  // plugins is the state every agent was in until this existed, so the turn
+  // proceeds without them rather than refusing to start.
+  const agentWorkspaceId = typeof agent.workspace === 'number' ? agent.workspace : agent.workspace?.id
+  const plugins = agentWorkspaceId
+    ? await resolvePluginsForRun({
+        workspaceId: agentWorkspaceId,
+        agentId,
+        // A plugin row is inert configuration; the credential is per run and
+        // short lived. `{{RUN_TOKEN}}` in a header value becomes this run's
+        // own token here and nowhere else, so nothing live is ever stored.
+        substitutions: { RUN_TOKEN: run.runToken ?? undefined, RUN_ID: String(run.id) },
+      }).catch((err) => {
+        console.warn(`[dispatcher] Could not resolve plugins for run ${run.id}.`, err)
+        return { servers: [], skipped: [] }
+      })
+    : { servers: [], skipped: [] }
+
   await markRunStarted(run.id)
 
   if (!run.runToken) {
@@ -396,9 +422,10 @@ async function executeClaimedRun(
   }
   // Deliberately NOT removed after the run: `runs/[runId]/review` reads its
   // diff straight from this checkout (lib/run-worktrees/diff.ts), so deleting
-  // it on settle would empty the review screen for every completed run. They
-  // accumulate under the worktree root and need a real retention policy —
-  // named here rather than quietly leaked.
+  // it on settle would empty the review screen for every completed run.
+  // Reclaimed later instead, by the retention policy in
+  // `lib/run-worktrees/retention.ts` (R3.4), which keeps anything unfinished,
+  // anything with an open review, and the most recent N.
 
   // Per-agent concurrency ceiling (`agent.maxConcurrentRuns`, `collections/
   // Agents.ts` — defaults to 1). The run stays claimed (lease kept alive by
@@ -449,6 +476,24 @@ async function executeClaimedRun(
     if (flushTimer) return
     flushTimer = setTimeout(flushWrites, 250)
   }
+  // R4.1 — a plugin that matched this agent but could not be turned into a
+  // server is stated, not dropped. A tool that silently fails to load is
+  // indistinguishable from one that loaded and chose to do nothing, and the
+  // agent will happily narrate its absence as its own failure.
+  if (plugins.skipped.length > 0) {
+    const detail = plugins.skipped.map((s) => `${s.name} (${s.reason})`).join(', ')
+    writeBuffer.push({
+      seq: seqBase + 0,
+      event: {
+        type: 'message',
+        role: 'system',
+        text: `${plugins.skipped.length === 1 ? 'One plugin was' : `${plugins.skipped.length} plugins were`} not loaded for this turn: ${detail}.`,
+      },
+    })
+    scheduleFlush()
+    console.warn(`[dispatcher] Run ${run.id} skipped ${plugins.skipped.length} plugin(s): ${detail}`)
+  }
+
   // Resolved before the spawn so an unknown/typo'd profile fails the run with
   // a clear message, rather than silently running as the install default and
   // leaving someone to wonder why their agent is answering with the wrong
@@ -524,6 +569,7 @@ async function executeClaimedRun(
       // instructions because those go into the prompt (`buildPromptText`).
       homeStrategy: typeof runtimeProfile.homeStrategy === 'string' ? runtimeProfile.homeStrategy : 'hermes',
       resumeSessionId,
+      mcpServers: plugins.servers,
       // P5.4: when permissionMode is 'ask', wire the callback that creates a
       // real pending approval and waits for the user to resolve it. Also raise
       // timeouts significantly — the turn can now be blocked waiting for a human.

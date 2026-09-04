@@ -250,28 +250,83 @@ real binary or measured, not reasoned about.
 
 ---
 
-## R4 — The plugin layer: our MCP, our skills, our connectors
+## R4 — The plugin layer: our MCP, our skills, our connectors — DONE
 
 This is the prerequisite for teams, because team tools ride on it.
 
-- **R4.1 Plugin registry.** Our own MCP servers and skills as database records
-  with permissions and team access, injected per run. Everything optional,
-  nothing implicit.
-- **R4.2 Serve team and plugin tools over HTTP or SSE, not stdio.** AionUi
-  gates team membership on `mcpCapabilities.stdio` because their processes are
-  co-located. Ours are not, and that gate would be simply wrong for us. Their
-  own capability type already carries `http` and `sse` flags they do not
-  exploit.
-- **R4.3 Runtime-level mirror.** Read and toggle whatever the CLI already has.
-  Never write ownership into it.
-- **R4.4 Composio at the plugin level** for connectors, with per-user
-  connected accounts.
-- **R4.5 Self-describing config options.** `{id, type: select | boolean |
-  string, options}` rendered by one generic component, so a new runtime's
-  settings need no new screen.
-- **R4.6 The artifact server is the first plugin-level MCP we ship**, and the
-  proof the layer works. It is specified in R8.5. Build R4.1 and R4.2 with it
-  as the concrete consumer rather than as a hypothetical one.
+The organising idea, which everything below follows from: **there are two
+kinds of tool and they differ by ownership.** The runtime has its own MCP
+servers in its own config, which `hermes mcp add` edits behind our back — we
+read and toggle those and write no ownership into them. Plugins are ours:
+workspace rows, scoped to specific agents, injected at `session/new` and gone
+when the turn ends. Only the second kind can be granted to one agent and not
+another, which is what makes per-agent and later per-team tool access possible
+at all.
+
+- **R4.1 Plugin registry — DONE.** `collections/Plugins.ts` plus
+  `lib/plugins/resolve.ts`, one function the dispatcher calls per run.
+  Scope defaults to "selected agents" with an empty list, so a new plugin
+  reaches nobody until someone says who — the safe direction for a thing that
+  grants capability. A disabled plugin is *absent* from the session rather
+  than present-and-refusing, because an agent that can see a tool it may not
+  use will keep trying and narrate the failure at the user. A row that cannot
+  be turned into a server is reported into the transcript, not dropped.
+- **R4.2 HTTP and SSE, not just stdio — DONE.** Confirmed by reading the ACP
+  SDK's own zod definitions: `McpServer` is a union of http, sse, acp and
+  stdio. AionUi gates team membership on `mcpCapabilities.stdio` because their
+  processes are co-located; ours are not, and that gate would be simply wrong
+  here. HTTP is the default.
+  - **The problem this raised, and the fix.** A plugin row is static
+    configuration; the credential an agent needs is per-run and short-lived.
+    Storing a live token in the row would outlive the run and sit in the
+    database; a shared permanent key would be worse. So header and env values
+    support `{{RUN_TOKEN}}` / `{{RUN_ID}}`, substituted at resolve time and
+    nowhere else. The row stays inert. An unknown placeholder is left visible
+    rather than blanked, so a typo shows up in the request instead of becoming
+    a silently empty header.
+- **R4.3 Runtime-level mirror — was already built.** The MCP settings screen
+  reads and writes through the runtime's own API and keeps no mirror table,
+  with the reasoning already recorded in its own header: a mirror would be
+  wrong the first time someone ran `hermes mcp add`.
+- **R4.4 Composio — reachable as configuration, no adapter written.** Composio
+  serves MCP over HTTP, and R4.2 means an HTTP MCP endpoint is a plugin row.
+  So this needs a row, not code — which is D1's whole thesis applied one level
+  up. Connectors were explicitly deferred, so no SDK integration was written;
+  what changed is that adding one is now data entry rather than a project.
+- **R4.5 Self-describing config options — DONE.**
+  `components/settings/plugin-config-fields.tsx` renders `{ id, label, type,
+  options }` for string, boolean and select. Three types on purpose: a form
+  builder that supports everything ends up a worse version of a real form for
+  every specific case. Values ride to the plugin as ACP `_meta`, which is
+  free-form on every server variant, so a plugin reads its own configuration
+  without us inventing a side channel.
+- **R4.6 The artifact server as first consumer — shipped as `/api/mcp`.**
+  Built against a real endpoint rather than a hypothetical one, as this item
+  asked. It exposes `get_page` and `append_block`, the surface
+  `scripts/notionforge-mcp.ts` already had over stdio, moved to where an agent
+  on another machine can reach it. Writes route through
+  `lib/agent-page-writes.ts`, the one module that guarantees a run can only
+  append under a block it owns and can never update or delete.
+  - **Auth reuses what runs already have**: the presented token is compared to
+    that run's own `run_token`, exactly as `/api/daemon/page-writes` does, so
+    there is one authorisation rule for agent writes rather than two that
+    drift. Naming a different run id does not help someone holding another
+    run's token, and a settled run is refused.
+  - **Artifact-specific tools wait for R8**, which widens
+    `collections/Artifacts.ts` and needs a backfill. The transport and registry
+    are proven now; the artifact vocabulary lands with its data model.
+  - **One live bug worth recording.** The first working version returned 200
+    with an empty body. Cause: the transport defaults to SSE, so
+    `handleRequest` returns a Response still being written, and closing the
+    server in `finally` tore the stream down before a byte reached the client.
+    These tools are request/response and stream nothing, so
+    `enableJsonResponse: true` is both correct and what makes the cleanup safe.
+
+**Verified:** `scripts/test-mcp-endpoint.ts` (9 checks, including three
+distinct ways of being unauthorised) and `scripts/test-plugin-injection.ts`
+(11 checks). One injection check is skipped on this machine because the
+workspace has a single agent, so "another agent does not get the scoped
+plugin" is asserted by construction but not yet observed against real rows.
 
 ---
 

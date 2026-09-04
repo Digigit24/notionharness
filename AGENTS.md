@@ -373,3 +373,57 @@ one per server per render and hide the very failure it was meant to report.
 is still open, or it is among the last N settled runs. The automatic hourly
 pass is off unless `RUN_WORKTREE_AUTO_RECLAIM=true`, because deleting a run's
 diff is irreversible. `scripts/reclaim-worktrees.ts` is a dry run by default.
+
+## Two kinds of tool, and why they are separate (R4)
+
+There are two MCP surfaces in this app and confusing them is the most likely
+mistake anyone will make here.
+
+**The runtime's own servers** live in the runtime's config (`config.yaml:
+mcp_servers`). `hermes mcp add` edits that file behind our back, so the MCP
+settings screen reads and toggles through the runtime's API and keeps no
+mirror table — a mirror would be wrong the first time someone used the CLI.
+A server written there is available to every agent that runtime ever runs,
+forever, with no scope and no way to revoke it for one agent but not another.
+
+**Plugins** (`collections/Plugins.ts`) are ours. Workspace rows, scoped to
+selected agents, resolved per run by `lib/plugins/resolve.ts`, injected at
+`session/new`, and gone when the turn ends. This is the only one of the two
+that can express per-agent access, which is why teams (R6) depend on it.
+
+Two behaviours worth keeping: a disabled plugin is ABSENT from the session
+rather than present-and-refusing, because an agent that can see a tool it may
+not use keeps trying and narrates the failure at the user; and a row that
+cannot be built into a server is written into the transcript as a system
+message rather than dropped, because a tool that silently fails to load is
+indistinguishable from one that loaded and did nothing.
+
+## Per-run credentials in static rows: `{{RUN_TOKEN}}`
+
+A plugin row is configuration and lives in the database; the credential an
+agent needs is per-run and short-lived. Header and env VALUES may contain
+`{{RUN_TOKEN}}` and `{{RUN_ID}}`, substituted in `resolvePluginsForRun` at
+resolve time and nowhere else, so nothing live is ever stored. An unknown
+placeholder is deliberately left as written rather than blanked — a typo then
+shows up in the request the plugin actually makes, instead of becoming a
+silently empty header.
+
+Nothing ever renders a stored header value back to a browser. The settings
+screen reports which names are set and whether each has a value.
+
+## `/api/mcp` — our own MCP server (R4.6)
+
+Exposes `get_page` and `append_block` over HTTP. Writes go through
+`lib/agent-page-writes.ts`, the one module that guarantees a run can only
+append under a block it owns and can never update or delete.
+
+Auth is the run token, compared against that run's own value exactly as
+`/api/daemon/page-writes` does — one authorisation rule for agent writes, not
+two that drift. A settled run is refused.
+
+**`enableJsonResponse: true` is load-bearing, not a preference.** The
+transport defaults to SSE, which returns a Response whose body is still being
+written; closing the server in `finally` then tore the stream down before a
+byte reached the client, producing a 200 with an empty body. These tools are
+request/response and stream nothing, so a complete JSON response is both
+correct and what makes per-request cleanup safe.

@@ -11,6 +11,7 @@ import {
   Gauge,
   History,
   KeyRound,
+  Puzzle,
   Server,
   Settings2,
   Sparkles,
@@ -67,7 +68,13 @@ const GROUPS: RailGroup[] = [
     title: 'Capabilities',
     items: [
       { segment: 'skills', label: 'Skills', icon: Wrench, hint: 'Enable, edit, install' },
-      { segment: 'mcp', label: 'MCP servers', icon: Blocks, hint: 'Connected tool servers' },
+      // Ours versus theirs, adjacent on purpose: 'Plugins' are tools this
+      // product owns and scopes per agent; 'MCP servers' are whatever the
+      // runtime already has in its own config. Confusing the two is the most
+      // likely mistake here, so they sit together with hints that say which
+      // is which.
+      { segment: 'plugins', label: 'Plugins', icon: Puzzle, hint: 'Our tools, scoped per agent' },
+      { segment: 'mcp', label: 'MCP servers', icon: Blocks, hint: "The runtime's own config" },
       { segment: 'mcp-catalog', label: 'MCP catalog', icon: Blocks, hint: 'Browse available presets' },
       { segment: 'runtimes', label: 'Runtimes', icon: Server, hint: 'Agent binaries' },
     ],

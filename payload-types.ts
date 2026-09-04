@@ -81,6 +81,7 @@ export interface Config {
     activity: Activity;
     notifications: Notification;
     artifacts: Artifact;
+    plugins: Plugin;
     'runtime-profiles': RuntimeProfile;
     runtimes: Runtime;
     agents: Agent;
@@ -110,6 +111,7 @@ export interface Config {
     activity: ActivitySelect<false> | ActivitySelect<true>;
     notifications: NotificationsSelect<false> | NotificationsSelect<true>;
     artifacts: ArtifactsSelect<false> | ArtifactsSelect<true>;
+    plugins: PluginsSelect<false> | PluginsSelect<true>;
     'runtime-profiles': RuntimeProfilesSelect<false> | RuntimeProfilesSelect<true>;
     runtimes: RuntimesSelect<false> | RuntimesSelect<true>;
     agents: AgentsSelect<false> | AgentsSelect<true>;
@@ -604,6 +606,69 @@ export interface Artifact {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "plugins".
+ */
+export interface Plugin {
+  id: number;
+  name: string;
+  workspace: number | Workspace;
+  /**
+   * Shown wherever this plugin is offered. What it lets an agent do, in a sentence.
+   */
+  description?: string | null;
+  transport: 'http' | 'sse' | 'stdio';
+  /**
+   * Absolute URL of the MCP endpoint.
+   */
+  url?: string | null;
+  /**
+   * Executable to spawn.
+   */
+  command?: string | null;
+  args?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  headers?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  env?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  enabled?: boolean | null;
+  scope: 'agents' | 'workspace';
+  agents?: (number | Agent)[] | null;
+  configOptions?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "runtimes".
  */
 export interface Runtime {
@@ -870,6 +935,10 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'artifacts';
         value: number | Artifact;
+      } | null)
+    | ({
+        relationTo: 'plugins';
+        value: number | Plugin;
       } | null)
     | ({
         relationTo: 'runtime-profiles';
@@ -1145,6 +1214,27 @@ export interface ArtifactsSelect<T extends boolean = true> {
   task?: T;
   name?: T;
   url?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "plugins_select".
+ */
+export interface PluginsSelect<T extends boolean = true> {
+  name?: T;
+  workspace?: T;
+  description?: T;
+  transport?: T;
+  url?: T;
+  command?: T;
+  args?: T;
+  headers?: T;
+  env?: T;
+  enabled?: T;
+  scope?: T;
+  agents?: T;
+  configOptions?: T;
   updatedAt?: T;
   createdAt?: T;
 }
