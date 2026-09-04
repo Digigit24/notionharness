@@ -95,7 +95,7 @@ export default async function RuntimesPage({ params }: { params: Promise<{ works
       </div>
 
       <div className="mb-4">
-        <AddRuntimeProfileForm workspaceId={workspace.id} workspaceSlug={workspace.slug} />
+        <AddRuntimeProfileForm workspaceId={workspace.id} workspaceSlug={workspace.slug} existingProfiles={profiles.docs} />
       </div>
 
       {profiles.docs.length === 0 ? (
