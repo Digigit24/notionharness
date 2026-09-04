@@ -1791,3 +1791,81 @@ cold cache, and nothing in the editor paints empty before it paints content.
 - **No abstraction for its own sake.** R12-P5.1 unifies git invocation
   because there is one correct way to run a subprocess; it does not unify
   the three diff renderers, for the reason recorded in blocker 14.
+- **No second agent transport.** See the appendix below.
+
+---
+
+## Appendix — options considered and NOT adopted
+
+Nothing in this appendix is work. It is not a backlog, not a "later" list and
+not a phase. No agent, human or otherwise, should begin any of it on the
+strength of it appearing here; it exists so that a question already answered
+does not get re-litigated from scratch in six months. Acting on any of it
+requires someone explicitly asking for it by name.
+
+### A1 — Driving Claude Code through the Agent SDK instead of ACP
+
+**The question.** Can our UI show what happens INSIDE a Claude Code subagent —
+a live child thread per spawned agent, the way the Claude Code terminal draws
+its own panes?
+
+**What was established, from the code rather than from assumption.** The ACP
+schema (`@agentclientprotocol/sdk`, `dist/schema/types.gen.d.ts`) declares
+fifteen `sessionUpdate` variants:
+
+    agent_message_chunk      agent_thought_chunk      available_commands_update
+    compaction_summary_chunk compaction_update        config_option_update
+    current_mode_update      plan                     plan_removed
+    plan_update              session_info_update      tool_call
+    tool_call_update         usage_update             user_message_chunk
+
+A search of that file for `subagent`, `sub_agent`, `child_session` or `nested`
+returns nothing. **ACP has no concept of a child agent stream.** Over our
+current transport a Claude subagent can only arrive as a `tool_call` for the
+Task tool plus its `tool_call_update` — enough for an expandable card showing
+the prompt, status and result, and not enough for a live nested thread.
+
+**The option not taken.** Anthropic's Agent SDK is a genuinely richer stream
+for Claude specifically, and would plausibly carry subagent lifecycle events
+that ACP does not model. That is a real capability and it is the honest reason
+this appendix exists rather than a flat "impossible".
+
+**Why it is not adopted.** It would make the harness Claude-only. D1 is the
+load-bearing decision of this entire series — *ACP is the interface; adding a
+CLI is data, not code* — and the Agent SDK drives Claude Code and nothing
+else. Hermes, and any future Codex, Gemini or Qwen, would need a second
+driver, at which point we own two agent loops with two event models and the
+abstraction D1 exists to avoid has been rebuilt as a fork in the road. A
+per-runtime feature that costs runtime neutrality is the wrong trade at this
+size.
+
+**What would change the answer.** Someone deciding that Claude Code is the
+only runtime that matters commercially, or ACP gaining a child-session update
+in a later revision of the schema. Neither is true today. If the first ever
+becomes true, this is a design to reopen deliberately, not to drift into.
+
+**The cheap thing that settles it empirically**, if anybody ever wants it: log
+raw `session/update` payloads for one turn in which Claude demonstrably spawns
+a subagent, and look for nested tool calls or any child identifier.
+`normaliseSessionUpdate` ends in `default: return null`, so a non-standard
+field the adapter already emits would currently be discarded unseen. Roughly
+twenty lines, and it converts this appendix from schema reading into an
+observation.
+
+### A2 — Update kinds we receive and discard (NOT part of A1, and separable)
+
+Noted here only because it was found while investigating A1, and it is a
+different, smaller thing: `normaliseSessionUpdate` handles eight of the
+fifteen variants above and returns `null` for the other seven —
+`available_commands_update`, `compaction_summary_chunk`, `compaction_update`,
+`config_option_update`, `current_mode_update`, `plan_removed` and
+`plan_update`.
+
+Two of those have visible consequences. `plan` is rendered but `plan_update`
+and `plan_removed` are not, so a plan the agent revises mid-turn never changes
+on screen. And `compaction_update` is the agent stating that it has just
+compacted its own context — which is precisely the event that explains an
+agent losing track of work it did earlier in a long run.
+
+This is signal already being paid for and thrown away. It needs no transport
+decision and no part of A1. It is still not scheduled work.
