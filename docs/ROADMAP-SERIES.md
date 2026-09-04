@@ -2209,7 +2209,7 @@ message; and "see full run" never leaves the channel.
 
 ---
 
-### R14-P0.8 — A task is a thread, and the popup that creates one — IN PROGRESS
+### R14-P0.8 — A task is a thread, and the popup that creates one — DONE
 
 **The decision this section exists to state plainly.** Two task systems
 already exist and this does NOT merge them, because they answer different
