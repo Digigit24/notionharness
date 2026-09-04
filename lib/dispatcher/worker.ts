@@ -44,6 +44,7 @@ import { createPendingApproval, waitForApproval } from '@/lib/hermes/approval-he
 import { hrefForEntity } from '@/lib/entity-links.server'
 import { sendPushToUser } from '@/lib/push/send'
 import type { RunEvent } from '@/lib/run-events'
+import { redactError } from '@/lib/redact'
 import type { Agent, Task } from '@/payload-types'
 import type { ApprovalOption } from '@/collections/Approvals'
 import type { ApprovalOutcome } from '@/lib/run-events'
@@ -372,6 +373,18 @@ async function executeClaimedRun(
   let runCwd: string
   const sessionWorktree = await resolveSessionWorktree(run)
 
+  // The ACP session id this thread already established, if any. Passing it
+  // makes the agent replay its own history so turn two knows what turn one
+  // said. Without it every turn started a brand new agent session and the
+  // only context that survived was whatever the runtime happened to persist
+  // on disk, which is runtime-specific and, for a runtime with no home at
+  // all, nothing.
+  const resumeSessionId = run.sessionId
+    ? await getChatSession(run.sessionId)
+        .then((s) => s?.hermesSessionId ?? null)
+        .catch(() => null)
+    : null
+
   if (sessionWorktree) {
     runCwd = sessionWorktree.path
     await touchWorktree(sessionWorktree.id).catch(() => undefined)
@@ -510,6 +523,7 @@ async function executeClaimedRun(
       // relocatable home answers 'none', and the agent still gets its
       // instructions because those go into the prompt (`buildPromptText`).
       homeStrategy: typeof runtimeProfile.homeStrategy === 'string' ? runtimeProfile.homeStrategy : 'hermes',
+      resumeSessionId,
       // P5.4: when permissionMode is 'ask', wire the callback that creates a
       // real pending approval and waits for the user to resolve it. Also raise
       // timeouts significantly — the turn can now be blocked waiting for a human.
@@ -595,7 +609,9 @@ async function executeClaimedRun(
     // should show are actually in `run_messages` yet.
     flushWrites()
     await writeChain.catch(() => {})
-    const message = err instanceof Error ? err.message : String(err)
+    // R3.8 — this string is written to the `runs` table and rendered in a
+    // chat bubble, so it must never carry a credential the agent echoed.
+    const message = redactError(err)
     await settleRun(run.id, 'failed', { error: message, retryable: true })
     notifyRunSettled(payload, run, task, 'failed')
     return { status: 'failed', error: message }
@@ -610,14 +626,22 @@ async function executeClaimedRun(
   flushWrites()
   await writeChain.catch(() => {})
 
-  // Record the ACP session id against the chat session the moment we have
-  // one. `setHermesSessionId` keeps the FIRST id and ignores later ones,
-  // because that is the id whose history Hermes can replay — a subsequent
-  // turn's fresh id would point at an empty transcript.
-  if (run.sessionId && result.sessionId) {
+  // Record the agent-side session id only when this turn actually established
+  // a new one. A resumed turn changed nothing, and writing the same value back
+  // is a pointless UPDATE on the hot settle path.
+  //
+  // When a resume was attempted and failed, the id we stored was dead and this
+  // overwrites it — otherwise every future turn would keep retrying the same
+  // doomed `session/load` and keep losing the conversation.
+  if (run.sessionId && result.sessionId && !result.resumed) {
     await setHermesSessionId(run.sessionId, result.sessionId).catch((err) => {
-      console.warn(`[dispatcher] Could not record the Hermes session id for session ${run.sessionId}.`, err)
+      console.warn(`[dispatcher] Could not record the agent session id for session ${run.sessionId}.`, err)
     })
+  }
+  if (resumeSessionId && result.resumeFailure) {
+    console.warn(
+      `[dispatcher] Run ${run.id} could not resume agent session ${resumeSessionId} (${result.resumeFailure}); started a new one.`,
+    )
   }
   if (run.sessionId) {
     await touchSession(run.sessionId).catch(() => undefined)

@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server'
 import { dispatchNextRun } from '@/lib/dispatcher/worker'
 import { sweepExpiredLeases } from '@/lib/broker/runs'
+import { recordDispatcherTick } from '@/lib/broker/dispatcher-health'
+import { reclaimRunWorktrees } from '@/lib/run-worktrees/retention'
+import { resolveRunWorktreeConfig } from '@/lib/run-worktrees/config'
 
 // Every tick, not every tenth. `sweepExpiredLeases` is one indexed UPDATE
 // that normally matches nothing, so the cost is negligible — while the
@@ -11,6 +14,51 @@ import { sweepExpiredLeases } from '@/lib/broker/runs'
 // minutes), but adding up to another 30s on top of it isn't.
 const SWEEP_EVERY_TICKS = 1
 let ticksSinceSweep = 0
+
+// R3.4 — reclaim stale per-run checkouts about once an hour at the 3s poll
+// rate. Deliberately rare and deliberately off the response path: it walks
+// directories and shells out to git, which is exactly the kind of work D0
+// forbids in front of anything a person is waiting on. The guard makes a slow
+// pass unable to overlap itself no matter how many ticks arrive meanwhile.
+const RECLAIM_EVERY_TICKS = 1200
+let ticksSinceReclaim = 0
+let reclaimInFlight = false
+
+// Off unless explicitly turned on. Deleting a run's checkout is not
+// reversible and it is not obviously safe: a worktree holds the diff a review
+// screen reads, and only the person who owns this machine knows whether an
+// old run still matters to them. The policy is implemented and testable
+// (`npx tsx scripts/reclaim-worktrees.ts`, dry run by default) — arming it is
+// a decision, not a default.
+const RECLAIM_ENABLED = process.env.RUN_WORKTREE_AUTO_RECLAIM === 'true'
+
+function maybeReclaimWorktrees(): void {
+  if (!RECLAIM_ENABLED) return
+  ticksSinceReclaim += 1
+  if (ticksSinceReclaim < RECLAIM_EVERY_TICKS || reclaimInFlight) return
+  ticksSinceReclaim = 0
+  reclaimInFlight = true
+  const { source, rootDir } = resolveRunWorktreeConfig()
+  void reclaimRunWorktrees({ source, rootDir })
+    .then((report) => {
+      // Reported rather than silent: space that disappears without explanation
+      // is indistinguishable from a bug, and the kept-reasons are the part
+      // worth reading when something was NOT reclaimed.
+      if (report.removed.length > 0 || report.failures.length > 0) {
+        const mb = (report.reclaimedBytes / 1024 / 1024).toFixed(1)
+        console.log(
+          `[worktrees] Reclaimed ${report.removed.length} of ${report.examined} run checkouts (${mb} MB); kept ${report.kept.length}.`,
+        )
+        for (const failure of report.failures) {
+          console.warn(`[worktrees] Could not remove run ${failure.runId}: ${failure.error}`)
+        }
+      }
+    })
+    .catch((err) => console.warn('[worktrees] Reclaim pass failed.', err))
+    .finally(() => {
+      reclaimInFlight = false
+    })
+}
 
 /**
  * Internal-only trigger for `dispatchNextRun`, meant to be polled by
@@ -31,12 +79,19 @@ let ticksSinceSweep = 0
  * route every 3s with no mutex of its own.
  */
 export async function POST() {
+  const workerId = `server-${process.pid}`
+  // Recorded before any work, so a tick that then fails still proves the
+  // loop is alive — the heartbeat answers "is anything polling", which is a
+  // different question from "did this tick succeed". Fire-and-forget: a
+  // heartbeat write must never be the thing that stops dispatching.
+  void recordDispatcherTick(workerId).catch(() => undefined)
+  maybeReclaimWorktrees()
   ticksSinceSweep += 1
   let recovered = 0
   if (ticksSinceSweep >= SWEEP_EVERY_TICKS) {
     ticksSinceSweep = 0
     recovered = await sweepExpiredLeases()
   }
-  const outcome = await dispatchNextRun(`server-${process.pid}`)
+  const outcome = await dispatchNextRun(workerId)
   return NextResponse.json({ ...outcome, recovered })
 }

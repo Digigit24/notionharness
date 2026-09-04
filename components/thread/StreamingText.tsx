@@ -25,7 +25,37 @@ import { useEffect, useRef, useState } from 'react'
 const MIN_CHARS_PER_FRAME = 12
 const DRAIN_FRAMES = 8
 
-export function useRevealedText(text: string, active: boolean): string {
+/**
+ * True when the viewer has asked their system for less animation.
+ *
+ * This buffer is smoothing, and smoothing is animation: text sliding in a few
+ * characters at a time is exactly the kind of motion someone with vestibular
+ * sensitivity turns that setting on to avoid. Under the preference the buffer
+ * becomes a no-op and text paints the instant it arrives, which is also the
+ * lower-latency behaviour — the one place in this codebase where the
+ * accessible choice and the fast choice are the same choice.
+ *
+ * Read live rather than once, because the preference can change while the page
+ * is open (a laptop switching to battery saver does exactly this).
+ */
+function useReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(false)
+  useEffect(() => {
+    // `matchMedia` is absent during SSR and in some test environments; its
+    // absence means "no stated preference", not "prefers motion".
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
+    const query = window.matchMedia('(prefers-reduced-motion: reduce)')
+    setReduced(query.matches)
+    const onChange = (event: MediaQueryListEvent) => setReduced(event.matches)
+    query.addEventListener('change', onChange)
+    return () => query.removeEventListener('change', onChange)
+  }, [])
+  return reduced
+}
+
+export function useRevealedText(text: string, streaming: boolean): string {
+  const reducedMotion = useReducedMotion()
+  const active = streaming && !reducedMotion
   const [shown, setShown] = useState(active ? 0 : text.length)
   const shownRef = useRef(shown)
   const frame = useRef<number | null>(null)

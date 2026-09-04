@@ -61,10 +61,42 @@ export async function waitForApproval(
 
   try {
     const outcome = await Promise.race([waiterPromise, timeoutPromise])
+    // R3.6 — a timeout has to settle in the DATABASE too, not just here.
+    // The `timeout` status has existed on the collection since it was
+    // written and nothing ever wrote it, so a request nobody answered stayed
+    // `pending` forever: it kept its place in the approvals list and stayed
+    // clickable long after the agent had given up waiting and moved on.
+    // Answering it then did nothing at all, with no explanation.
+    if (outcome.outcome === 'cancelled' && outcome.reason === 'timeout') {
+      await markApprovalTimedOut(externalId)
+    }
     return outcome
   } finally {
     clearTimeout(timeoutHandle!)
     pendingApprovalWaiters.delete(externalId)
+  }
+}
+
+/**
+ * Closes out an approval nobody answered in time.
+ *
+ * Scoped to rows still `pending` so it can never overwrite a decision that
+ * landed in the same instant the timer fired — the human's answer wins that
+ * race, which is the right way round. Never throws: the turn has already
+ * moved on, and a bookkeeping failure must not become a run failure.
+ */
+async function markApprovalTimedOut(externalId: string): Promise<void> {
+  try {
+    const payload = await getPayloadClient()
+    const timedOut: ApprovalStatus = 'timeout'
+    await payload.update({
+      collection: 'approvals',
+      where: { externalId: { equals: externalId }, status: { equals: 'pending' } },
+      data: { status: timedOut },
+      overrideAccess: true,
+    })
+  } catch (err) {
+    console.warn(`[approvals] Could not mark approval ${externalId} as timed out.`, err)
   }
 }
 

@@ -67,6 +67,7 @@ import type { ApprovalOutcome, PermissionOption, RunEvent, RunEventEnvelope } fr
 import { TerminalBuffer } from './terminal-buffer'
 import { buildSpawnEnv } from './spawn-env'
 import { unifiedDiff } from './unified-diff'
+import { redactError, redactSecrets } from '@/lib/redact'
 
 // ---------------------------------------------------------------------------
 // Public options.
@@ -140,12 +141,33 @@ export interface SendTurnOptions {
    * the turn while it runs. Lets a caller (the dispatcher) register a stop
    * control that a user can hit mid-answer. */
   onControl?: (control: { cancel: () => Promise<void> }) => void
+  /**
+   * An ACP session id from a previous turn of this same conversation.
+   *
+   * When set and the agent's handshake advertises `loadSession`, this turn
+   * calls `session/load` instead of `session/new`, so the agent replays its
+   * own history and the prompt we send is just the new message. Without it
+   * every turn is turn one: the agent has no memory of the conversation and
+   * the only way to give it any would be to re-send the whole transcript in
+   * the prompt, which grows without bound and costs tokens on every turn.
+   *
+   * A session id the agent no longer recognises is not an error — the turn
+   * falls back to a fresh session, says so in the transcript, and returns
+   * the new id so the caller can store it.
+   */
+  resumeSessionId?: string | null
 }
 
 export interface SendTurnResult {
   envelopes: RunEventEnvelope[]
   sessionId: string | null
   agentName: string
+  /** True when this turn continued an existing agent-side session rather
+   * than starting a new one. */
+  resumed: boolean
+  /** Set when a resume was asked for and did not happen, with the reason.
+   * Never thrown — a forgotten session is a normal, recoverable state. */
+  resumeFailure?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -205,7 +227,10 @@ function spawnBinary(opts: SendTurnOptions): {
   // Hermes logs to stderr; the ACP protocol is on stdout. Surface stderr so
   // the harness can see what the agent is doing without blocking on it.
   child.stderr.on('data', (chunk: Buffer) => {
-    process.stderr.write(`[hermes-acp stderr] ${chunk.toString('utf8')}`)
+    // R3.8 — the agent's stderr is the single richest source of leaked
+    // credentials: a failing provider call prints the request it made, and
+    // this line writes it to a log that outlives the turn.
+    process.stderr.write(`[hermes-acp stderr] ${redactSecrets(chunk.toString('utf8'))}`)
   })
   return { child, ...childStdioToStreams(child) }
 }
@@ -516,6 +541,7 @@ function buildClientApp(
   terminals: TerminalRegistry,
   pushEvent: (event: RunEvent) => void,
   touch: () => void,
+  onSessionUpdate: (notification: { sessionId?: string; update?: unknown }) => void,
 ) {
   return (
     client({ name: 'notionforge-harness' })
@@ -658,6 +684,18 @@ function buildClientApp(
       .onRequest('terminal/wait_for_exit', async (ctx) => {
         touch()
         return terminals.onWaitForExit(ctx.params)
+      })
+      // We route `session/update` ourselves rather than through the SDK's
+      // `ActiveSession`, for one concrete reason: `ActiveSession` can only be
+      // built from a `session/new` response (its constructor is private and
+      // `attachSession` is only reachable from the new-session path), so a
+      // resumed session would have had no way to receive updates at all.
+      // Registering here works for both paths because the SDK's own session
+      // router returns `Handled.no`, leaving the notification to fall through
+      // to registered handlers — verified in the SDK source, not assumed.
+      .onNotification('session/update', async (ctx) => {
+        touch()
+        onSessionUpdate(ctx.params as { sessionId?: string; update?: unknown })
       })
   )
 }
@@ -882,6 +920,52 @@ function normaliseSessionUpdate(update: unknown): RunEvent | null {
 // ---------------------------------------------------------------------------
 
 /**
+ * A one-producer/one-consumer queue for `session/update` notifications.
+ *
+ * Notifications arrive on the connection's own read loop and must never block
+ * it, so they are enqueued synchronously; the turn drains them in order. The
+ * queue is closed when the `session/prompt` response settles, and anything
+ * already queued still drains before `next()` reports the end — dropping a
+ * chunk that arrived microseconds before the stop would silently truncate the
+ * last line of a reply.
+ */
+function createUpdateQueue<T>() {
+  const items: T[] = []
+  let waiter: ((value: T | null) => void) | null = null
+  let closed = false
+  return {
+    push(item: T): void {
+      if (closed) return
+      if (waiter) {
+        const resolve = waiter
+        waiter = null
+        resolve(item)
+        return
+      }
+      items.push(item)
+    },
+    close(): void {
+      if (closed) return
+      closed = true
+      if (waiter && items.length === 0) {
+        const resolve = waiter
+        waiter = null
+        resolve(null)
+      }
+    },
+    /** Resolves the next item, or `null` once the queue is closed and empty. */
+    next(): Promise<T | null> {
+      const item = items.shift()
+      if (item !== undefined) return Promise.resolve(item)
+      if (closed) return Promise.resolve(null)
+      return new Promise<T | null>((resolve) => {
+        waiter = resolve
+      })
+    },
+  }
+}
+
+/**
  * Spawn the Hermes ACP binary, open a session, send one prompt, collect all
  * `RunEventEnvelope`s the agent emits until the turn ends, then tear the
  * process down. Suitable for the smoke harness and for one-shot CLI use; a
@@ -924,6 +1008,33 @@ export async function sendTurn(opts: SendTurnOptions): Promise<SendTurnResult> {
   }
   let pinnedSessionId: string | null = null
   let agentName = 'unknown'
+  let resumed = false
+  let resumeFailure: string | undefined
+
+  // `session/load` makes the agent replay the whole conversation back to us
+  // as ordinary `session/update` notifications. We already hold every one of
+  // those in the broker — that is where they were stored the first time — so
+  // replaying them into the transcript would duplicate the entire history on
+  // every turn. Suppressed here rather than de-duplicated downstream, because
+  // the replay is bounded and identifiable exactly once: while the load
+  // request is in flight.
+  let replaying = false
+  // How much history the agent handed back during `session/load`. This is the
+  // only reliable signal that a resume actually resumed something: Hermes
+  // accepts a session id it never minted and reports success, so the load
+  // response alone cannot distinguish a real session from a forgotten one.
+  let replayedUpdates = 0
+  const updates = createUpdateQueue<unknown>()
+  const routeUpdate = (notification: { sessionId?: string; update?: unknown }): void => {
+    if (replaying) {
+      replayedUpdates += 1
+      return
+    }
+    // Before the session exists there is nothing legitimate to receive; after
+    // it does, anything for another session id is not ours.
+    if (pinnedSessionId && notification.sessionId && notification.sessionId !== pinnedSessionId) return
+    if (notification.update !== undefined) updates.push(notification.update)
+  }
 
   const terminals = createTerminalRegistry({ defaultCwd: opts.cwd, defaultEnv: opts.env, pushEvent })
 
@@ -936,6 +1047,7 @@ export async function sendTurn(opts: SendTurnOptions): Promise<SendTurnResult> {
     terminals,
     pushEvent,
     touch,
+    routeUpdate,
   )
 
     const turnPromise = new Promise<void>((resolve, reject) => {
@@ -951,10 +1063,7 @@ export async function sendTurn(opts: SendTurnOptions): Promise<SendTurnResult> {
           // `ClientContext` has no dedicated `.initialize()`/`.newSession()`
           // methods — confirmed against the installed SDK's own type
           // declarations and its `examples/client.js`. Requests go through
-          // the generic `.request(method, params)`, and session creation is
-          // handled by `buildSession(...).start()`, which returns an
-          // `ActiveSession` already carrying `sessionId` — no separate
-          // `session/new` round-trip needed.
+          // the generic `.request(method, params)`.
           const init = await ctx.request('initialize', {
             protocolVersion: PROTOCOL_VERSION,
             clientInfo: { name: 'notionforge-harness', version: '0.1.0' },
@@ -966,11 +1075,67 @@ export async function sendTurn(opts: SendTurnOptions): Promise<SendTurnResult> {
           pushEvent({ type: 'session', externalId: agentName })
 
           const mcpServers = (opts.mcpServers ?? []) as never[]
-          const sb = mcpServers.length > 0 ? ctx.buildSession({ cwd: opts.cwd, mcpServers }) : ctx.buildSession(opts.cwd)
-          const active = await sb.start()
-          // Pin immediately once the session exists (roadmap 3.2 §1).
-          pinnedSessionId = active.sessionId
-          pushEvent({ type: 'session', externalId: active.sessionId })
+
+          // Resume when we can, start fresh when we can't. The capability is
+          // read from this agent's own handshake rather than from a matrix we
+          // maintain (D2) — an agent that does not implement `session/load`
+          // must never be sent one.
+          const wantsResume = typeof opts.resumeSessionId === 'string' && opts.resumeSessionId.length > 0
+          const advertisesLoad =
+            (init.agentCapabilities as { loadSession?: unknown } | undefined)?.loadSession === true
+          if (wantsResume && !advertisesLoad) {
+            resumeFailure = 'the agent does not advertise session/load'
+          } else if (wantsResume) {
+            const target = opts.resumeSessionId as string
+            replaying = true
+            try {
+              await ctx.request('session/load', { sessionId: target, cwd: opts.cwd, mcpServers })
+              // A successful response is NOT proof the session existed.
+              // Measured against the real binary: Hermes accepts a session id
+              // it never minted, answers `session/load` with success, and
+              // resumes into an empty context — so trusting the response
+              // would silently produce an agent with no memory and no
+              // warning. What does distinguish them is the replay: a real
+              // session hands back its history as `session/update`
+              // notifications during the load (2 for a one-turn
+              // conversation), a session the agent does not have hands back
+              // nothing. That is the check.
+              if (replayedUpdates === 0) {
+                resumeFailure = 'the agent replayed no history for that session id'
+              } else {
+                pinnedSessionId = target
+                resumed = true
+              }
+            } catch (err) {
+              // The overwhelmingly common cause is an agent that has been
+              // restarted and no longer holds the session. That is ordinary,
+              // not a failure of the turn.
+              resumeFailure = String(err instanceof Error ? err.message : err)
+            } finally {
+              replaying = false
+            }
+          }
+
+          if (!resumed) {
+            const created = (await ctx.request(
+              'session/new',
+              mcpServers.length > 0 ? { cwd: opts.cwd, mcpServers } : { cwd: opts.cwd, mcpServers: [] },
+            )) as { sessionId: string }
+            // Pin immediately once the session exists (roadmap 3.2 §1).
+            pinnedSessionId = created.sessionId
+          }
+          const sessionId = pinnedSessionId as string
+          pushEvent({ type: 'session', externalId: sessionId })
+          if (wantsResume && !resumed) {
+            // Said out loud in the transcript, because the alternative is an
+            // agent that silently forgot everything and a person wondering
+            // why it is asking questions already answered.
+            pushEvent({
+              type: 'message',
+              role: 'system',
+              text: `Could not continue the previous agent session (${resumeFailure ?? 'unknown reason'}). Started a new one, so the agent no longer has this conversation's earlier context.`,
+            })
+          }
 
           // Start the turn but DON'T await it before draining updates.
           // `prompt()` only settles once the whole turn is over, so awaiting
@@ -994,7 +1159,7 @@ export async function sendTurn(opts: SendTurnOptions): Promise<SendTurnResult> {
           opts.onControl?.({
             cancel: async () => {
               try {
-                await ctx.notify('session/cancel', { sessionId: active.sessionId })
+                await ctx.notify('session/cancel', { sessionId })
               } catch {
                 // The pipe is already gone — nothing cooperative is possible,
                 // so fall straight through to the escalation below.
@@ -1017,33 +1182,40 @@ export async function sendTurn(opts: SendTurnOptions): Promise<SendTurnResult> {
             },
           })
 
-          const promptPromise = active.prompt(opts.text)
+          const promptPromise = ctx.request('session/prompt', {
+            sessionId,
+            prompt: [{ type: 'text', text: opts.text }],
+          })
           // A rejection here is surfaced by the await after the loop; attach
           // a no-op catch now so it can never be an unhandled rejection in
-          // the window before that await is reached.
-          promptPromise.catch(() => {})
+          // the window before that await is reached. Closing the queue on
+          // BOTH outcomes is what stops the drain loop below from waiting
+          // forever on a turn that failed rather than finished.
+          promptPromise.then(
+            () => updates.close(),
+            () => updates.close(),
+          )
 
           for (;;) {
-            const msg = await active.nextUpdate()
-            if (msg.kind === 'stop') {
-              pushEvent({
-                type: 'done',
-                status: msg.stopReason === 'cancelled' ? 'cancelled' : 'ok',
-                reason: msg.stopReason,
-              })
-              break
-            }
-            const ev = normaliseSessionUpdate(msg.update)
+            const update = await updates.next()
+            if (update === null) break
+            const ev = normaliseSessionUpdate(update)
             if (ev) pushEvent(ev)
           }
 
-          // The loop exits on the stop notification, which the agent only
-          // sends as the turn ends — so this is already settled or about to
-          // be. Awaited so a prompt-level failure still propagates.
-          await promptPromise
+          // The queue closed because the prompt settled, so this is already
+          // resolved or rejected — awaited so a prompt-level failure still
+          // propagates to the catch below rather than being swallowed.
+          const stop = (await promptPromise) as { stopReason?: string }
+          const stopReason = stop?.stopReason ?? 'end_turn'
+          pushEvent({
+            type: 'done',
+            status: stopReason === 'cancelled' ? 'cancelled' : 'ok',
+            reason: stopReason,
+          })
           resolve()
         } catch (err) {
-          pushEvent({ type: 'done', status: 'error', reason: String(err) })
+          pushEvent({ type: 'done', status: 'error', reason: redactError(err) })
           reject(err)
         }
       }).catch(() => {
@@ -1108,7 +1280,7 @@ export async function sendTurn(opts: SendTurnOptions): Promise<SendTurnResult> {
       })
     }
 
-    return { envelopes, sessionId: pinnedSessionId, agentName }
+    return { envelopes, sessionId: pinnedSessionId, agentName, resumed, resumeFailure }
   } finally {
     // Reap any terminals the agent never got around to `terminal/release`ing
     // (a hung/killed turn, an agent bug) so their child processes and

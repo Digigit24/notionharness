@@ -1,9 +1,9 @@
 import type { ReactNode } from 'react'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { Activity, Clock, Gauge, CircleDollarSign, ListChecks, Server } from 'lucide-react'
+import { Activity, Clock, Gauge, CircleDollarSign, ListChecks, Radio, Server } from 'lucide-react'
 import { getWorkspaceBySlug } from '@/lib/pages-cache'
-import { getWorkspaceHealthMetrics, getWorkspaceUsageRollup } from '@/lib/broker'
+import { getDispatcherHealth, getWorkspaceHealthMetrics, getWorkspaceUsageRollup } from '@/lib/broker'
 import { getPayloadClient } from '@/lib/payload'
 import { formatRelativeTime } from '@/lib/relative-time'
 import { Card, CardContent } from '@/components/ui/card'
@@ -38,7 +38,7 @@ export default async function WorkspaceHealthPage({
   if (!workspace) notFound()
 
   const payload = await getPayloadClient()
-  const [health, usage, runtimes] = await Promise.all([
+  const [health, usage, runtimes, dispatcher] = await Promise.all([
     getWorkspaceHealthMetrics(workspace.id, WINDOW_DAYS),
     getWorkspaceUsageRollup(workspace.id, WINDOW_DAYS),
     payload.find({
@@ -48,6 +48,7 @@ export default async function WorkspaceHealthPage({
       depth: 0,
       overrideAccess: true,
     }),
+    getDispatcherHealth(),
   ])
 
   const spendPerDay = usage.totalCostTicks / 100 / WINDOW_DAYS
@@ -69,7 +70,37 @@ export default async function WorkspaceHealthPage({
           </p>
         </header>
 
+        {/* Loud on purpose, and only when it is actually true. A stopped
+            dispatcher with queued work is the one failure that looks like
+            nothing at all: runs stay queued, the composer waits forever, and
+            every other number on this page stays reassuringly green. */}
+        {dispatcher.stalled && (
+          <div className="rounded-md border border-red-500/40 bg-red-500/10 px-4 py-3">
+            <p className="text-sm font-medium text-red-700 dark:text-red-300">
+              The dispatcher is not running. {dispatcher.queueDepth}{' '}
+              {dispatcher.queueDepth === 1 ? 'run is' : 'runs are'} queued and nothing is picking them up.
+            </p>
+            <p className="mt-1 text-xs text-red-700/80 dark:text-red-300/80">
+              {dispatcher.lastTickAt
+                ? `Last tick ${formatRelativeTime(dispatcher.lastTickAt.toISOString())}.`
+                : 'No tick has ever been recorded.'}{' '}
+              Start it with <code className="font-mono">npx tsx scripts/run-dispatcher-loop.ts</code>. Nothing
+              here starts it for you — a page render that silently spawned workers would hide this very failure.
+            </p>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <HealthTile
+            icon={<Radio size={16} />}
+            label="Dispatcher"
+            value={dispatcher.stale ? 'Not running' : 'Running'}
+            detail={
+              dispatcher.lastTickAt
+                ? `Last tick ${formatRelativeTime(dispatcher.lastTickAt.toISOString())}${dispatcher.lastWorkerId ? ` from ${dispatcher.lastWorkerId}` : ''}. Nothing executes while this is stopped.`
+                : 'No tick has ever been recorded on this database. Queued runs will sit untouched until a dispatcher loop is started.'
+            }
+          />
           <HealthTile
             icon={<Server size={16} />}
             label="Runtimes up"

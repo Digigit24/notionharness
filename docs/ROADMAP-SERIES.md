@@ -1,7 +1,7 @@
 # Roadmap series — from a Hermes app to an agent harness
 
 Supersedes `ROADMAP-A-PAGES.md` (mostly delivered) and `ROADMAP-B-HARNESS.md`
-(folded in below). Eight roadmaps, ordered so that each one makes the next
+(folded in below). Nine roadmaps, ordered so that each one makes the next
 cheaper rather than harder.
 
 ---
@@ -181,36 +181,72 @@ skills that behave the same way.
 
 ---
 
-## R3 — Correctness: resume, failure, and the truth
+## R3 — Correctness: resume, failure, and the truth — DONE
 
-Folded from the old B1, B2 and B4.
+Folded from the old B1, B2 and B4. Every item below was verified against the
+real binary or measured, not reasoned about.
 
-- **R3.1 Session resume.** The ACP session id is currently **write-only** — we
-  store it on every session and nothing ever reads it back. So this is
-  unbuilt, not half-built. Pass it on the next turn so the agent replays its
-  own history. Prove it with a three-turn conversation referencing turn one
-  where the prompt size stays flat. Handle a session id the agent has
-  forgotten by starting fresh, recording the new id, and saying so in the
-  transcript.
-- **R3.2 Terminal death** as its own state on the tool card, not a generic
-  stall. The exit-code plumbing already exists.
-- **R3.3 Dispatcher supervision.** It is one manually started process; if it
-  stops, every run sits queued forever with no signal. Surface last-tick time
-  and warn loudly. Do not silently start processes.
-- **R3.4 Worktree retention.** Per-run checkouts are never removed because the
-  review screen reads their diffs. Keep the last N per source plus anything a
-  live review references; report what was reclaimed.
-- **R3.5 Heartbeats, which AionUi does not have.** Their "silent agents
-  auto-escalate to failed" is a readme claim; in code there is only a slow-turn
-  flag. A wedged CLI holding an open pipe is exactly our observed failure mode,
-  so detect it explicitly.
-- **R3.6 Approval timeouts** that resolve visibly instead of an amber card that
-  never settles.
-- **R3.7 Streaming: measure before changing.** Time from event append to paint
-  on a long turn. Virtualise beyond the current hundred-message window only if
-  the numbers justify it. Respect reduced motion.
-- **R3.8 Redact secrets in agent error text** before it reaches a log or the
-  UI. AionUi does this and almost nobody does.
+- **R3.1 Session resume — DONE, and it uncovered a trap.** The ACP session id
+  was write-only; it is now passed on the next turn via `session/load`.
+  Verified with `scripts/test-session-resume.ts`: turn one stores a codeword,
+  the process is torn down, and turn two — a *new* agent process — recalls it.
+  The trap: **Hermes accepts a session id it never minted and answers
+  `session/load` with success**, resuming into an empty context. Trusting the
+  response would have produced an agent that silently forgot everything. What
+  does distinguish the two is the replay — a real session hands its history
+  back as `session/update` notifications during the load (2 for a one-turn
+  conversation), a session the agent does not have hands back nothing. That
+  count is the check. A failed resume falls back to a fresh session, says so
+  in the transcript as a system message, and overwrites the dead id so the
+  next turn does not retry the same doomed load forever.
+- **R3.2 Terminal death — already built.** `TerminalBlock` distinguishes
+  `exited 0`, a non-zero exit, `killed (signal)`, and the case that matters
+  most: the run ended and the shell never reported at all, which is the shape
+  a hung node-pty process has. Wired end to end through the adapter.
+- **R3.3 Dispatcher supervision — DONE.** `dispatcher_heartbeat` (one row,
+  ever — nobody needs tick history) is written on every tick;
+  `getDispatcherHealth()` reads it and answers the question that matters,
+  which is not "is it idle" but "is it stopped *while work is waiting*". The
+  Health page carries a tile and, when stalled, a loud banner naming the
+  command to start it. Nothing starts a process on its own: a page render that
+  silently spawned workers would hide this exact failure.
+- **R3.4 Worktree retention — DONE, armed manually.** `reclaimRunWorktrees`
+  keeps a checkout for three reasons and removes it only when none apply: the
+  run is unfinished, its review is still open (a page subtree with a pending,
+  undismissed suggestion), or it is among the last N settled runs. Measured on
+  this machine: 79 checkouts, 59 reclaimable, 184 MB. The automatic hourly
+  pass is **off unless `RUN_WORKTREE_AUTO_RECLAIM=true`** — deleting a run's
+  diff is irreversible and only the machine's owner knows which old run still
+  matters. `scripts/reclaim-worktrees.ts` is a dry run by default.
+- **R3.5 Wedge detection — already built.** `sendTurn` runs two independent
+  caps: a wall clock, and an inactivity watchdog. Silence is the signal that
+  separates a legitimately long run (constantly emitting) from a wedged one
+  (emitting nothing) — a wall clock alone cannot tell them apart and cost the
+  full cap every time.
+- **R3.6 Approval timeouts — DONE.** The `timeout` status had existed on the
+  collection since it was written and *nothing ever wrote it*, so an
+  unanswered request stayed `pending` forever: still listed, still clickable,
+  answering it did nothing and said nothing. `waitForApproval` now settles the
+  row too, scoped to rows still pending so a decision landing in the same
+  instant wins the race — which is the right way round.
+- **R3.7 Streaming — measured, and the answer is do nothing.**
+  `scripts/test-streaming-latency.ts` adapts growing transcript prefixes,
+  because `adaptRunEventsToThread` re-runs over every prior envelope each time
+  one event arrives — the quadratic risk. Result: **0.12 ms at 4000 events**,
+  and cost grew 7.2x while the transcript grew 40x, so it is sublinear, not
+  quadratic. The hundred-message tail stays. A virtualiser would add
+  measurement thrash to rows whose heights change continuously while
+  streaming, to solve a problem the numbers do not show. The reveal buffer now
+  no-ops under `prefers-reduced-motion`, where the accessible choice and the
+  fast choice happen to be the same choice.
+- **R3.8 Secret redaction — DONE.** `lib/redact.ts` strips credentials from
+  agent text before it reaches the server log, the `runs.error` column, or a
+  chat bubble someone may screenshot. Shape-based rather than a vendor list —
+  credentials in a URL, bearer tokens, JWTs, and long values after an
+  obviously secret-sounding name — with a small prefix list underneath, not
+  instead. `scripts/test-redaction.ts` checks both halves: secrets go, and
+  ordinary error text survives untouched, because an over-eager redactor that
+  eats real error messages is its own bug. 14 cases, all passing.
 
 ---
 
@@ -248,6 +284,24 @@ Folded from the old B3, plus what is still missing.
   provides all of it.
 - **R5.2 Side-by-side diff with hunk staging and a base-ref picker.** The run
   review page's own comment admits the unified viewer is a compromise.
+  **The renderer is `@git-diff-view/react`, and that decision is now made.**
+  R5.3 is the requirement that chooses it: line-anchored comments need
+  arbitrary React widgets pinned to a side and a line, and that primitive is
+  the only thing separating the candidates. It also consumes the unified patch
+  we already produce rather than re-diffing two strings in the browser, and it
+  highlights through Shiki, which is in the tree already. `react-diff-view`
+  has the right shape but is an older generation against React 19;
+  `diff2html` emits HTML strings with nowhere to hang a widget;
+  `react-diff-viewer-continued` recomputes a diff we have already computed
+  server-side; Monaco's diff editor is multi-megabyte and violates D0 outright.
+- **R5.2a The thread keeps its own renderer, deliberately.**
+  `components/thread/DiffBlock.tsx` classifies line by line and never throws,
+  because agent output is not guaranteed to be a well-formed patch and a parser
+  that throws loses the content entirely rather than showing it plainly. Every
+  library in this category assumes valid `git diff` output. So the review
+  surface takes the dependency and the feed does not. This is R6.5's rule
+  applied to diffs: different context, different density, different
+  implementation, and the duplication is smaller than the coupling it replaces.
 - **R5.3 Line-anchored diff comments batched into one prompt.** The single
   best idea found in any competitor. Comment on several lines, press send
   once, and the agent does one round of thinking and one revision pass instead
@@ -658,6 +712,104 @@ the top of the page while the agent writes the bottom loses nothing.
 
 ---
 
+## R9 — The repository browser: a project's files, read through git
+
+R5 reviews what changed. This reads what is there. A project bound to a local
+repository should show its files the way GitHub does — browse the tree, open a
+file, read the code, preview a README — without leaving the projects page.
+
+### R9.0 The decision: read through git, never mirror
+
+The instinct is to index the working tree into Postgres and keep it in sync.
+That is wrong twice over. It buys a permanent staleness bug, and it breaks
+D0's "cache what is stable, never what is live." GitHub does not mirror
+either; it reads the object database per request and caches on content
+address. So git is the read path, and the only thing cached is what git
+guarantees cannot change.
+
+- **Listing is one level deep.** `git ls-tree -l <ref> <path>/` returns name,
+  type, size and blob oid for a single directory, and `git status
+  --porcelain` overlays dirty and untracked markers. That is O(directory),
+  never O(repo), and it is why a repository carrying a large `node_modules`
+  costs nothing to browse.
+- **Reading is one blob.** `git show <ref>:<path>` for a committed file,
+  `fs.readFile` for the working tree. Cap around a megabyte, and call a file
+  binary when a NUL byte appears in the first eight kilobytes rather than
+  guessing from its extension.
+- **Cache by blob oid, forever.** A blob oid is content-addressed, so its
+  content can never change. An in-memory LRU keyed by oid and an immutable
+  cache header are both safe. This is free speed rather than a trade, and it
+  is the one place in this pillar where caching is unambiguously correct.
+  Directory listings key on the commit sha and expire with it.
+- **Change detection is R5.7's stat, reused.** Stat `.git/HEAD` and
+  `.git/index`, and invalidate when either moves. Never a recursive watcher.
+  A repository tree is exactly the case D0's polling exception was written
+  for — the thing being watched is genuinely outside the database.
+- **Every path goes through `pathIsInside`**, which already exists in
+  `lib/git/repo.ts`. Traversal is the entire attack surface of this feature
+  and the defence is already written.
+
+### R9.1 The UI is ours, and it is small
+
+No file-manager library. The category is built for upload managers rather than
+code browsing, and the maintained ones are the wrong shape. GitHub's own
+browser is a breadcrumb, a flat table of one directory, and a file view.
+`buildFileTree` in `components/runs/review-panel.tsx` and
+`components/sidebar/page-tree.tsx` already carry most of that.
+
+- A breadcrumb and a directory table: name, type, size, and its status if the
+  working tree has touched it.
+- A file view with a line gutter, deep-linkable by line, so a comment or an
+  agent can point at one.
+- A ref picker sharing the base-ref control built in R5.2.
+- If a persistent sidebar tree is wanted later, lazy-load it over
+  `@tanstack/react-virtual`, already a direct dependency. Reach for a tree
+  library only if that fails, and not before.
+
+### R9.2 Highlighting happens on the server
+
+Shiki is in the tree already at `1.29.2`, transitively through BlockSuite.
+**Promote it to a direct dependency pinned at that exact version**, or a
+second copy ships in the bundle and a BlockSuite bump silently changes how our
+code renders. Highlight inside a server component and send marked-up HTML: a
+client-side highlighter on a large file is precisely the render-path cost D0
+forbids, and this is the largest single latency win available in this pillar.
+
+### R9.3 Preview, and the two file types that get one
+
+- **Markdown** renders server-side through `marked`, already present
+  transitively, and is sanitised before it reaches the page. Sanitising is not
+  optional: markdown permits raw HTML, and this is a file out of a repository.
+- **HTML** renders in a sandboxed iframe with no same-origin access and no
+  ambient credentials, ideally from a separate origin. That is R8.7's rule
+  restated, and it applies unchanged to a repository file.
+- **Nothing else gets a preview.** Images and binaries state what they are and
+  how large they are. A preview surface that grows one type at a time is how
+  this becomes a file manager nobody asked for.
+
+**The BlockSuite path exists, and it is not this.** The markdown adapter, with
+`unified` and `remark-parse` already installed, could turn a README into a
+real editable document. That is the R8 move — open this README as a page — and
+it belongs there, not in a read-only browser where mounting Lit inside a React
+table would cost real weight for nothing.
+
+### R9.4 Where it lives
+
+A **Files** tab on the project detail view, beside the existing overview,
+resources, runs and worktrees tabs. A worktree gets the same browser pointed
+at its own checkout, which is what makes R5's review and R9's browsing one
+surface rather than two.
+
+### R9.5 Done when
+
+A project bound to a local repository lists its root in one git call, opens a
+file highlighted on the server, previews a README as sanitised HTML and an
+HTML file in a sandbox, deep-links to a line, and reflects an external commit
+within one poll — with no mirror table, no recursive watcher, and no listing
+that walks more than the directory it was asked for.
+
+---
+
 ## Known blockers, stated plainly
 
 1. **Extraction has to precede the second runtime.** Doing it afterwards means
@@ -685,3 +837,18 @@ the top of the page while the agent writes the bottom loses nothing.
    fallback.** Get it wrong and the agent either files a page per reply or
    never files one. It needs evaluation against real sessions before the
    feature ships, not after.
+10. **R9 depends on nothing, and R5 depends on R4.** The repository browser
+    reads git and renders HTML; no part of it needs the plugin layer. So it
+    can be built before R5 without disturbing the ordering, and it is the
+    cheapest way to make a project bound to a local repository feel real.
+    Decide that deliberately rather than letting it drift forward.
+11. **Shiki is a transitive dependency today.** Nothing in `package.json`
+    asks for it — BlockSuite does. Promote and pin it before any of our code
+    imports it directly, or a BlockSuite bump changes our rendering silently
+    and a duplicate copy ships in the bundle.
+12. **Three diff renderers will exist, and that is the intent.** The thread's
+    non-throwing `DiffBlock`, the review surface's `@git-diff-view/react`,
+    and R8.5's `affine:diff` block are three implementations of one concept
+    serving three different densities. Anyone who tries to unify them will
+    rediscover why R6.5 rejected exactly that, so the reason is recorded here
+    rather than in a commit message.

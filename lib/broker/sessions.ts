@@ -184,16 +184,24 @@ export async function touchSession(id: number): Promise<void> {
 /**
  * Records the ACP session id Hermes minted for this thread.
  *
- * Only ever set once, and never overwritten by a later run: the FIRST id is
- * the one whose history Hermes can replay, so a subsequent run's fresh id
- * must not clobber it. `COALESCE` in the UPDATE makes that a property of the
- * statement rather than of the caller remembering.
+ * Records which agent-side session this thread is currently continuing.
+ *
+ * This used to `COALESCE`, keeping the first id forever, because the caller
+ * had no way to tell a resumed session from a fresh one and a later turn's
+ * new id would have clobbered the only replayable history. That guard is now
+ * wrong rather than merely unnecessary: once a turn actually attempts
+ * `session/load` and the agent has forgotten the session — it restarted, the
+ * session expired — the stored id is dead, and keeping it means every
+ * subsequent turn retries the same doomed resume forever.
+ *
+ * So the statement overwrites, and the caller only writes when a NEW session
+ * was established. A resumed turn writes nothing, because nothing changed.
  */
 export async function setHermesSessionId(id: number, hermesSessionId: string): Promise<void> {
   const pool = getBrokerPool()
   await pool.query(
     `UPDATE chat_sessions
-        SET hermes_session_id = COALESCE(hermes_session_id, $2), updated_at = now()
+        SET hermes_session_id = $2, updated_at = now()
       WHERE id = $1`,
     [id, hermesSessionId],
   )

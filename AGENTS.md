@@ -314,3 +314,62 @@ instructions, agents and MCP entirely on the command line
 carrying only skills and memory is enough there. Unverified: whether
 `CLAUDE_CONFIG_DIR` also relocates `~/.claude.json`, which holds MCP servers
 and auth.
+
+## Session resume (R3.1) — and the trap in it
+
+A turn passes the previous ACP session id as `resumeSessionId`, and
+`sendTurn` calls `session/load` instead of `session/new` when the agent's own
+handshake advertises `loadSession`. Verified live: turn one stores a codeword,
+the agent process is torn down, and turn two recalls it.
+
+**Do not trust the `session/load` response.** Measured against the real
+binary: Hermes accepts a session id it never minted, answers with success, and
+resumes into an empty context. A caller that trusted the response would ship
+an agent that silently forgot the conversation with no warning anywhere. The
+signal that actually separates the two is the replay — a real session hands
+its history back as `session/update` notifications during the load, a session
+the agent does not have hands back nothing — so `sendTurn` counts replayed
+updates and treats zero as "not resumed".
+
+The replay is suppressed from the transcript (we already hold every one of
+those events in the broker; replaying them would duplicate the whole history
+on every turn). A failed resume writes a system message into the transcript
+saying the earlier context is gone, and the dispatcher overwrites the dead id
+so the next turn does not retry the same doomed load forever. That is why
+`setHermesSessionId` no longer uses `COALESCE`: the caller now knows whether a
+new session was established, so the statement-level guard became wrong rather
+than merely unnecessary.
+
+## Our own ACP session routing, not the SDK's ActiveSession
+
+`sendTurn` issues `session/new` / `session/load` / `session/prompt` as raw
+requests and routes `session/update` through its own queue. This is not
+preference: the SDK's `ActiveSession` can only be constructed from a
+`session/new` response (`attachSession` is private and only reachable from
+that path), so a resumed session had no way to receive updates at all.
+Registering `.onNotification('session/update', ...)` works for both paths
+because the SDK's own session router returns `Handled.no`, letting the
+notification fall through — confirmed in the SDK source, not assumed.
+
+## Redaction (R3.8)
+
+`lib/redact.ts` runs on agent stderr, on the `done` event's error reason, and
+on the message written to `runs.error`. It deliberately does NOT run on
+ordinary assistant output: an agent legitimately asked to show a config file
+must be able to. Shape-based rules with a small vendor-prefix list underneath;
+`scripts/test-redaction.ts` guards both directions.
+
+## Dispatcher supervision (R3.3)
+
+`dispatcher_heartbeat` is a single row written on every tick. The reader
+answers "is it stopped while work is waiting", which is the only version of
+the question with a consequence. **Nothing in this codebase starts a
+dispatcher automatically** — a page render that spawned workers would create
+one per server per render and hide the very failure it was meant to report.
+
+## Worktree retention (R3.4)
+
+`reclaimRunWorktrees` keeps a checkout when the run is unfinished, its review
+is still open, or it is among the last N settled runs. The automatic hourly
+pass is off unless `RUN_WORKTREE_AUTO_RECLAIM=true`, because deleting a run's
+diff is irreversible. `scripts/reclaim-worktrees.ts` is a dry run by default.
