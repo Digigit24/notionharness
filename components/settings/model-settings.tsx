@@ -13,7 +13,8 @@ import {
   type ModelSettings,
 } from '@/app/(app)/workspace/[workspaceSlug]/settings/model/actions'
 import { unwrap } from '@/lib/failures'
-import type { ServeModelOptions } from '@/lib/runtimes/hermes/serve-client'
+import { useOptimisticAction } from '@/lib/optimistic'
+import type { ServeModelInfo, ServeModelOptions, SetModelResult } from '@/lib/runtimes/hermes/serve-client'
 
 /**
  * Active model, and the fallback order Hermes tries when it fails.
@@ -40,6 +41,10 @@ export function ModelSettingsView({
   const [provider, setProvider] = useState(settings.info?.provider ?? '')
   const [model, setModel] = useState(settings.info?.model ?? '')
   const [fallbacks, setFallbacks] = useState<FallbackEntry[]>(settings.fallbacks)
+  // Mirrors `settings.info` so "Currently X / Y" updates the instant Apply
+  // succeeds instead of waiting on `router.refresh()`'s full round trip (D0).
+  const [activeInfo, setActiveInfo] = useState<ServeModelInfo | null>(settings.info)
+  const modelOptimistic = useOptimisticAction<SetModelResult>()
 
   // The provider catalogue arrives AFTER first paint. Fetching it server-side
   // meant the page sat on skeletons until a cold runtime had woken and every
@@ -82,30 +87,38 @@ export function ModelSettingsView({
     if (!provider || !model) return
     setError(null)
     setNotice(null)
-    startTransition(async () => {
-      try {
-        const result = unwrap(
-          await setProfileActiveModel({
-            workspaceSlug,
-            profile: settings.profile,
-            provider,
-            model,
-            confirmExpensive,
-          }),
-        )
+    const previousInfo = activeInfo
+    void modelOptimistic.run({
+      // Painted immediately. If the server comes back asking to confirm an
+      // expensive model instead of applying it, `onSettled` below puts this
+      // right back — nothing actually changed yet, so nothing should still
+      // look changed.
+      apply: () => setActiveInfo((current) => ({ ...current, provider, model }) as ServeModelInfo),
+      rollback: () => setActiveInfo(previousInfo),
+      work: () => setProfileActiveModel({ workspaceSlug, profile: settings.profile, provider, model, confirmExpensive }),
+      failureTitle: 'Could not change the model.',
+      onSettled: (result) => {
         if (result.confirm_required) {
           // Hermes answers an expensive model with a question, not an error.
           // Passing that through as a prompt is the difference between a
-          // deliberate choice and a silent no-op.
+          // deliberate choice and a silent no-op. Nothing was actually
+          // applied, so the optimistic paint above is reverted.
+          setActiveInfo(previousInfo)
           setConfirmModel({ provider, model, message: result.confirm_message ?? 'This model is expensive.' })
           return
         }
         setConfirmModel(null)
         setNotice(`Active model is now ${result.provider ?? provider} / ${result.model ?? model}.`)
-        router.refresh()
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Could not change the model.')
-      }
+        setActiveInfo((current) => ({
+          ...current,
+          provider: result.provider ?? provider,
+          model: result.model ?? model,
+        }) as ServeModelInfo)
+        // Background only — `activeInfo` already reflects the new model;
+        // this just picks up details the response doesn't carry (context
+        // length, capabilities) on the server's own schedule.
+        startTransition(() => router.refresh())
+      },
     })
   }
 
@@ -176,11 +189,11 @@ export function ModelSettingsView({
       <section className="mb-6 rounded-lg border border-black/10 p-4 dark:border-white/10">
         <h2 className="text-sm font-medium">Active model</h2>
         <p className="mt-1 text-xs text-black/50 dark:text-white/50">
-          {settings.info
-            ? `Currently ${settings.info.provider} / ${settings.info.model}`
+          {activeInfo
+            ? `Currently ${activeInfo.provider} / ${activeInfo.model}`
             : 'Hermes did not report a current model.'}
-          {settings.info?.effective_context_length
-            ? ` · ${settings.info.effective_context_length.toLocaleString('en-GB')} token context`
+          {activeInfo?.effective_context_length
+            ? ` · ${activeInfo.effective_context_length.toLocaleString('en-GB')} token context`
             : ''}
         </p>
 
@@ -218,8 +231,8 @@ export function ModelSettingsView({
             </SelectContent>
           </Select>
 
-          <Button size="sm" disabled={busy || !provider || !model} onClick={() => applyModel()}>
-            {busy ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+          <Button size="sm" disabled={modelOptimistic.pending || !provider || !model} onClick={() => applyModel()}>
+            {modelOptimistic.pending ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
             Apply
           </Button>
         </div>
@@ -231,7 +244,7 @@ export function ModelSettingsView({
               {confirmModel.message}
             </p>
             <div className="mt-2 flex gap-1.5">
-              <Button size="sm" variant="outline" onClick={() => applyModel(true)} disabled={busy}>
+              <Button size="sm" variant="outline" onClick={() => applyModel(true)} disabled={modelOptimistic.pending}>
                 Use it anyway
               </Button>
               <Button size="sm" variant="ghost" onClick={() => setConfirmModel(null)}>

@@ -6,7 +6,6 @@ import { getPayloadClient } from '@/lib/payload'
 import { getWorkspaceBySlug } from '@/lib/pages-cache'
 import { Breadcrumbs } from '@/components/nav/breadcrumbs'
 import { Card, CardContent } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
 import { RuntimesRefreshButton } from '@/components/runtimes/refresh-button'
 import { AddRuntimeProfileForm } from '@/components/runtimes/add-profile-form'
@@ -147,11 +146,6 @@ function RuntimeRow({
           <div className="flex items-center gap-2">
             <PresenceDot status={status} />
             <span className="text-sm font-medium">{profile.name}</span>
-            {!profile.enabled && (
-              <Badge variant="outline" className="text-faint">
-                Disabled
-              </Badge>
-            )}
             <ToggleRuntimeProfileEnabledButton
               workspaceSlug={workspaceSlug}
               profileId={profile.id}

@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState, useTransition } from 'react'
+import { useEffect, useMemo, useState, useTransition } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { FileText, Inbox, Code2 } from 'lucide-react'
@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from '@/hooks/use-toast'
-import { unwrap } from '@/lib/failures'
+import { useOptimisticAction } from '@/lib/optimistic'
 import { formatRelativeTime } from '@/lib/relative-time'
 
 const ALL = '__all__'
@@ -66,7 +66,15 @@ export function ArtifactsInbox({
   const searchParams = useSearchParams()
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [isPending, startTransition] = useTransition()
-  const [busy, setBusy] = useState(false)
+  // Mirrors `artifacts` so a filed row leaves the list the instant filing
+  // succeeds, instead of waiting on `router.refresh()`'s full round trip
+  // (D0) — resynced whenever the server sends a fresh page (a filter change,
+  // or the background refresh below landing).
+  const [items, setItems] = useState(artifacts)
+  useEffect(() => {
+    setItems(artifacts)
+  }, [artifacts])
+  const { run, pending: busy } = useOptimisticAction<{ filed: number }>()
 
   const setParam = (key: string, value: string) => {
     const next = new URLSearchParams(searchParams.toString())
@@ -98,28 +106,35 @@ export function ArtifactsInbox({
     })
   }
 
-  async function file(ids: number[], projectId: number) {
-    setBusy(true)
-    try {
-      const { filed } = unwrap(await fileArtifacts({ workspaceSlug, artifactIds: ids, projectId }))
-      const project = projects.find((p) => p.id === projectId)
-      toast({
-        title: filed === 1 ? `Filed into ${project?.name ?? 'the project'}` : `Filed ${filed} artifacts into ${project?.name ?? 'the project'}`,
-        // Says what filing did, because "it disappeared from this list" is
-        // the visible effect and R8.3 wants that understood as a move.
-        description: 'It has moved out of this list and into the project.',
-      })
-      setSelected(new Set())
-      startTransition(() => router.refresh())
-    } catch (error) {
-      toast({
-        title: 'Could not file',
-        description: error instanceof Error ? error.message : undefined,
-        variant: 'destructive',
-      })
-    } finally {
-      setBusy(false)
-    }
+  function file(ids: number[], projectId: number) {
+    const idSet = new Set(ids)
+    const previousItems = items
+    const previousSelected = selected
+    const project = projects.find((p) => p.id === projectId)
+    void run({
+      // Filing's whole visible effect is the row leaving this list (R8.3) —
+      // paint that now rather than waiting for the server to confirm it and
+      // then a `router.refresh()` on top of that.
+      apply: () => {
+        setItems((current) => current.filter((a) => !idSet.has(a.id)))
+        setSelected(new Set())
+      },
+      rollback: () => {
+        setItems(previousItems)
+        setSelected(previousSelected)
+      },
+      work: () => fileArtifacts({ workspaceSlug, artifactIds: ids, projectId }),
+      failureTitle: 'Could not file',
+      onSettled: ({ filed }) => {
+        toast({
+          title: filed === 1 ? `Filed into ${project?.name ?? 'the project'}` : `Filed ${filed} artifacts into ${project?.name ?? 'the project'}`,
+          // Says what filing did, because "it disappeared from this list" is
+          // the visible effect and R8.3 wants that understood as a move.
+          description: 'It has moved out of this list and into the project.',
+        })
+        startTransition(() => router.refresh())
+      },
+    })
   }
 
   const disabled = busy || isPending
@@ -183,7 +198,7 @@ export function ArtifactsInbox({
               projects={projects}
               disabled={disabled}
               label="File selected"
-              onPick={(projectId) => void file([...selected], projectId)}
+              onPick={(projectId) => file([...selected], projectId)}
             />
             <Button type="button" size="sm" variant="ghost" disabled={disabled} onClick={() => setSelected(new Set())}>
               Clear
@@ -192,7 +207,7 @@ export function ArtifactsInbox({
         )}
       </div>
 
-      {artifacts.length === 0 ? (
+      {items.length === 0 ? (
         <EmptyState
           icon={<Inbox />}
           title="Nothing to file"
@@ -202,7 +217,7 @@ export function ArtifactsInbox({
         />
       ) : (
         <ul className="flex flex-col gap-2">
-          {artifacts.map((artifact) => (
+          {items.map((artifact) => (
             <li
               key={artifact.id}
               className="flex items-start gap-3 rounded-lg border border-black/10 px-3 py-3 hover:bg-black/[.02] dark:border-white/10 dark:hover:bg-white/[.03]"
@@ -248,7 +263,7 @@ export function ArtifactsInbox({
                   projects={projects}
                   disabled={disabled}
                   label="File into…"
-                  onPick={(projectId) => void file([artifact.id], projectId)}
+                  onPick={(projectId) => file([artifact.id], projectId)}
                 />
               </div>
             </li>

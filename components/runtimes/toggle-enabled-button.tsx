@@ -1,48 +1,58 @@
 'use client'
 
-import { useState, useTransition } from 'react'
-import { useRouter } from 'next/navigation'
 import { toggleRuntimeProfileEnabled } from '@/app/(app)/workspace/[workspaceSlug]/settings/runtimes/actions'
-import { unwrap } from '@/lib/failures'
-import { toast } from '@/hooks/use-toast'
+import { useOptimisticAction } from '@/lib/optimistic'
+import { Badge } from '@/components/ui/badge'
+import { useState } from 'react'
 
+/**
+ * The "Disabled" badge and its toggle, together.
+ *
+ * Both used to be split across a server-rendered `Badge` in the page and this
+ * client button reading its own `enabled` prop — so a click flipped the
+ * button's own label immediately but left the badge showing the STALE state
+ * until `router.refresh()` finished a full server round trip. D0 forbids
+ * that gap, and the fix is for one client component to own both: `enabled`
+ * lives here as local state, seeded once from the server prop, and both the
+ * badge and the label read the same value.
+ */
 export function ToggleRuntimeProfileEnabledButton({
   workspaceSlug,
   profileId,
-  enabled,
+  enabled: initialEnabled,
 }: {
   workspaceSlug: string
   profileId: number
   enabled: boolean
 }) {
-  const router = useRouter()
-  const [busy, setBusy] = useState(false)
-  const [isPending, startTransition] = useTransition()
+  const [enabled, setEnabled] = useState(initialEnabled)
+  const { run, pending } = useOptimisticAction<void>()
 
-  async function toggle() {
-    setBusy(true)
-    try {
-      unwrap(await toggleRuntimeProfileEnabled({ workspaceSlug, profileId, enabled: !enabled }))
-      startTransition(() => router.refresh())
-    } catch (error) {
-      toast({
-        title: 'Could not update runtime profile',
-        description: error instanceof Error ? error.message : undefined,
-        variant: 'destructive',
-      })
-    } finally {
-      setBusy(false)
-    }
+  function toggle() {
+    const next = !enabled
+    void run({
+      apply: () => setEnabled(next),
+      rollback: () => setEnabled(!next),
+      work: () => toggleRuntimeProfileEnabled({ workspaceSlug, profileId, enabled: next }),
+      failureTitle: 'Could not update runtime profile',
+    })
   }
 
   return (
-    <button
-      type="button"
-      onClick={() => void toggle()}
-      disabled={busy || isPending}
-      className="text-[11px] font-medium text-black/50 underline underline-offset-2 hover:text-black disabled:opacity-50 dark:text-white/50 dark:hover:text-white"
-    >
-      {enabled ? 'Disable' : 'Enable'}
-    </button>
+    <>
+      {!enabled && (
+        <Badge variant="outline" className="text-faint">
+          Disabled
+        </Badge>
+      )}
+      <button
+        type="button"
+        onClick={toggle}
+        disabled={pending}
+        className="text-[11px] font-medium text-black/50 underline underline-offset-2 hover:text-black disabled:opacity-50 dark:text-white/50 dark:hover:text-white"
+      >
+        {enabled ? 'Disable' : 'Enable'}
+      </button>
+    </>
   )
 }
