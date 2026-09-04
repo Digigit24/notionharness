@@ -52,6 +52,39 @@ export {
 export type { UsageInput, RunUsageTotals, TaskUsageTotals, WorkspaceUsageRollup } from './usage'
 export { getWorkspaceHealthMetrics } from './health'
 export { getDispatcherHealth, recordDispatcherTick } from './dispatcher-health'
+export {
+  addTeamMember,
+  claimTeamTask,
+  claimableTasks,
+  createTeam,
+  createTeamTask,
+  deleteTeam,
+  getTeam,
+  getTeamMember,
+  getTeamTask,
+  listTeamMembers,
+  listTeamMessages,
+  listTeamTasks,
+  listTeams,
+  markTeamMessagesRead,
+  readTeamInbox,
+  removeTeamMember,
+  reportTeamTaskDone,
+  sendTeamMessage,
+  setTeamLeader,
+  updateTeamMember,
+  updateTeamTaskStatus,
+} from './teams'
+export type {
+  Team,
+  TeamMember,
+  TeamMessage,
+  TeamMessageKind,
+  TeamRole,
+  TeamTask,
+  TeamTaskStatus,
+  TeamWorkspaceMode,
+} from './teams'
 export type { DispatcherHealth } from './dispatcher-health'
 export type { WorkspaceHealthMetrics } from './health'
 
