@@ -1,6 +1,6 @@
 # Handoff — 2026-09-05
 
-Main is at `59f5222`, builds clean, tsc clean, 102/102 vitest, running on :3000 with the dispatcher loop active.
+Main is at `bdc5173`, builds clean, tsc clean, running on :3000 with the dispatcher loop active. R12-P1 through P4 are now COMPLETE. Only R12-P5 (git/worktree/orchestration hardening) remains, running as of this writing in worktree branch `worktree-agent-ac77f49033d110f0c`.
 
 ## Landed this session
 
@@ -79,6 +79,41 @@ claiming runs (PID recorded in `.dispatcher-loop.pid`). Commit `59f5222`.
 4. **Nothing has been opened in a browser.** All verification is compile-,
    lint- and database-level. Optimistic rollbacks, disabled-control
    affordances, and every new screen are visually unverified.
+
+## Update 2 — 2026-09-05, R12-P3 and P4.6 completed
+
+**R12-P3 (channel real-time) is now fully done.** The two missing pieces:
+
+- P3.2 typing indicator — `pg_notify` on a dedicated `channel_typing`
+  channel, zero rows written. Composer throttles to 1/2s; the room expires a
+  signal after 4s with nobody renewing it.
+- P3.3 push instead of poll — new SSE route
+  `app/api/teams/[teamId]/events/stream`. It carries NO room data, only a
+  `refresh` signal that triggers the existing (tested) `pollTeamRoomAction`,
+  and a `typing` signal. `POLL_MS` dropped from 6s to a 60s reconciliation
+  sweep now that the fast path exists.
+
+Proven against real Postgres NOTIFYs, not by reading the code —
+`scripts/test-channel-realtime.ts` opens an actual LISTEN connection and
+asserts real notifications arrive for message/reaction/typing/approval-
+resolve, that one team's event never reaches another's filter, and that
+typing writes zero rows. 8/8. `test-mention-loop` reconfirmed green on the
+live server with all four new notify call sites active on the hot path.
+
+**R12-P4.6 (settings hygiene) is now done too.** A search box over the
+15-item rail, and `hooks/use-unsaved-changes-guard.ts` wired into the three
+settings forms most likely to lose real work (spend cap, runtime defaults,
+safety/memory). Caught and fixed a real bug while wiring it: each form
+needed its OWN post-save snapshot, not a comparison against the original
+server prop, or the guard would stay permanently tripped one save after it
+was last accurate.
+
+**So R12 is complete except P5**, which is running as a worktree agent
+(`worktree-agent-ac77f49033d110f0c` — check `git branch -a` for the current
+name, agent naming may not survive a session boundary). Read its report
+before assuming any part of P5 (unified git invocation, worktree crash
+survival, the advisory-lock mutex, the chaos script, file-viewer edge cases,
+destructive-op confirmations) is done or undone.
 
 ## Notes for whoever runs agents next
 
