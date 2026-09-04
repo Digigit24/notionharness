@@ -1,7 +1,7 @@
 # Roadmap series — from a Hermes app to an agent harness
 
 Supersedes `ROADMAP-A-PAGES.md` (mostly delivered) and `ROADMAP-B-HARNESS.md`
-(folded in below). Seven roadmaps, ordered so that each one makes the next
+(folded in below). Eight roadmaps, ordered so that each one makes the next
 cheaper rather than harder.
 
 ---
@@ -14,11 +14,15 @@ feature is wrong, not the budget.
 
 **What it forbids, concretely.**
 
-- **No CRDT on a streaming path.** A high-frequency append-only log must never
-  live in a Yjs document. Every token would become a document update and a
-  persistence write. This is why the team channel feed is a virtualised list
-  over the typed `RunEvent` stream, and why BlockSuite is used for the
-  channel's durable canvas only.
+- **No CRDT on a streaming path — the rule is about write frequency, not
+  about Yjs.** A high-frequency append-only log must never live in a Yjs
+  document: every token would become a document update and a persistence
+  write. Per *block*, the same substrate is correct and cheap, and it is the
+  only thing that makes a human and an agent editing one page at once work
+  without hand-written conflict logic. So the line is drawn at granularity.
+  Feeds and transcripts are virtualised React lists over the typed `RunEvent`
+  stream. Documents are BlockSuite, written a block at a time by a tool call
+  that has already left the hot path. See R8.
 - **No round trip on the send path.** Pressing Enter paints immediately.
   Anything the server has to confirm is confirmed after the paint, never
   before it. The composer already works this way and must stay that way.
@@ -229,6 +233,9 @@ This is the prerequisite for teams, because team tools ride on it.
 - **R4.5 Self-describing config options.** `{id, type: select | boolean |
   string, options}` rendered by one generic component, so a new runtime's
   settings need no new screen.
+- **R4.6 The artifact server is the first plugin-level MCP we ship**, and the
+  proof the layer works. It is specified in R8.5. Build R4.1 and R4.2 with it
+  as the concrete consumer rather than as a hypothetical one.
 
 ---
 
@@ -366,29 +373,45 @@ is the view for "what are they actually doing right now".
 waiting on approval, blocked, or lost, derived from the run and its heartbeat
 rather than guessed. A slow turn is flagged before it becomes a timeout.
 
-### R6.5 BlockSuite in the channel, done the way that stays fast
+### R6.5 BlockSuite in the channel — the thread is a log, the page is a document
 
-The goal is right: the channel should render our own components, so an agent
-can emit a diff, a run card, a task or an in-page session and have it appear
-inline, and so anything built later renders there too.
+**Superseded decision.** An earlier draft of this section proposed sharing a
+block-renderer registry between the page editor and the channel feed, so a
+message could name a block type and render the same component the editor uses.
+That is no longer the plan. It coupled the feed to the editor's component tree
+for a benefit we can get more cheaply, and it put a document concern on the
+hot path. See R8, which replaces it.
 
-The way to get that without paying for it is to **share the renderer, not the
-document**. Extract the block renderers the editor uses into a registry both
-the page editor and the channel feed consume. A message then names a block
-type and its props, and the channel renders the same component the editor
-would.
+**The rule that survives, restated precisely.** The forbidden thing was never
+BlockSuite. It was **write frequency**. Per token, a CRDT is catastrophic:
+every delta becomes a Yjs update and a persistence write. Per block, it is
+correct and cheap, and it buys the one thing that is genuinely hard to build
+by hand — a human editing the top of a page while an agent appends to the
+bottom, merged without a line of conflict logic.
 
-**Do not stream the live feed into a BlockSuite document.** A CRDT is the
-wrong substrate for a high-frequency append-only log: every token becomes a
-Yjs update and a persistence write, and a busy room with five members would
-spend its time merging rather than rendering. The feed stays a virtualised
-React list over the typed `RunEvent` stream, which is already the fast path.
+So the boundary moves from the technology to the granularity.
 
-Each channel then gets a **canvas**: a real BlockSuite document attached to the
-room for durable artifacts — the plan, the spec, the summary. Agents write
-into it, humans edit it, and it is where "save this reply as a page" lands when
-it happens inside a team. Full editor where a document belongs, firehose where
-a firehose belongs.
+- **The channel feed stays a virtualised React list** over the typed
+  `RunEvent` stream. It renders hand-written components, not editor
+  components, and it pays nothing per token beyond mutating one string.
+- **The channel canvas is a real BlockSuite document** attached to the room,
+  holding the plan, the spec and the summary. Agents write into it through the
+  scoped handle in `lib/agent-page-writes.ts`, humans edit it directly.
+- **Feed components and page components are allowed to be different
+  implementations**, and should be. A diff in the feed is a collapsed glance
+  you scroll past. A diff in a page is full width with comment anchors.
+  Different context, different density. Forcing one component to serve both
+  makes both worse, and the duplication is smaller than the coupling it
+  replaces.
+
+**Nothing extra happens while streaming.** No block-type resolution, no
+registry lookup, no props envelope, no document write. The conversion from
+conversation to document happens on demand, after a turn, through the
+artifact tools in R8.
+
+BlockSuite in a team room is therefore R8 applied to a channel: the room owns
+a canvas, and every member writes to it through the same MCP surface every
+solo session uses. There is no team-specific document code.
 
 ### R6.6 Reliability
 
@@ -426,6 +449,215 @@ restart mid-run.
 
 ---
 
+---
+
+## R8 — Artifacts: what agents author, and where it lives
+
+This pillar replaces the shared-renderer idea in the earlier R6.5 draft, and
+it is the differentiator. Every other agent product returns text. This one
+returns **documents you can edit**, produced by the agent through the same
+editor a human uses, without the thread paying for any of it.
+
+### R8.0 The decision
+
+An agent has two output channels and they are not the same thing.
+
+- **Prose goes in the thread.** Explanation, reasoning, answers, questions.
+  The thread is an append-only log and stays exactly as fast as it is today.
+- **Structure goes in an artifact.** Tables, specs, plans, checklists,
+  comparisons, reports, anything the human will edit afterwards. An artifact
+  is a real BlockSuite page in the document tree, or an HTML document, opened
+  in a panel beside the conversation.
+
+The thread then carries a compact **artifact card** referencing what was
+created. Clicking it opens the panel, not a new route.
+
+This is why it costs nothing at stream time: creating an artifact is a tool
+call, and tool calls already happen after the model has decided, not per
+token. A large generated page is a few dozen block insertions across an
+entire turn. That is negligible for Yjs and it is not on the render path of
+the feed.
+
+### R8.1 What the thread persists
+
+Two logs, and only one is durable.
+
+- **Transport** carries deltas, thinking and tool calls. It exists for the
+  duration of a turn and is dropped once the message commits. Nothing in the
+  product reads it back.
+- **The record** stores the final assistant output as text, plus references
+  to artifacts the message created or touched. No tool calls in message
+  content, no thinking, no deltas.
+
+Keep a bounded, time-expiring run trace off to the side for debugging and for
+the agent's own working context. It must not enter the message model, or it
+grows back into a transcript.
+
+**Accepted cost.** Provenance gets weaker. An artifact can point at the
+message and run that produced it, but not at the individual tool calls behind
+it, because those are not kept. That is the right trade and it is taken
+deliberately.
+
+### R8.2 The data model
+
+`collections/Artifacts.ts` today is P2.1 scaffolding: `task` (required),
+`name`, `url`. That shape cannot express any of this and must be widened.
+
+- `workspace` — required, the tenancy boundary.
+- `kind` — `page` or `html`. One record type, two payloads.
+- `page` — relationship to `pages`, set when `kind` is `page`. The artifact is
+  a pointer; the document itself stays in `Pages` with its `docState`, so it
+  is a first-class page with search, favourites, permissions and history for
+  free.
+- `htmlContent` — set when `kind` is `html`. Rendered sandboxed, never
+  same-origin.
+- `project` — optional relationship, and the field the whole placement rule
+  turns on. `Pages` already carries `project`, so a page artifact keeps the
+  two in step.
+- `session` and `run` — what produced it. Optional, because a human can create
+  an artifact by hand.
+- `task` — becomes **optional**, which is the breaking change to the existing
+  collection. A migration must backfill `workspace` from each row's task.
+- `createdByAgent` — which slot or agent authored it, so the list can be
+  filtered by author.
+
+### R8.3 The placement rule
+
+One rule, stated once, applied everywhere.
+
+- **A session bound to a project** puts its artifacts **inside that project**.
+  They appear in the project's own pages and resources, alongside everything
+  else that project owns. They do not appear in the global Artifacts section,
+  because they already have a home.
+- **A session with no project** produces **loose artifacts**, and those are
+  what the Artifacts section lists. It is the inbox for output that has not
+  been filed yet.
+- **Filing is a move, not a copy.** Assigning a project to a loose artifact
+  sets `project` on both the artifact and its page, and it leaves the
+  Artifacts list. Clearing it sends it back.
+
+The rule generalises to teams with no special case: a room bound to a project
+files its canvas and its members' artifacts into that project, and an unbound
+room's artifacts are loose.
+
+### R8.4 The Artifacts section
+
+A top-level sidebar entry listing loose artifacts newest first, and nothing
+else. Its job is to be emptied.
+
+- **A card per artifact**: title, kind, authoring agent, session it came from,
+  and when. Page artifacts show a first-lines preview from
+  `pages.plainTextContent`, which already exists and costs no extra read.
+- **Filters** for kind, agent and session. No board, no grouping, no saved
+  views. This is a triage list.
+- **Open** puts the artifact in the side panel over the current context, the
+  same panel the conversation uses, so opening one never loses your place.
+- **File into a project** is the primary action on every card, and it is one
+  control. Bulk select for filing several at once.
+- **The empty state says what it means.** Nothing here is the healthy state,
+  not a missing feature, and the copy should say so.
+
+### R8.5 The internal MCP — how agents author artifacts
+
+This is a **plugin-level** server by D4: our database, our permissions, our
+team access, injected per run. By R4.2 it is served over **HTTP and SSE from
+this app**, never stdio, so a member on another machine can author into a
+document and every write is a request we authenticate, authorise, rate-limit
+and log.
+
+The agent never touches Yjs. It gets a small, closed verb set.
+
+- `artifact_create({ kind, title, project? })` — creates the page or HTML
+  record, applies the R8.3 placement rule when `project` is omitted, returns
+  an artifact id and an open URL.
+- `artifact_append({ artifact, blocks[] })` — appends block specs in order.
+  Batched, because a page is written in one call, not one call per paragraph.
+- `artifact_update_block({ artifact, block_id, spec })` — replaces one
+  block's content, for revision passes.
+- `artifact_read({ artifact })` — the current document as block specs, so an
+  agent can revise a page it wrote last week rather than starting over.
+- `artifact_list({ project?, session?, limit })` — discovery.
+
+**Two ownership modes, one module.** `lib/agent-page-writes.ts` already
+implements the hard one correctly: a run holds a scoped subtree handle,
+appends only under blocks it owns, and never calls `updateBlock` or
+`deleteBlock`. Keep that exactly as it is for **appending into a human's
+page**. Add a second mode for a page the run itself created, where the run
+owns the whole document and update and reorder are legitimate. The scoping
+check is the same code with a different root.
+
+**The block vocabulary is the product surface.** `AgentBlockSpec` today is
+`heading | paragraph | list | code`. That is enough for prose and not enough
+for a document worth generating. Extend it to the flavours that already
+exist, which is mostly wiring rather than new editor work.
+
+- `table` maps to the native database block, flavour
+  `affine:embed-teable-native`, already registered in `lib/blocksuite-doc.ts`.
+  This is the answer to "the agent should be able to make tables", and it
+  yields real columns, types and views rather than a static grid.
+- `run_card` maps to `affine:embed-run-card`, already registered.
+- `task` maps to `affine:embed-task`, already registered.
+- `agent_session` maps to `affine:embed-agent-session`. Its schema exists at
+  `components/editor/blocks/agent-session/schema.ts` but is **not** in the
+  `Schema().register` call in `lib/blocksuite-doc.ts`, so a server-side write
+  of it would fail today. Register it.
+- `quote`, `divider` and `image` are plain Affine flavours needing no new
+  schema.
+- `diff` has no block flavour anywhere in the codebase, as
+  `lib/agent-page-writes.ts` already notes. It needs a real schema, custom
+  element, spec and registration. Treat it as its own task, not a spec entry.
+
+**Never let the agent write markdown for us to parse.** A markdown pipeline
+permanently caps the product at what markdown expresses and makes every
+custom block unreachable. Emitting typed block specs is the entire
+differentiation, and it lives in this tool schema.
+
+**Policy belongs in the system prompt, not in code.** Prose stays in the
+thread. Structure becomes an artifact. A short answer never gets one. Without
+an explicit threshold the agent will either create a page for every reply or
+never create one, and both failures are worse than the feature.
+
+### R8.6 The panel, and streaming at block level
+
+Side by side, not a link. Navigation breaks the loop where a human reads the
+artifact and immediately tells the agent to change it, and co-presence is the
+whole work pattern.
+
+- The panel opens over the current route and holds the full editor, not a
+  preview. Editing it is editing the page.
+- Blocks appear as they are written. One SSE subscription per open artifact,
+  carrying block-level changes only. It reads as alive and costs nothing on
+  the feed, because the feed is not involved.
+- The thread card shows live status while a turn is writing, then settles to
+  a static reference.
+
+### R8.7 Reliability and concurrency
+
+- **Idempotency per tool call**, keyed by run and call id, so a retry cannot
+  duplicate a page or double-append a section.
+- **Rate limit blocks per turn** with a hard ceiling. A looping agent must not
+  be able to write a ten thousand block document.
+- **Presence in the panel.** Show that an agent is writing, and where.
+- **Soft lock the block under a human cursor.** The CRDT merges either way,
+  but merging a human mid-sentence with an agent rewrite is correct and still
+  infuriating.
+- **A deleted handle stops the run's writes** rather than recreating them.
+  This is already the behaviour of `appendBlockToSubtree` and it is right: the
+  human deleting the output means they do not want it.
+- **HTML artifacts render sandboxed**, with no same-origin access and no
+  ambient credentials.
+
+### R8.8 Done when
+
+An agent asked for a comparison writes a page containing a real table, the
+page opens in a panel beside the conversation while blocks land one at a
+time, the thread holds only the final prose and a card, the artifact appears
+in the Artifacts section because the session had no project, filing it into a
+project moves it out of that list and into the project, and a human editing
+the top of the page while the agent writes the bottom loses nothing.
+
+---
+
 ## Known blockers, stated plainly
 
 1. **Extraction has to precede the second runtime.** Doing it afterwards means
@@ -441,3 +673,15 @@ restart mid-run.
 6. **Abstractions rot.** AionUi accumulated four deprecated backend kinds in
    about a year. Every capability flag we add should be derived from the
    handshake, so there is nothing to deprecate later.
+7. **`collections/Artifacts.ts` has to change shape before R8 starts.** It is
+   task-bound scaffolding with a required `task` and a required `url`. R8
+   needs `workspace`, `kind`, `project` and an optional `task`, which is a
+   migration with a backfill, not an additive field.
+8. **The block vocabulary is the bottleneck, not the tool surface.** Writing
+   the artifact MCP is small. Every block type an agent can emit that does not
+   already exist as a registered flavour is its own editor task, and `diff` is
+   the first one due.
+9. **The prose-versus-artifact threshold is a prompt problem with no
+   fallback.** Get it wrong and the agent either files a page per reply or
+   never files one. It needs evaluation against real sessions before the
+   feature ships, not after.

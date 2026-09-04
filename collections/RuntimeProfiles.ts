@@ -17,6 +17,20 @@ export const RuntimeProfiles: CollectionConfig = {
     // capability answers from this (see `lib/runtimes/detect.ts`), and treat
     // its absence as "not probed yet", which is a different answer from "the
     // agent cannot do that".
+    // How this runtime gives an agent its identity on disk. Explicit rather
+    // than guessed from the agent's name: string-matching 'hermes' out of a
+    // handshake is exactly the kind of rule that rots on someone else's
+    // release. 'none' is honest for a runtime with no relocatable home — the
+    // agent still gets its instructions, because those go in the prompt.
+    {
+      name: 'homeStrategy',
+      type: 'select',
+      defaultValue: 'hermes',
+      options: [
+        { label: 'Hermes agent home', value: 'hermes' },
+        { label: 'No agent home', value: 'none' },
+      ],
+    },
     { name: 'handshake', type: 'json' },
     // Machine-readable probe outcome, not a translated sentence: 'ok',
     // 'command_not_found', 'acp_init_failed', 'acp_init_timeout',

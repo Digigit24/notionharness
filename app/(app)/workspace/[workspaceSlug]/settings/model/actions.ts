@@ -73,20 +73,29 @@ function normaliseFallbacks(raw: unknown): FallbackEntry[] {
     .filter((entry): entry is FallbackEntry => entry !== null)
 }
 
+/**
+ * The fast half: everything needed to paint the page.
+ *
+ * Deliberately does NOT fetch the provider/model catalogue. That call can
+ * take tens of seconds on a cold runtime — it wakes the dashboard server and
+ * may hit provider APIs — and awaiting it here meant the whole page sat on
+ * skeletons until it returned, which is exactly the "no first render blocked
+ * on an external process" rule. The catalogue now loads after paint through
+ * `getModelOptionsFor` below.
+ */
 export async function getModelSettings(profile: string): Promise<ModelSettings> {
   await requireUser()
   const profiles = await listServeProfiles().catch(() => [] as ServeProfile[])
   try {
-    const [info, options, config] = await Promise.all([
+    const [info, config] = await Promise.all([
       getModelInfo(profile),
-      getModelOptions(profile).catch(() => null),
       readConfigSubset([FALLBACK_PATH], profile),
     ])
     return {
       profiles,
       profile,
       info,
-      options,
+      options: null,
       fallbacks: normaliseFallbacks(config[FALLBACK_PATH]),
       error: null,
     }
@@ -100,6 +109,12 @@ export async function getModelSettings(profile: string): Promise<ModelSettings> 
       error: err instanceof Error ? err.message : 'Could not read model settings.',
     }
   }
+}
+
+/** The slow half, fetched after the page is already on screen. */
+export async function getModelOptionsFor(profile: string): Promise<ServeModelOptions | null> {
+  await requireUser()
+  return getModelOptions(profile).catch(() => null)
 }
 
 export async function setProfileActiveModel(input: {

@@ -505,6 +505,11 @@ async function executeClaimedRun(
       // per-conversation state to the profile's own. Verified — it fails
       // quietly, with no error, which is the worst way to be wrong.
       baseHermesHome: agentProfileHome,
+      // Which strategy materialises this agent's identity on disk. Read off
+      // the runtime profile rather than assumed: a runtime with no
+      // relocatable home answers 'none', and the agent still gets its
+      // instructions because those go into the prompt (`buildPromptText`).
+      homeStrategy: typeof runtimeProfile.homeStrategy === 'string' ? runtimeProfile.homeStrategy : 'hermes',
       // P5.4: when permissionMode is 'ask', wire the callback that creates a
       // real pending approval and waits for the user to resolve it. Also raise
       // timeouts significantly — the turn can now be blocked waiting for a human.

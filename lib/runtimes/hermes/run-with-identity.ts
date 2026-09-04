@@ -12,6 +12,11 @@ export type SendTurnWithIdentityOptions = Omit<SendTurnOptions, 'env'> &
   Pick<BuildHermesHomeOverlayOptions, 'agentId' | 'conversationId' | 'enabledSkills'> &
   Pick<BuildHermesHomeOverlayOptions, 'baseHermesHome' | 'agentMemoryRoot' | 'conversationStateRoot' | 'taskRoot'> & {
     env?: Record<string, string | undefined>
+    /** Which runtime home strategy materialises this agent's identity. See
+     * `lib/runtimes/home.ts`. Defaults to Hermes because that is what this
+     * function has always done; a runtime answering 'none' gets no home and
+     * carries its personality in the prompt instead. */
+    homeStrategy?: string
   }
 
 export interface SendTurnWithIdentityResult extends SendTurnResult {
@@ -34,6 +39,14 @@ export interface SendTurnWithIdentityResult extends SendTurnResult {
  * regardless of how the turn ends.
  */
 export async function sendTurnWithIdentity(opts: SendTurnWithIdentityOptions): Promise<SendTurnWithIdentityResult> {
+  // A runtime that declares no home gets none, and says which skills it
+  // therefore could not load rather than failing or pretending.
+  if ((opts.homeStrategy ?? 'hermes') === 'none') {
+    const result = await sendTurn({ ...opts, env: opts.env })
+    const declaredSkills = Array.isArray(opts.enabledSkills) ? opts.enabledSkills.map(String) : []
+    return { ...result, missingSkills: declaredSkills, hardlinkFallbackFor: [] }
+  }
+
   const overlay = await buildHermesHomeOverlay({
     runId: opts.runId,
     agentId: opts.agentId,

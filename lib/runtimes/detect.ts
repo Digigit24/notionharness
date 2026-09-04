@@ -11,6 +11,7 @@
 // the previous check, which spawned the binary with Hermes's own `--check`
 // flag and therefore could only ever validate Hermes.
 import { spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -81,11 +82,101 @@ function jsonRpcLine(id: number, method: string, params: unknown): string {
  * protocol" without the SDK's session machinery, retries or event plumbing
  * getting involved. It is a probe, not a client.
  */
+/**
+ * Splits a stored command that carries its own arguments.
+ *
+ * Runtime profiles in the wild hold things like
+ * `claude --dangerously-skip-permissions` in a single field, and spawning
+ * that verbatim fails with ENOENT — reported as "not installed", which is the
+ * wrong diagnosis entirely.
+ *
+ * Deliberately NOT a naive split on whitespace: Windows paths contain spaces
+ * (`C:\Program Files\...`), and every real runtime on this machine is an
+ * absolute path. So an existing file is always taken whole, and only a
+ * non-existent path is treated as a command line.
+ */
+export function splitCommand(commandName: string, extraArgs: string[] = []): { command: string; args: string[] } {
+  const trimmed = commandName.trim()
+  if (!trimmed.includes(' ') || existsSync(trimmed)) return { command: trimmed, args: extraArgs }
+  const [command, ...inline] = trimmed.split(/\s+/)
+  return { command, args: [...inline, ...extraArgs] }
+}
+
+/**
+ * Step one on its own: is this command actually runnable here?
+ *
+ * `spawn` without a shell does not consult PATHEXT on Windows, so a bare
+ * `claude` fails with ENOENT even when `claude.cmd` sits on PATH — which the
+ * probe would then report as "not installed", the wrong diagnosis for a
+ * perfectly good install. Asking `where` (or `which`) first resolves that,
+ * and it is also the honest shape of step one: presence is a separate
+ * question from protocol.
+ *
+ * Returns the absolute path to spawn, or null when the command genuinely is
+ * not here.
+ */
+export async function resolveCommandPath(command: string): Promise<string | null> {
+  if (existsSync(command)) return command
+  const finder = process.platform === 'win32' ? 'where' : 'which'
+  return new Promise((resolve) => {
+    let out = ''
+    const child = spawn(finder, [command], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
+    child.stdout?.on('data', (c: Buffer) => {
+      out += c.toString('utf8')
+    })
+    child.on('error', () => resolve(null))
+    child.on('exit', (code) => {
+      // `where` prints every match, one per line; the first is what would run.
+      // `where` prints every match, and on Windows the FIRST is often an
+      // extensionless shim that is not a real file (npm writes `claude`,
+      // `claude.cmd` and `claude.ps1` side by side). Take the first line that
+      // actually exists, or the probe reports a perfectly good install as
+      // missing.
+      const candidates = out
+        .split(String.fromCharCode(10))
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .filter((line) => existsSync(line))
+      // On Windows, npm installs three shims side by side — `claude`,
+      // `claude.cmd` and `claude.ps1` — and `where` lists the extensionless
+      // one first. That one is a shell script Node cannot execute, so taking
+      // it verbatim produced ENOENT and a false "not installed" verdict on a
+      // working install. Prefer a real executable, then a batch shim (which
+      // the spawn below routes through the command processor), and only then
+      // whatever is left.
+      const rank = (path: string) => (/\.exe$/i.test(path) ? 0 : /\.(cmd|bat)$/i.test(path) ? 1 : 2)
+      const best = candidates.sort((a, b) => rank(a) - rank(b))[0]
+      resolve(code === 0 && best ? best : null)
+    })
+    setTimeout(() => {
+      try {
+        child.kill()
+      } catch {
+        // Already gone.
+      }
+      resolve(null)
+    }, 5_000)
+  })
+}
+
 export async function probeAcpRuntime(
-  commandName: string,
-  args: string[] = [],
+  rawCommand: string,
+  extraArgs: string[] = [],
 ): Promise<RuntimeProbeResult> {
+  const split = splitCommand(rawCommand, extraArgs)
+  const args = split.args
   const start = Date.now()
+  const resolved = await resolveCommandPath(split.command)
+  if (!resolved) {
+    return {
+      code: 'command_not_found',
+      ok: false,
+      detail: `${split.command} is not on this machine, or not on PATH.`,
+      durationMs: Date.now() - start,
+      handshake: null,
+    }
+  }
+  const commandName = resolved
   // A throwaway cwd: an agent may create state on initialize, and it must not
   // land in a real workspace.
   const cwd = await mkdtemp(join(tmpdir(), 'nf-probe-'))
@@ -115,12 +206,23 @@ export async function probeAcpRuntime(
 
     let child: ReturnType<typeof spawn>
     try {
-      child = spawn(commandName, args, {
-        cwd,
-        env: buildSpawnEnv() as NodeJS.ProcessEnv,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        windowsHide: true,
-      })
+      // A Windows batch shim (`.cmd`/`.bat`, which is how npm installs a CLI)
+      // is not an executable image — `spawn` cannot run it directly and fails
+      // with EINVAL or ENOENT. Route those through the command processor.
+      const isBatchShim = /\.(cmd|bat)$/i.test(commandName)
+      child = isBatchShim
+        ? spawn(process.env.COMSPEC || 'cmd.exe', ['/d', '/s', '/c', commandName, ...args], {
+            cwd,
+            env: buildSpawnEnv() as NodeJS.ProcessEnv,
+            stdio: ['pipe', 'pipe', 'pipe'],
+            windowsHide: true,
+          })
+        : spawn(commandName, args, {
+            cwd,
+            env: buildSpawnEnv() as NodeJS.ProcessEnv,
+            stdio: ['pipe', 'pipe', 'pipe'],
+            windowsHide: true,
+          })
     } catch (err) {
       void rm(cwd, { recursive: true, force: true }).catch(() => undefined)
       resolve(finish('spawn_failed', err instanceof Error ? err.message : String(err)))

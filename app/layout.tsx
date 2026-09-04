@@ -43,7 +43,14 @@ export default function RootLayout({
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
-      <body className="min-h-full flex flex-col">
+      {/* Extensions inject attributes and nodes into <body> before React
+          hydrates — the Chrome extensions in normal use here do exactly that
+          — and React reports it as a hydration mismatch (#418) on every page,
+          which buries any real one. <html> is already suppressed for the
+          theme script above; this covers the same class of noise one level
+          down. Suppression applies to this element only, so a genuine
+          mismatch inside the app still reports. */}
+      <body className="min-h-full flex flex-col" suppressHydrationWarning>
         <ThemeProvider>{children}</ThemeProvider>
         {/* ROADMAP B-6 "Finish" (state-craft sweep) — components/ui/toast.tsx
             + hooks/use-toast.ts have existed since B-0, but no route ever

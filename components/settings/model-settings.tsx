@@ -1,16 +1,18 @@
 'use client'
 
-import { useMemo, useState, useTransition } from 'react'
+import { useEffect, useMemo, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowDown, ArrowUp, Check, Loader2, Plus, Trash2, TriangleAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
+  getModelOptionsFor,
   setFallbackProviders,
   setProfileActiveModel,
   type FallbackEntry,
   type ModelSettings,
 } from '@/app/(app)/workspace/[workspaceSlug]/settings/model/actions'
+import type { ServeModelOptions } from '@/lib/runtimes/hermes/serve-client'
 
 /**
  * Active model, and the fallback order Hermes tries when it fails.
@@ -38,10 +40,31 @@ export function ModelSettingsView({
   const [model, setModel] = useState(settings.info?.model ?? '')
   const [fallbacks, setFallbacks] = useState<FallbackEntry[]>(settings.fallbacks)
 
-  // Memoised so the model list below does not recompute on every keystroke
-  // elsewhere in the form (and so the lint rule about a changing dependency
-  // is satisfied rather than silenced).
-  const providers = useMemo(() => settings.options?.providers ?? [], [settings.options])
+  // The provider catalogue arrives AFTER first paint. Fetching it server-side
+  // meant the page sat on skeletons until a cold runtime had woken and every
+  // provider had answered — observed live as a model page that never loaded.
+  // The current model and the fallback list render immediately; only the
+  // pickers wait, and they say so.
+  const [options, setOptions] = useState<ServeModelOptions | null>(settings.options)
+  const [optionsLoading, setOptionsLoading] = useState(settings.options === null)
+  useEffect(() => {
+    if (settings.options !== null) return
+    let cancelled = false
+    setOptionsLoading(true)
+    getModelOptionsFor(settings.profile)
+      .then((result) => {
+        if (!cancelled) setOptions(result)
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) setOptionsLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [settings.profile, settings.options])
+
+  const providers = useMemo(() => options?.providers ?? [], [options])
   const modelsForProvider = useMemo(
     () => providers.find((p) => p.slug === provider)?.models ?? [],
     [providers, provider],
@@ -167,7 +190,7 @@ export function ModelSettingsView({
             }}
           >
             <SelectTrigger size="sm" className="w-52 text-xs">
-              <SelectValue placeholder="Provider" />
+              <SelectValue placeholder={optionsLoading ? 'Loading providers…' : 'Provider'} />
             </SelectTrigger>
             <SelectContent>
               {providers.map((p) => (
@@ -265,7 +288,7 @@ export function ModelSettingsView({
                   }
                 >
                   <SelectTrigger size="sm" className="w-40 text-xs">
-                    <SelectValue placeholder="Provider" />
+                    <SelectValue placeholder={optionsLoading ? 'Loading providers…' : 'Provider'} />
                   </SelectTrigger>
                   <SelectContent>
                     {providers.map((p) => (

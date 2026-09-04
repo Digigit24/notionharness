@@ -488,6 +488,7 @@ export interface RuntimeProfile {
     | boolean
     | null;
   enabled?: boolean | null;
+  homeStrategy?: ('hermes' | 'none') | null;
   handshake?:
     | {
         [k: string]: unknown;
@@ -1158,6 +1159,7 @@ export interface RuntimeProfilesSelect<T extends boolean = true> {
   commandName?: T;
   fixedArgs?: T;
   enabled?: T;
+  homeStrategy?: T;
   handshake?: T;
   lastProbeCode?: T;
   lastProbeDetail?: T;
