@@ -1597,7 +1597,7 @@ screen was designed against.
 
 ---
 
-### R12-P5 — Repo, git, worktrees, orchestration: nothing breaks
+### R12-P5 — Repo, git, worktrees, orchestration: nothing breaks — DONE
 
 The most dangerous surface in the product, because it runs external
 processes against real repositories, and the failure modes are other
@@ -2077,7 +2077,7 @@ boundary: the divider between panes. This phase closes that gap before
 building anything else on top of it, because every item after this one
 mounts inside this shell.
 
-**R14-P0.1 Flatten the chrome — S.** Verified exactly where each box comes
+**R14-P0.1 Flatten the chrome — S. DONE.** Verified exactly where each box comes
 from before touching any of them: `channel-view.tsx:579` (`rounded-xl
 border`, the feed's own container) and `:594` (a second `rounded-t-xl
 border-b` sub-header inside it), `message-composer.tsx:256` (`rounded-xl
@@ -2111,7 +2111,18 @@ History) is active rather than being its own fourth thing to coordinate.
 `review-surface`, `repo-browser`, `page-canvas`) — the channel adopting it
 is consistency, not a new pattern.
 
-**R14-P0.3 History becomes a tab, not a route.** The Work route today is a
+**DONE, corrected against `DetailLayout`'s actual shape.** Its `rightRail`
+slot is fixed-width (`xl:w-80`); the thread pane's own resizable divider
+from R12-P3.4 would collide with that. Shipped `Canvas`/`History` as two
+more entries in the SAME `RoomView` union `team-room.tsx` already used for
+`Channel | Lanes | Board`, rendered through the one existing tab bar and
+the room's own pre-existing `selectView`/`history.replaceState` function —
+the identical technique `DetailLayout` uses, not the component itself.
+Canvas stopped being a docked side pane entirely (`canvasOpen` boolean and
+its toggle button removed) and now renders full-width as its own tab, same
+as Messages.
+
+**R14-P0.3 History becomes a tab, not a route. DONE.** The Work route today is a
 separate page (`/work?session=`) that a "See full run" link navigates away
 to. That stays as the deep-link target for a specific run (bookmarkable,
 shareable), but the channel gains its own **History** tab — the same
@@ -2121,7 +2132,7 @@ a second surface: `Messages | Canvas | History`, each occupying the same
 main pane. Opening a specific run from History pushes into the run-detail
 slide-over (P0.5), not to a fourth page.
 
-**R14-P0.4 The composer gets a real toolbar and file attachments — M.**
+**R14-P0.4 The composer gets a real toolbar and file attachments — M. DONE.**
 Two genuinely separate pieces of work, verified separately rather than
 assumed:
 - **Markdown-lite (R14-P4.1)**: bold/italic/code/quote/list, Cmd+B/I,
@@ -2140,7 +2151,7 @@ assumed:
   estimate stops understating the work.
 
 **R14-P0.5 A reusable run-detail slide-over, built once, used everywhere —
-M.** The exact ask behind the "view run" screenshot. Today "See full run"
+M. DONE.** The exact ask behind the "view run" screenshot. Today "See full run"
 navigates to `/work?session=`, leaving the channel. `useRunEventStream`
 (the hook `pending-reply-row.tsx` already uses to stream a ghost row's
 output) takes a bare `runId` and a loader — it has no assumption about
@@ -2155,7 +2166,7 @@ component instead of duplicating the layout — one implementation, two
 entry points, matching this session's own rule about not building a second
 way to do something the first way already does correctly.
 
-**R14-P0.6 Runtime catalog picker — S/M**, corrected against R12-P4.2's own
+**R14-P0.6 Runtime catalog picker — S/M. DONE**, corrected against R12-P4.2's own
 scope. `components/runtimes/add-profile-form.tsx` today is a bare text
 field for a command name — there is no catalog of known runtime kinds to
 pick from. New: a static `lib/runtimes/catalog.ts` (name, icon, the
@@ -2169,7 +2180,7 @@ about that runtime's capabilities, which still come only from its own ACP
 handshake.
 
 **R14-P0.7 Agent detail page: Overview / Work / Capabilities / Settings —
-S/M**, corrected against the actual tab list. `agent-detail-view.tsx`
+S/M. DONE**, corrected against the actual tab list. `agent-detail-view.tsx`
 already renders six tabs today: Overview, Capabilities, Sessions, Memory,
 Access, Settings (`:275-285`) — Access arrived this session via the
 `extraTabs` mechanism; Capabilities already exists and is not something to
@@ -2198,7 +2209,7 @@ message; and "see full run" never leaves the channel.
 
 ---
 
-### R14-P0.8 — A task is a thread, and the popup that creates one
+### R14-P0.8 — A task is a thread, and the popup that creates one — IN PROGRESS
 
 **The decision this section exists to state plainly.** Two task systems
 already exist and this does NOT merge them, because they answer different
@@ -2260,7 +2271,7 @@ go find.
 
 ---
 
-### R14-P0.9 — Inbox: the Activity view, drawn
+### R14-P0.9 — Inbox: the Activity view, drawn — DONE
 
 This is R14-P2.4 ("The Activity view"), UNCHANGED in mechanism — three
 tabs over `listUserMentions` and thread/reaction queries that already
