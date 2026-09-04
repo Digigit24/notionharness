@@ -212,15 +212,18 @@ export function MessageComposer({
       return
     }
 
-    setSending(true)
-    try {
-      await onSend({ body: text, kind, toSlotId })
-      setBody('')
-      setCaret(0)
-      setCommandError(null)
-    } finally {
-      setSending(false)
-    }
+    // R12-P3.1 - CLEAR FIRST, SEND AFTER.
+    //
+    // This used to `await onSend(...)` and only then clear the box, with the
+    // whole composer at `opacity-70` meanwhile. D0 names this exact path: the
+    // paint must not wait on the server. `onSend` now paints the row itself and
+    // reconciles later, so there is nothing left here worth blocking on - and
+    // nothing to put back on failure either, because the failed row keeps the
+    // text and offers to send it again.
+    setBody('')
+    setCaret(0)
+    setCommandError(null)
+    void onSend({ body: text, kind, toSlotId })
   }
 
   const busy = sending || disabled

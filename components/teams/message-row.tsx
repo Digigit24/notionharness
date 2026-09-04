@@ -68,6 +68,8 @@ export function MessageRow({
   onOpenTask,
   onMakeTask,
   onToggleReaction,
+  onRetrySend,
+  onDiscardSend,
   busy,
 }: {
   message: RoomFeedMessage
@@ -94,6 +96,10 @@ export function MessageRow({
    * already has one) — the hover action is then simply absent. */
   onMakeTask: ((messageId: number) => void) | null
   onToggleReaction: (messageId: number, emoji: string) => void
+  /** R12-P3.1 - a refused message keeps its text and offers to go again.
+   * Absent in the thread pane's read-only contexts. */
+  onRetrySend?: (pendingKey: string) => void
+  onDiscardSend?: (pendingKey: string) => void
   busy: boolean
 }) {
   const [picking, setPicking] = useState(false)
@@ -106,6 +112,10 @@ export function MessageRow({
   const isHuman = message.fromSlotId == null && !isSystem
   const isMine = mySlotId != null && message.fromSlotId === mySlotId
   const dead = message.undeliverableAt != null
+  // R12-P3.1 - three states a row can be in that the database knows nothing
+  // about: on its way, refused, or (the usual case) neither.
+  const sending = message.sendState === 'sending'
+  const failedToSend = message.sendState === 'failed'
   const mentionsMe = mentionsSlot(message, mySlotId)
   const name = senderLabelForMessage(slots, message)
   const avatarColour = isSystem ? '#f59e0b' : isHuman ? '#64748b' : colourOf(from)
@@ -117,6 +127,11 @@ export function MessageRow({
         'group relative flex gap-2.5 rounded-md px-2 py-0.5 hover:bg-black/[.025] dark:hover:bg-white/[.03]',
         grouped ? 'mt-px' : 'mt-2 first:mt-0',
         focused && 'ring-2 ring-indigo-500/60 ring-offset-0',
+        // Dimmed while it is on its way. Deliberately subtle: the message IS
+        // there, and making it look provisional would undo the point of
+        // painting it early.
+        sending && 'opacity-60',
+        failedToSend && 'bg-red-500/[.06]',
         // A message naming you gets a left edge and a wash, the way every chat
         // client marks one. Loud enough to find by scrolling, quiet enough not
         // to shout over the conversation around it.
@@ -154,7 +169,7 @@ export function MessageRow({
               <span className="text-[10px] uppercase tracking-wide text-amber-600 dark:text-amber-400">lead</span>
             )}
             <span className="text-[11px] text-black/35 dark:text-white/35" title={message.createdAt}>
-              {formatClock(message.createdAt)}
+              {sending ? 'Sending…' : formatClock(message.createdAt)}
             </span>
             {message.toSlotId != null && (
               <span
@@ -245,6 +260,30 @@ export function MessageRow({
             ),
           )}
         </p>
+
+        {failedToSend && (
+          <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-red-600 dark:text-red-400">
+            <span>{message.failureMessage ?? 'Not sent.'}</span>
+            {message.pendingKey && onRetrySend && (
+              <button
+                type="button"
+                onClick={() => onRetrySend(message.pendingKey!)}
+                className="rounded border border-red-500/40 px-1.5 py-px hover:bg-red-500/10"
+              >
+                Try again
+              </button>
+            )}
+            {message.pendingKey && onDiscardSend && (
+              <button
+                type="button"
+                onClick={() => onDiscardSend(message.pendingKey!)}
+                className="rounded px-1 py-px underline-offset-2 hover:underline"
+              >
+                Discard
+              </button>
+            )}
+          </div>
+        )}
 
         {dead && message.undeliverableReason && (
           <p className="text-[11px] text-red-600/80 dark:text-red-400/80">

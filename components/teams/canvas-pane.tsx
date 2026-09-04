@@ -6,11 +6,41 @@ import { ExternalLink, Loader2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { PaneBoundary } from '@/components/ui/pane-boundary'
 import { ClientFailure, unwrap } from '@/lib/failures'
-import { BlockSuiteEditor } from '@/components/editor/BlockSuiteEditor'
+import dynamic from 'next/dynamic'
+import { Skeleton } from '@/components/ui/skeleton'
+import { PaneDivider, useResizablePane } from '@/components/ui/resizable-pane'
 import {
   ensureChannelCanvasAction,
   type ChannelCanvas,
 } from '@/app/(app)/workspace/[workspaceSlug]/teams/actions'
+
+/**
+ * R12-P2.4 - the editor arrives when it is needed, not with the page.
+ *
+ * Measured: `/workspace/[workspaceSlug]/teams/[teamId]` was 564 kB first load,
+ * second only to the page canvas itself, because this file imported
+ * `BlockSuiteEditor` statically while the canvas pane is CLOSED by default.
+ * Everyone reading a channel paid for an editor almost nobody opened.
+ *
+ * `ssr: false` because BlockSuite is a browser editor with no useful server
+ * render, and the placeholder is shaped like a document rather than being a
+ * spinner - the pane has already been opened deliberately, so what belongs
+ * there is the shape of what is coming.
+ */
+const BlockSuiteEditor = dynamic(
+  () => import('@/components/editor/BlockSuiteEditor').then((m) => m.BlockSuiteEditor),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex flex-col gap-3 p-4">
+        <Skeleton className="h-7 w-2/3" />
+        <Skeleton className="h-4 w-full" />
+        <Skeleton className="h-4 w-11/12" />
+        <Skeleton className="h-4 w-3/5" />
+      </div>
+    ),
+  },
+)
 
 /**
  * The channel's canvas, beside the feed.
@@ -77,8 +107,19 @@ export function CanvasPane({
     }
   }, [workspaceId, teamId])
 
+  // A canvas wants more room than a thread does, so it gets a wider default
+  // and a higher ceiling - and its own key, because the two are separate
+  // preferences about two different things.
+  const pane = useResizablePane({ storageKey: 'notionharness.channel.canvas.width', defaultWidth: 416, min: 320, max: 1100 })
+
   return (
-    <aside className="flex min-h-0 w-[26rem] shrink-0 flex-col rounded-xl border border-black/10 dark:border-white/10">
+    <>
+      <PaneDivider label="Resize the canvas" dragging={pane.dragging} {...pane.dividerProps} />
+      <aside
+        ref={pane.paneRef as React.RefObject<HTMLElement>}
+        style={{ width: pane.width }}
+        className="flex min-h-0 shrink-0 flex-col rounded-xl border border-black/10 dark:border-white/10"
+      >
       {/* R12-P1.2 — same reason as the thread beside it: this pane is a
           BlockSuite document inside the channel route, not a route of its own,
           so without a boundary here a bad doc state takes the room's feed with
@@ -132,6 +173,7 @@ export function CanvasPane({
           )}
         </div>
       </PaneBoundary>
-    </aside>
+      </aside>
+    </>
   )
 }

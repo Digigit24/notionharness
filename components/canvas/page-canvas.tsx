@@ -11,7 +11,8 @@ import { PageOriginHeader } from '@/components/canvas/page-origin-header'
 import type { PageOrigin } from '@/lib/page-origin'
 import { EmojiPicker } from './emoji-picker'
 import { CoverPicker } from './cover-picker'
-import { BlockSuiteEditor } from '@/components/editor/BlockSuiteEditor'
+import dynamic from 'next/dynamic'
+import { Skeleton } from '@/components/ui/skeleton'
 import { SuggestionBar } from '@/components/editor/suggestions/suggestion-bar'
 import { PageDockedPanel } from '@/components/editor/agent-thread/page-docked-panel'
 import { ThemeToggle } from '@/components/theme/theme-toggle'
@@ -27,6 +28,35 @@ import type { Page, Workspace } from '@/payload-types'
 import { RowProperties } from '@/components/database/row-properties'
 import type { PageProvenanceMap } from '@/lib/provenance'
 import { PageProvenanceStrip, type ProvenanceTimeFilter } from '@/components/canvas/page-provenance-strip'
+
+/**
+ * R12-P2.4 / R13-P3.3 - the editor arrives after the page shell, not with it.
+ *
+ * Measured: this route is 564 kB first load, the heaviest in the app, and the
+ * editor is nearly all of it. Splitting it means the title, the breadcrumb, the
+ * origin header and the row properties paint immediately and the canvas
+ * hydrates behind them - which is the whole difference between "the page is
+ * loading" and "the app is stuck".
+ *
+ * `ssr: false` because BlockSuite is a browser editor with no useful server
+ * render, and the placeholder is shaped like a document rather than being a
+ * spinner.
+ */
+const BlockSuiteEditor = dynamic(
+  () => import('@/components/editor/BlockSuiteEditor').then((m) => m.BlockSuiteEditor),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex flex-col gap-3 py-4">
+        <Skeleton className="h-4 w-full" />
+        <Skeleton className="h-4 w-11/12" />
+        <Skeleton className="h-4 w-4/5" />
+        <Skeleton className="h-4 w-3/5" />
+      </div>
+    ),
+  },
+)
+
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000
 

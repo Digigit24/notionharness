@@ -271,6 +271,68 @@ export function TeamRoom({
     })
   }, [])
 
+  /**
+   * R12-P3.1 - a message appears the instant it is typed.
+   *
+   * Inserted straight into whichever list it belongs in, with no server call
+   * between the keystroke and the paint. `settleOptimistic` below swaps it for
+   * the row the database actually wrote, matched on `pendingKey` because the
+   * placeholder has no real id yet.
+   */
+  const insertOptimistic = useCallback((row: RoomFeedMessage) => {
+    if (row.threadRootId == null) {
+      setFeed((prev) => [...prev, row])
+      return
+    }
+    setThread((prev) => (prev.length === 0 ? prev : [...prev, row]))
+    // The root's reply count is nudged here for the same reason `appendReply`
+    // nudges it: the count is computed server-side and the next refresh will
+    // correct it, but leaving it stale for six seconds makes a reply you can
+    // see on screen look like it did not happen.
+    setFeed((prev) =>
+      prev.map((m) =>
+        m.id === row.threadRootId ? { ...m, replyCount: m.replyCount + 1, lastReplyAt: row.createdAt } : m,
+      ),
+    )
+  }, [])
+
+  /**
+   * The placeholder becomes the real row, or becomes a failure.
+   *
+   * On success the swap is by identity rather than by append-and-dedupe: the
+   * placeholder and the real row are the same message with two different ids,
+   * so anything that merely added the real one would leave the channel showing
+   * it twice until a refresh.
+   */
+  const settleOptimistic = useCallback((pendingKey: string, real: RoomFeedMessage | null, failure?: string) => {
+    const swap = (prev: RoomFeedMessage[]) => {
+      const index = prev.findIndex((m) => m.pendingKey === pendingKey)
+      if (index === -1) return prev
+      const next = [...prev]
+      if (real) next[index] = real
+      else next[index] = { ...next[index], sendState: 'failed', failureMessage: failure }
+      return real ? next.sort((a, b) => a.id - b.id) : next
+    }
+    setFeed(swap)
+    setThread(swap)
+  }, [])
+
+  /** Take a failed message off the screen. The text is handed back to the
+   * caller so it can be put in the composer - a send that failed must never
+   * cost somebody what they wrote. */
+  const discardOptimistic = useCallback((pendingKey: string): string | null => {
+    let body: string | null = null
+    const drop = (prev: RoomFeedMessage[]) => {
+      const found = prev.find((m) => m.pendingKey === pendingKey)
+      if (!found) return prev
+      body = found.body
+      return prev.filter((m) => m.pendingKey !== pendingKey)
+    }
+    setFeed(drop)
+    setThread(drop)
+    return body
+  }, [])
+
   const patchMessage = useCallback((id: number, patch: Partial<RoomFeedMessage>) => {
     setFeed((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)))
     setThread((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)))
@@ -388,24 +450,10 @@ export function TeamRoom({
     [workspaceId, channel.id, feed],
   )
 
-  const appendReply = useCallback(
-    (reply: RoomFeedMessage) => {
-      setThread((prev) => (prev.some((m) => m.id === reply.id) ? prev : [...prev, reply]))
-      // The root's "N replies" is a computed column, so it is nudged here
-      // rather than waiting up to six seconds for the poll to recompute it.
-      // The next refresh replaces it with the database's own answer.
-      if (reply.threadRootId != null) {
-        setFeed((prev) =>
-          prev.map((m) =>
-            m.id === reply.threadRootId
-              ? { ...m, replyCount: m.replyCount + 1, lastReplyAt: reply.createdAt }
-              : m,
-          ),
-        )
-      }
-    },
-    [],
-  )
+  // `appendReply` lived here until R12-P3.1. It appended a reply the server had
+  // already confirmed; `insertOptimistic` now puts the reply on screen before
+  // the write starts and `settleOptimistic` swaps in the real row, so keeping
+  // both would have put every reply in the thread twice.
 
   const join = useCallback(async () => {
     setJoining(true)
@@ -1012,7 +1060,10 @@ export function TeamRoom({
         </div>
       )}
 
-      <div className="flex min-h-0 flex-1 gap-4">
+      {/* R12-P3.4 - no `gap` any more. The panes are separated by their own
+          draggable divider, and a gutter beside a hairline reads as two
+          boundaries where there is one. */}
+      <div className="flex min-h-0 flex-1">
         {view === 'channel' && (
           <ChannelView
             workspaceId={workspaceId}
@@ -1034,6 +1085,9 @@ export function TeamRoom({
             threadRootId={threadRootId}
             onOpenThread={openThread}
             onDispatched={onDispatched}
+            onOptimisticInsert={insertOptimistic}
+            onOptimisticSettle={settleOptimistic}
+            onOptimisticDiscard={discardOptimistic}
             onPatchMessage={patchMessage}
             onDismissPending={dismissPending}
             onOpenTask={openTask}
@@ -1092,8 +1146,10 @@ export function TeamRoom({
               setThreadRootId(null)
               setThread([])
             }}
-            onAppendReply={appendReply}
             onDispatched={onDispatched}
+            onOptimisticInsert={insertOptimistic}
+            onOptimisticSettle={settleOptimistic}
+            onOptimisticDiscard={discardOptimistic}
             onPatchMessage={patchMessage}
             onDismissPending={dismissPending}
             onOpenTask={openTask}

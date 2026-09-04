@@ -21,6 +21,9 @@ import {
   dayKeyOf,
   formatDayLabel,
   isGroupedWith,
+  isOptimistic,
+  makeOptimisticMessage,
+  parseMentionsLocally,
   runLinkFor,
   slotById,
   taskChipFor,
@@ -66,6 +69,9 @@ export function ChannelView({
   threadRootId,
   onOpenThread,
   onDispatched,
+  onOptimisticInsert,
+  onOptimisticSettle,
+  onOptimisticDiscard,
   onPatchMessage,
   approvals,
   currentUserId,
@@ -137,6 +143,12 @@ export function ChannelView({
     dispatched: Array<{ slotId: number; displayName: string; runId: number }>
     skipped: Array<{ slotId: number; displayName: string; reason: string }>
   }) => void
+  /** R12-P3.1 - paint the message now, reconcile when the server answers. */
+  onOptimisticInsert: (row: RoomFeedMessage) => void
+  onOptimisticSettle: (pendingKey: string, real: RoomFeedMessage | null, failure?: string) => void
+  /** Removes a failed row and hands its text back, so a refused send never
+   * costs somebody what they wrote. */
+  onOptimisticDiscard: (pendingKey: string) => string | null
   onPatchMessage: (id: number, patch: Partial<RoomFeedMessage>) => void
   onDismissPending: (runId: number) => void
   onOpenTask: (taskId: number) => void
@@ -480,6 +492,29 @@ export function ChannelView({
 
   const send = useCallback(
     async (input: { body: string; kind: TeamMessageKind; toSlotId: number | null }) => {
+      // THE PAINT COMES FIRST. D0 names this path specifically: "No round trip
+      // on the send path. Pressing Enter paints immediately." Until now this
+      // awaited the insert before the row existed anywhere on screen, which on
+      // a warm local database looked fine and over a real network is the
+      // difference between chat and a form.
+      //
+      // Mentions are parsed here as well as on the server. Not duplication for
+      // its own sake: the highlight on `@Claude Code` has to be in the row the
+      // instant it appears, and the server's own parse remains the one that
+      // decides who is actually woken.
+      const optimistic = makeOptimisticMessage({
+        teamId,
+        fromSlotId: mySlotId,
+        toSlotId: input.toSlotId,
+        kind: input.kind,
+        body: input.body,
+        threadRootId: null,
+        mentions: parseMentionsLocally(input.body, slots),
+      })
+      onOptimisticInsert(optimistic)
+      pinnedToBottom.current = true
+      setAtBottom(true)
+
       try {
         const result = unwrap(
           await postChannelMessageAction({
@@ -491,6 +526,7 @@ export function ChannelView({
             threadRootId: null,
           }),
         )
+        onOptimisticSettle(optimistic.pendingKey!, { ...result.message, systemKind: null, undeliverableAt: null, addresseeMissing: false })
         // Appended from the returned row rather than refetching the channel:
         // the insert already told us exactly what landed, and re-reading the
         // room to show a message we are holding is the round trip D0 forbids.
@@ -504,17 +540,28 @@ export function ChannelView({
           dispatched: result.dispatched ?? [],
           skipped: result.mentionsSkipped ?? [],
         })
-        pinnedToBottom.current = true
-        setAtBottom(true)
       } catch (error) {
-        toast({
-          title: 'Message not sent',
-          description: error instanceof Error ? error.message : undefined,
-          variant: 'destructive',
-        })
+        // The row stays, marked failed, rather than vanishing with a toast.
+        // A toast is gone in four seconds and takes the text with it; a failed
+        // row keeps what was written and offers to send it again.
+        onOptimisticSettle(
+          optimistic.pendingKey!,
+          null,
+          error instanceof Error ? error.message : 'That message was not sent.',
+        )
       }
     },
-    [workspaceId, teamId, onDispatched],
+    [workspaceId, teamId, onDispatched, onOptimisticInsert, onOptimisticSettle, mySlotId, slots],
+  )
+
+  /** Send it again. The failed row is removed and a fresh one takes its place,
+   * so a second failure reads as one attempt rather than as a pile. */
+  const retrySend = useCallback(
+    (pendingKey: string) => {
+      const body = onOptimisticDiscard(pendingKey)
+      if (body) void send({ body, kind: 'status', toSlotId: null })
+    },
+    [onOptimisticDiscard, send],
   )
 
   return (
@@ -621,10 +668,14 @@ export function ChannelView({
                   onOpenThread={onOpenThread}
                   onOpenTask={onOpenTask}
                   onMakeTask={
-                    message.systemKind != null || message.taskId != null
+                    // A row that has not been written yet has no id the server
+                    // could act on, so it offers no id-addressed action at all.
+                    message.systemKind != null || message.taskId != null || isOptimistic(message)
                       ? null
                       : (id) => void runMakeTask(id)
                   }
+                  onRetrySend={retrySend}
+                  onDiscardSend={(key) => void onOptimisticDiscard(key)}
                   onToggleReaction={(id, emoji) => void toggleReaction(id, emoji)}
                   busy={false}
                 />

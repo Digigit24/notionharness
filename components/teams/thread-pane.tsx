@@ -11,6 +11,8 @@ import { formatRelativeTime } from '@/lib/relative-time'
 import { postChannelMessageAction, toggleReactionAction } from '@/app/(app)/workspace/[workspaceSlug]/teams/actions'
 import {
   isGroupedWith,
+  makeOptimisticMessage,
+  parseMentionsLocally,
   runLinkFor,
   slotById,
   taskChipFor,
@@ -19,6 +21,7 @@ import {
   type RoomFeedMessage,
   type TeamSlotView,
 } from './shared'
+import { PaneDivider, useResizablePane } from '@/components/ui/resizable-pane'
 import { ApprovalStrip } from './approval-strip'
 import { MessageRow } from './message-row'
 import { MessageComposer } from './message-composer'
@@ -51,8 +54,10 @@ export function ThreadPane({
   onApprovalSettled,
   mySlotId,
   onClose,
-  onAppendReply,
   onDispatched,
+  onOptimisticInsert,
+  onOptimisticSettle,
+  onOptimisticDiscard,
   onPatchMessage,
   onDismissPending,
   onOpenTask,
@@ -78,7 +83,11 @@ export function ThreadPane({
   onApprovalSettled: (externalId: string) => void
   mySlotId: number | null
   onClose: () => void
-  onAppendReply: (reply: RoomFeedMessage) => void
+  /** R12-P3.1 - a reply paints before the server confirms it, exactly as a
+   * root message does. A thread is a conversation too. */
+  onOptimisticInsert: (row: RoomFeedMessage) => void
+  onOptimisticSettle: (pendingKey: string, real: RoomFeedMessage | null, failure?: string) => void
+  onOptimisticDiscard: (pendingKey: string) => string | null
   onDispatched: (input: {
     message: RoomFeedMessage
     dispatched: Array<{ slotId: number; displayName: string; runId: number }>
@@ -119,7 +128,24 @@ export function ThreadPane({
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
+  // Remembered per browser, not per thread: how wide you like this pane is a
+  // preference about the layout, and resetting it every time you opened a
+  // different thread would feel broken.
+  const pane = useResizablePane({ storageKey: 'notionharness.channel.thread.width', defaultWidth: 384, min: 300, max: 900 })
+
   async function send(input: { body: string; kind: TeamMessageKind; toSlotId: number | null }) {
+    // Same rule as the feed: the reply is on screen before the write starts.
+    const optimistic = makeOptimisticMessage({
+      teamId,
+      fromSlotId: mySlotId,
+      toSlotId: null,
+      kind: input.kind,
+      body: input.body,
+      threadRootId: rootId,
+      mentions: parseMentionsLocally(input.body, slots),
+    })
+    onOptimisticInsert(optimistic)
+
     try {
       const result = unwrap(
         await postChannelMessageAction({
@@ -132,7 +158,14 @@ export function ThreadPane({
           threadRootId: rootId,
         }),
       )
-      onAppendReply(result.message)
+      // Settled in place rather than appended: `onAppendReply` would add the
+      // real row beside the placeholder and the reply would show twice.
+      onOptimisticSettle(optimistic.pendingKey!, {
+        ...result.message,
+        systemKind: null,
+        undeliverableAt: null,
+        addresseeMissing: false,
+      })
       // A reply can name an agent too, and the same silence bug applies to it.
       onDispatched({
         message: result.message,
@@ -140,13 +173,17 @@ export function ThreadPane({
         skipped: result.mentionsSkipped ?? [],
       })
     } catch (error) {
-      toast({
-        title: 'Reply not sent',
-        description: error instanceof Error ? error.message : undefined,
-        variant: 'destructive',
-      })
-      throw error
+      onOptimisticSettle(
+        optimistic.pendingKey!,
+        null,
+        error instanceof Error ? error.message : 'That reply was not sent.',
+      )
     }
+  }
+
+  function retrySend(pendingKey: string) {
+    const body = onOptimisticDiscard(pendingKey)
+    if (body) void send({ body, kind: 'status', toSlotId: null })
   }
 
   async function toggleReaction(messageId: number, emoji: string) {
@@ -180,7 +217,16 @@ export function ThreadPane({
   }
 
   return (
-    <aside className="flex min-h-0 w-96 shrink-0 flex-col rounded-xl border border-black/10 bg-white/40 dark:border-white/10 dark:bg-white/[.02]">
+    <>
+      {/* R12-P3.4 - the divider IS the boundary. One hairline, a 9px invisible
+          grab area centred on it, and no gutter on either side, so the two
+          panes sit flush and the seam between them is the control. */}
+      <PaneDivider label="Resize the thread" dragging={pane.dragging} {...pane.dividerProps} />
+      <aside
+        ref={pane.paneRef as React.RefObject<HTMLElement>}
+        style={{ width: pane.width }}
+        className="flex min-h-0 shrink-0 flex-col rounded-xl border border-black/10 bg-white/40 dark:border-white/10 dark:bg-white/[.02]"
+      >
       {/* R12-P1.2 — the thread is a column BESIDE a live feed, and a
           reply that will not render is not a reason to take the conversation
           down with it. There is no route segment here to hold a boundary, so
@@ -271,6 +317,8 @@ export function ThreadPane({
                   onOpenTask={onOpenTask}
                   onMakeTask={null}
                   onToggleReaction={(id, emoji) => void toggleReaction(id, emoji)}
+                  onRetrySend={retrySend}
+                  onDiscardSend={(key) => void onOptimisticDiscard(key)}
                   busy={false}
                 />
               ))}
@@ -303,6 +351,7 @@ export function ThreadPane({
           />
         )}
       </PaneBoundary>
-    </aside>
+      </aside>
+    </>
   )
 }

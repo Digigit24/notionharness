@@ -1,4 +1,11 @@
-import type { ChannelMessage, TeamMessageKind, TeamRole, TeamTask, TeamTaskStatus } from '@/lib/broker'
+import type {
+  ChannelMessage,
+  MentionTarget,
+  TeamMessageKind,
+  TeamRole,
+  TeamTask,
+  TeamTaskStatus,
+} from '@/lib/broker'
 // A value import, and safe on both sides: `lib/broker/types.ts` is a pure
 // declaration file whose only import is `import type`, so nothing from the
 // driver reaches the browser bundle through it.
@@ -78,6 +85,88 @@ export interface RoomFeedMessage extends ChannelMessage {
   systemKind: string | null
   undeliverableAt: string | null
   addresseeMissing: boolean
+  /**
+   * R12-P3.1 - client-only, and absent on every row the server sent.
+   *
+   * A message you have just written exists on screen before it exists in the
+   * database. `pendingKey` is how the real row that comes back is matched to
+   * the placeholder it replaces - the id cannot do that, because the
+   * placeholder has no real id yet and that is the entire point.
+   */
+  pendingKey?: string
+  /** `'sending'` while the write is in flight, `'failed'` if it was refused.
+   * Absent means this row is what the database holds. */
+  sendState?: 'sending' | 'failed'
+  /** Why it was refused, for the row to show and for a retry to make sense. */
+  failureMessage?: string
+}
+
+/**
+ * Where an unsent message sorts.
+ *
+ * The feed is ordered by id ascending, so a placeholder needs an id ABOVE
+ * every real one to sit at the bottom where it was typed - a negative
+ * sentinel, the obvious choice, would put your own message at the top of the
+ * channel. Successive placeholders increment, so two messages sent in the same
+ * second keep the order they were typed in.
+ */
+export const OPTIMISTIC_ID_BASE = Number.MAX_SAFE_INTEGER - 1_000_000
+
+let optimisticCounter = 0
+
+/**
+ * The row that appears the instant Enter is pressed.
+ *
+ * D0: "No round trip on the send path. Pressing Enter paints immediately.
+ * Anything the server has to confirm is confirmed after the paint, never
+ * before it." The composer used to await the server before clearing itself,
+ * which on a warm local database looks fine and over a real network is the
+ * difference between chat and a form.
+ *
+ * Everything the server will fill in is left in its empty state rather than
+ * guessed: no reactions, no replies, no task. The one field that is a guess is
+ * `createdAt`, and it is corrected the moment the real row lands.
+ */
+export function makeOptimisticMessage(input: {
+  teamId: number
+  fromSlotId: number | null
+  toSlotId: number | null
+  kind: TeamMessageKind
+  body: string
+  threadRootId: number | null
+  mentions: MentionTarget[]
+}): RoomFeedMessage {
+  optimisticCounter += 1
+  return {
+    id: OPTIMISTIC_ID_BASE + optimisticCounter,
+    teamId: input.teamId,
+    fromSlotId: input.fromSlotId,
+    toSlotId: input.toSlotId,
+    kind: input.kind,
+    body: input.body,
+    taskId: null,
+    createdAt: new Date().toISOString(),
+    threadRootId: input.threadRootId,
+    mentions: input.mentions,
+    replyCount: 0,
+    lastReplyAt: null,
+    reactions: [],
+    undeliverableReason: null,
+    runId: null,
+    systemKind: null,
+    undeliverableAt: null,
+    addresseeMissing: false,
+    pendingKey: `pending-${optimisticCounter}-${Date.now()}`,
+    sendState: 'sending',
+  }
+}
+
+/** True for a row that has not been written yet. Used to keep placeholders out
+ * of anything that addresses a message BY ID on the server - reactions, thread
+ * opens, task creation - none of which can work against an id that does not
+ * exist yet. */
+export function isOptimistic(message: RoomFeedMessage): boolean {
+  return message.pendingKey != null
 }
 
 /**
@@ -335,6 +424,34 @@ export function splitMentions(
   }
   if (plainStart < body.length) segments.push({ text: body.slice(plainStart), mentionSlotId: null })
   return segments
+}
+
+/**
+ * Who a message names, resolved on the client for the optimistic row.
+ *
+ * The SERVER's `parseMentions` remains the one that decides who is actually
+ * woken - this changes nothing about that, and it deliberately does not try
+ * to. It exists because the row appears before the server has answered, and a
+ * message whose `@Claude Code` lights up half a second late looks like the
+ * mention did not register.
+ *
+ * It reuses `splitMentions` rather than re-deriving the matching rules, so the
+ * highlight in the row and the index behind it cannot disagree about what
+ * counts as a mention - including the prefix rule, where `@Bob 2` must not
+ * also match `@Bob`.
+ */
+export function parseMentionsLocally(
+  body: string,
+  roster: Array<{ id: number; displayName: string }>,
+): MentionTarget[] {
+  const seen = new Set<number>()
+  const targets: MentionTarget[] = []
+  for (const segment of splitMentions(body, roster)) {
+    if (segment.mentionSlotId == null || seen.has(segment.mentionSlotId)) continue
+    seen.add(segment.mentionSlotId)
+    targets.push({ type: 'slot', id: segment.mentionSlotId })
+  }
+  return targets
 }
 
 /**
