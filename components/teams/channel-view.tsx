@@ -507,7 +507,7 @@ export function ChannelView({
   useKeyboardShortcut('/', 'Write a message', () => setComposerFocusToken((t) => t + 1), 'channel')
 
   const send = useCallback(
-    async (input: { body: string; kind: TeamMessageKind; toSlotId: number | null }) => {
+    async (input: { body: string; kind: TeamMessageKind; toSlotId: number | null; attachments: number[] }) => {
       // THE PAINT COMES FIRST. D0 names this path specifically: "No round trip
       // on the send path. Pressing Enter paints immediately." Until now this
       // awaited the insert before the row existed anywhere on screen, which on
@@ -526,6 +526,7 @@ export function ChannelView({
         body: input.body,
         threadRootId: null,
         mentions: parseMentionsLocally(input.body, slots),
+        attachments: input.attachments,
       })
       onOptimisticInsert(optimistic)
       pinnedToBottom.current = true
@@ -540,6 +541,7 @@ export function ChannelView({
             kind: input.kind,
             toSlotId: input.toSlotId,
             threadRootId: null,
+            attachments: input.attachments,
           }),
         )
         onOptimisticSettle(optimistic.pendingKey!, { ...result.message, systemKind: null, undeliverableAt: null, addresseeMissing: false })
@@ -575,7 +577,15 @@ export function ChannelView({
   const retrySend = useCallback(
     (pendingKey: string) => {
       const body = onOptimisticDiscard(pendingKey)
-      if (body) void send({ body, kind: 'status', toSlotId: null })
+      // Attachments are not retried — `onOptimisticDiscard` only ever
+      // returned the body text, and re-plumbing it to also hand back the
+      // discarded row's attachment ids is a bigger change to
+      // `channel-view.tsx`'s own optimistic-message bookkeeping than this
+      // unit's file-ownership boundary allows for this phase. A rare edge
+      // case (retry-after-failure on a message that also had a file) loses
+      // the attachment and keeps the text, which is the same "text survives,
+      // nothing else does" contract this retry already had before today.
+      if (body) void send({ body, kind: 'status', toSlotId: null, attachments: [] })
     },
     [onOptimisticDiscard, send],
   )
@@ -799,6 +809,7 @@ export function ChannelView({
           </div>
         )}
         <MessageComposer
+          workspaceId={workspaceId}
           slots={slots}
           placeholder="Message the channel… (@ to mention, / for commands)"
           showKind

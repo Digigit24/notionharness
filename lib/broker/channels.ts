@@ -108,6 +108,17 @@ export interface ChannelMessage {
    * link to the EXACT run behind it rather than approximating from the slot's
    * session, which might be a later turn entirely. */
   runId: number | null
+  /**
+   * R14-P0.4 — Media collection ids, and NOTHING else.
+   *
+   * Same "store the id, not a duplicate blob" pattern every other pointer on
+   * this table already follows (`taskId`, `runId`): the file's bytes, name,
+   * size and image variants live in Payload's `media` collection exactly
+   * once, and resolving an id to those is `components/thread/Attachment.tsx`'s
+   * `ChannelAttachment` wrapper's job, not this module's — `lib/broker` has no
+   * business knowing what a Media doc looks like.
+   */
+  attachments: number[]
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -134,6 +145,7 @@ function toChannelMessage(row: any): ChannelMessage {
       : [],
     undeliverableReason: row.undeliverable_reason ?? null,
     runId: row.run_id == null ? null : Number(row.run_id),
+    attachments: Array.isArray(row.attachments) ? row.attachments.map(Number) : [],
   }
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
@@ -255,6 +267,9 @@ export async function postChannelMessage(input: {
   mentions?: MentionTarget[]
   /** Set by the dispatcher when an agent's run produced this message. */
   runId?: number | null
+  /** Media collection ids. See `ChannelMessage.attachments`'s own comment for
+   * why this is ids only. */
+  attachments?: number[]
 }): Promise<ChannelMessage> {
   const pool = getBrokerPool()
   let rootId = input.threadRootId ?? null
@@ -273,8 +288,8 @@ export async function postChannelMessage(input: {
   }
 
   const { rows } = await pool.query<{ id: string }>(
-    `INSERT INTO team_messages (team_id, from_slot_id, to_slot_id, kind, body, task_id, thread_root_id, mentions, run_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9) RETURNING id`,
+    `INSERT INTO team_messages (team_id, from_slot_id, to_slot_id, kind, body, task_id, thread_root_id, mentions, run_id, attachments)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::jsonb) RETURNING id`,
     [
       input.teamId,
       input.fromSlotId,
@@ -285,6 +300,7 @@ export async function postChannelMessage(input: {
       rootId,
       JSON.stringify(input.mentions ?? []),
       input.runId ?? null,
+      JSON.stringify(input.attachments ?? []),
     ],
   )
   const created = await getChannelMessage(Number(rows[0].id))
