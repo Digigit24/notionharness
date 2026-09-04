@@ -4,6 +4,8 @@ import { sweepExpiredLeases } from '@/lib/broker/runs'
 import { recordDispatcherTick } from '@/lib/broker/dispatcher-health'
 import { reclaimRunWorktrees } from '@/lib/run-worktrees/retention'
 import { resolveRunWorktreeConfig } from '@/lib/run-worktrees/config'
+import { bestEffort } from '@/lib/failures'
+import { logger } from '@/lib/logger'
 
 // Every tick, not every tenth. `sweepExpiredLeases` is one indexed UPDATE
 // that normally matches nothing, so the cost is negligible — while the
@@ -46,15 +48,18 @@ function maybeReclaimWorktrees(): void {
       // worth reading when something was NOT reclaimed.
       if (report.removed.length > 0 || report.failures.length > 0) {
         const mb = (report.reclaimedBytes / 1024 / 1024).toFixed(1)
-        console.log(
-          `[worktrees] Reclaimed ${report.removed.length} of ${report.examined} run checkouts (${mb} MB); kept ${report.kept.length}.`,
-        )
+        logger.info('reclaimed run checkouts', {
+          removed: report.removed.length,
+          examined: report.examined,
+          kept: report.kept.length,
+          reclaimedMb: mb,
+        })
         for (const failure of report.failures) {
-          console.warn(`[worktrees] Could not remove run ${failure.runId}: ${failure.error}`)
+          logger.warn('could not remove a run checkout', { runId: failure.runId, error: failure.error })
         }
       }
     })
-    .catch((err) => console.warn('[worktrees] Reclaim pass failed.', err))
+    .catch((err) => logger.warn('worktree reclaim pass failed', { error: String(err) }))
     .finally(() => {
       reclaimInFlight = false
     })
@@ -84,7 +89,11 @@ export async function POST() {
   // loop is alive — the heartbeat answers "is anything polling", which is a
   // different question from "did this tick succeed". Fire-and-forget: a
   // heartbeat write must never be the thing that stops dispatching.
-  void recordDispatcherTick(workerId).catch(() => undefined)
+  void bestEffort(
+    recordDispatcherTick(workerId),
+    'a heartbeat write must never be the thing that stops dispatching',
+    { workerId },
+  )
   maybeReclaimWorktrees()
   ticksSinceSweep += 1
   let recovered = 0

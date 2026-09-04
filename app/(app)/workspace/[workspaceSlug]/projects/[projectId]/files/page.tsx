@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { ChevronLeft } from 'lucide-react'
 import { RepoBrowser } from '@/components/repo/repo-browser'
+import { failureOf, isFailureEnvelope, type FailureInfo } from '@/lib/failures'
 import { readRepoView, type RepoViewPayload } from './actions'
 
 // R9.4 — the standalone repository browser.
@@ -36,24 +37,24 @@ export default async function ProjectFilesPage({
   // Every id here came off the URL. `readRepoView` re-checks all of them
   // against the database (workspace membership, project ownership, resource
   // ownership) before anything touches git, so nothing below is trusted.
-  let initialView: RepoViewPayload | null = null
-  let initialError: string | null = null
-  try {
-    initialView = await readRepoView({
-      workspaceSlug,
-      projectId,
-      resourceId: Number.isFinite(resourceParam) && resourceParam > 0 ? resourceParam : null,
-      ref: one('fref'),
-      path: one('fpath'),
-      kind: one('fkind') === 'file' ? 'file' : 'directory',
-      worktree: one('fwt') === '1',
-    })
-  } catch (err) {
-    // A project with no repository, a clone that is not on this machine, a
-    // path that no longer exists at this ref — all real and all better said
-    // than 404'd, because the rest of the browser still works.
-    initialError = err instanceof Error ? err.message : 'This repository could not be read.'
-  }
+  //
+  // A project with no repository, a clone that is not on this machine, a path
+  // that no longer exists at this ref — all real and all better said than
+  // 404'd, because the rest of the browser still works. `readRepoView`
+  // RETURNS those rather than throwing, so there is nothing to catch: the
+  // failure arrives whole, git's stderr included, and is handed to the
+  // browser to render.
+  const result = await readRepoView({
+    workspaceSlug,
+    projectId,
+    resourceId: Number.isFinite(resourceParam) && resourceParam > 0 ? resourceParam : null,
+    ref: one('fref'),
+    path: one('fpath'),
+    kind: one('fkind') === 'file' ? 'file' : 'directory',
+    worktree: one('fwt') === '1',
+  })
+  const initialError: FailureInfo | null = failureOf(result)
+  const initialView: RepoViewPayload | null = isFailureEnvelope(result) ? null : result
 
   return (
     <div className="flex min-h-0 flex-col">

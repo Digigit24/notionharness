@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { Maximize2, X } from 'lucide-react'
 import { getRunMessages, getTaskActivity, getTaskRuns, updateTaskFields } from '@/app/(app)/workspace/[workspaceSlug]/tasks/actions'
 import { ThreadDrawerTab } from '@/components/thread'
+import { unwrap } from '@/lib/failures'
 import type { Activity, Agent, Project, Task, TaskStatus, User, Workspace } from '@/payload-types'
 import { formatTimestamp } from '@/lib/relative-time'
 
@@ -277,6 +278,7 @@ function ActivityTab({ taskId }: { taskId: number }) {
   useEffect(() => {
     let active = true
     getTaskActivity(taskId)
+      .then(unwrap)
       .then((docs) => {
         if (active) setActivity(docs)
       })

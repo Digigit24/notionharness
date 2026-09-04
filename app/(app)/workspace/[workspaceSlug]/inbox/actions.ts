@@ -13,6 +13,7 @@ import { getWorkspaceBySlug } from '@/lib/pages-cache'
 import { getApproval, resolveApproval } from '@/lib/hermes/approval-helpers'
 import { getChannelMessage, getRun, enqueueRun, dismissRun, markChannelRead, type Run } from '@/lib/broker'
 import { markNotificationsRead } from '@/app/(app)/notifications/actions'
+import { guard, raise, type WithFailure } from '@/lib/failures'
 // Read-only server helpers, deliberately NOT actions — see that file's header
 // note on why an exported async function in a `'use server'` module is a public
 // endpoint. Imported rather than re-implemented so there is exactly one way a
@@ -24,28 +25,36 @@ function revalidateInbox(workspaceSlug: string) {
   revalidatePath('/', 'layout') // keeps the bell's unread count in sync
 }
 
-export async function approveApprovalInbox(workspaceSlug: string, approvalId: number, selectedOptionId?: string): Promise<void> {
-  const user = await getCurrentPayloadUser()
-  if (!user) throw new Error('You must be logged in.')
+export async function approveApprovalInbox(
+  workspaceSlug: string,
+  approvalId: number,
+  selectedOptionId?: string,
+): Promise<WithFailure<void>> {
+  return guard(async () => {
+    const user = await getCurrentPayloadUser()
+    if (!user) raise('unauthenticated', 'You must be logged in.')
 
-  const approval = await getApproval(approvalId)
-  if (!approval) throw new Error('Approval not found.')
-  if (approval.requestedUser !== user.id) throw new Error('You do not have access to this approval.')
+    const approval = await getApproval(approvalId)
+    if (!approval) raise('not_found', 'Approval not found.')
+    if (approval.requestedUser !== user.id) raise('forbidden', 'You do not have access to this approval.')
 
-  await resolveApproval(approvalId, { approved: true, selectedOptionId })
-  revalidateInbox(workspaceSlug)
+    await resolveApproval(approvalId, { approved: true, selectedOptionId })
+    revalidateInbox(workspaceSlug)
+  })
 }
 
-export async function denyApprovalInbox(workspaceSlug: string, approvalId: number): Promise<void> {
-  const user = await getCurrentPayloadUser()
-  if (!user) throw new Error('You must be logged in.')
+export async function denyApprovalInbox(workspaceSlug: string, approvalId: number): Promise<WithFailure<void>> {
+  return guard(async () => {
+    const user = await getCurrentPayloadUser()
+    if (!user) raise('unauthenticated', 'You must be logged in.')
 
-  const approval = await getApproval(approvalId)
-  if (!approval) throw new Error('Approval not found.')
-  if (approval.requestedUser !== user.id) throw new Error('You do not have access to this approval.')
+    const approval = await getApproval(approvalId)
+    if (!approval) raise('not_found', 'Approval not found.')
+    if (approval.requestedUser !== user.id) raise('forbidden', 'You do not have access to this approval.')
 
-  await resolveApproval(approvalId, { approved: false, reason: 'denied from inbox' })
-  revalidateInbox(workspaceSlug)
+    await resolveApproval(approvalId, { approved: false, reason: 'denied from inbox' })
+    revalidateInbox(workspaceSlug)
+  })
 }
 
 function ownsRun(run: Run, userId: number): boolean {
@@ -60,40 +69,44 @@ function ownsRun(run: Run, userId: number): boolean {
  * only renders the Retry action when `agentId` is set, but this is
  * re-checked here since server actions must never trust client-side gating
  * alone. */
-export async function retryRunInbox(workspaceSlug: string, runId: number): Promise<Run> {
-  const user = await getCurrentPayloadUser()
-  if (!user) throw new Error('You must be logged in.')
+export async function retryRunInbox(workspaceSlug: string, runId: number): Promise<WithFailure<Run>> {
+  return guard(async () => {
+    const user = await getCurrentPayloadUser()
+    if (!user) raise('unauthenticated', 'You must be logged in.')
 
-  const run = await getRun(runId)
-  if (!run) throw new Error('Run not found.')
-  if (!ownsRun(run, user.id)) throw new Error('You do not have access to this run.')
-  if (run.agentId == null) throw new Error('This run has no agent to retry with.')
+    const run = await getRun(runId)
+    if (!run) raise('not_found', 'Run not found.')
+    if (!ownsRun(run, user.id)) raise('forbidden', 'You do not have access to this run.')
+    if (run.agentId == null) raise('run_not_retryable', 'This run has no agent to retry with.')
 
-  const retried = await enqueueRun({
-    taskId: run.taskId,
-    agentId: run.agentId,
-    originatorUser: user.id,
-    accountableUser: run.accountableUser,
-    prompt: run.prompt,
-    pageId: run.pageId,
+    const retried = await enqueueRun({
+      taskId: run.taskId,
+      agentId: run.agentId,
+      originatorUser: user.id,
+      accountableUser: run.accountableUser,
+      prompt: run.prompt,
+      pageId: run.pageId,
+    })
+    await dismissRun(runId)
+    revalidateInbox(workspaceSlug)
+    return retried
   })
-  await dismissRun(runId)
-  revalidateInbox(workspaceSlug)
-  return retried
 }
 
 /** "Zero-able" — clears a failed or review-ready run out of the Inbox
  * without changing its outcome (lib/broker/runs.ts's `dismissRun`). */
-export async function dismissRunInbox(workspaceSlug: string, runId: number): Promise<void> {
-  const user = await getCurrentPayloadUser()
-  if (!user) throw new Error('You must be logged in.')
+export async function dismissRunInbox(workspaceSlug: string, runId: number): Promise<WithFailure<void>> {
+  return guard(async () => {
+    const user = await getCurrentPayloadUser()
+    if (!user) raise('unauthenticated', 'You must be logged in.')
 
-  const run = await getRun(runId)
-  if (!run) throw new Error('Run not found.')
-  if (!ownsRun(run, user.id)) throw new Error('You do not have access to this run.')
+    const run = await getRun(runId)
+    if (!run) raise('not_found', 'Run not found.')
+    if (!ownsRun(run, user.id)) raise('forbidden', 'You do not have access to this run.')
 
-  await dismissRun(runId)
-  revalidateInbox(workspaceSlug)
+    await dismissRun(runId)
+    revalidateInbox(workspaceSlug)
+  })
 }
 
 /** A mention is "dismissed once opened/read" per the plan — both the inline
@@ -101,9 +114,11 @@ export async function dismissRunInbox(workspaceSlug: string, runId: number): Pro
  * notification read. `markNotificationsRead` already scopes to the calling
  * user internally (it only ever updates rows returned by a user-scoped
  * find), so no extra ownership check is needed here. */
-export async function dismissMentionInbox(workspaceSlug: string, notificationId: number): Promise<void> {
-  await markNotificationsRead([notificationId])
-  revalidateInbox(workspaceSlug)
+export async function dismissMentionInbox(workspaceSlug: string, notificationId: number): Promise<WithFailure<void>> {
+  return guard(async () => {
+    await markNotificationsRead([notificationId])
+    revalidateInbox(workspaceSlug)
+  })
 }
 
 /**
@@ -130,23 +145,25 @@ export async function dismissMentionInbox(workspaceSlug: string, notificationId:
  * has already been bitten by. The membership test is the real authorisation;
  * the workspace test is defence in depth and keeps `revalidatePath` honest.
  */
-export async function markChannelMentionRead(workspaceSlug: string, messageId: number): Promise<void> {
-  const user = await getCurrentPayloadUser()
-  if (!user) throw new Error('You must be logged in.')
-  if (!Number.isSafeInteger(messageId) || messageId <= 0) throw new Error('Invalid message.')
+export async function markChannelMentionRead(workspaceSlug: string, messageId: number): Promise<WithFailure<void>> {
+  return guard(async () => {
+    const user = await getCurrentPayloadUser()
+    if (!user) raise('unauthenticated', 'You must be logged in.')
+    if (!Number.isSafeInteger(messageId) || messageId <= 0) raise('invalid_input', 'Invalid message.')
 
-  const workspace = await getWorkspaceBySlug(workspaceSlug)
-  if (!workspace) throw new Error('Workspace not found.')
+    const workspace = await getWorkspaceBySlug(workspaceSlug)
+    if (!workspace) raise('not_found', 'Workspace not found.')
 
-  const message = await getChannelMessage(messageId)
-  if (!message) throw new Error('Message not found.')
+    const message = await getChannelMessage(messageId)
+    if (!message) raise('not_found', 'Message not found.')
 
-  const channel = await getChannel(message.teamId)
-  if (!channel || channel.workspaceId !== workspace.id) throw new Error('You do not have access to this channel.')
+    const channel = await getChannel(message.teamId)
+    if (!channel || channel.workspaceId !== workspace.id) raise('forbidden', 'You do not have access to this channel.')
 
-  const slot = await resolveMySlot(channel.id, user.id)
-  if (!slot) throw new Error('You are not a member of this channel.')
+    const slot = await resolveMySlot(channel.id, user.id)
+    if (!slot) raise('forbidden', 'You are not a member of this channel.')
 
-  await markChannelRead(slot.id, message.id)
-  revalidateInbox(workspaceSlug)
+    await markChannelRead(slot.id, message.id)
+    revalidateInbox(workspaceSlug)
+  })
 }

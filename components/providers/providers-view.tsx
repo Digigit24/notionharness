@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from '@/hooks/use-toast'
 import { clearProviderKey, switchActiveProvider, updateProviderKey } from '@/app/(app)/workspace/[workspaceSlug]/settings/providers/actions'
+import { unwrap } from '@/lib/failures'
 import type { ActiveModelConfig, ProviderEnvSlot, ProviderKeyStatus, ProviderModelInfo } from '@/lib/runtimes/hermes/providers'
 import type { HermesProfileSummary } from '@/lib/runtimes/hermes/profiles'
 
@@ -45,7 +46,7 @@ export function ProvidersView({
     if (!provider.trim() || !model.trim()) return
     setSaving(true)
     try {
-      await switchActiveProvider({ workspaceSlug, provider, model, profile: selectedProfile })
+      unwrap(await switchActiveProvider({ workspaceSlug, provider, model, profile: selectedProfile }))
       toast({
         title: `${profileLabel}: switched to ${provider} / ${model}`,
         description: 'Backed up config.yaml before writing; every other line left untouched.',
@@ -220,7 +221,7 @@ function ProviderKeyRow({ workspaceSlug, slot }: { workspaceSlug: string; slot: 
     if (!value.trim()) return
     setBusy(true)
     try {
-      await updateProviderKey({ workspaceSlug, envKeyName: slot.envKeyName, value })
+      unwrap(await updateProviderKey({ workspaceSlug, envKeyName: slot.envKeyName, value }))
       toast({ title: `${slot.envKeyName} updated` })
       setValue('')
       router.refresh()
@@ -238,7 +239,7 @@ function ProviderKeyRow({ workspaceSlug, slot }: { workspaceSlug: string; slot: 
   async function clear() {
     setBusy(true)
     try {
-      await clearProviderKey({ workspaceSlug, envKeyName: slot.envKeyName })
+      unwrap(await clearProviderKey({ workspaceSlug, envKeyName: slot.envKeyName }))
       toast({ title: `${slot.envKeyName} cleared` })
       router.refresh()
     } catch (err) {

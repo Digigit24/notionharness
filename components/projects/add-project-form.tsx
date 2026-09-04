@@ -6,6 +6,7 @@ import { createProject } from '@/app/(app)/workspace/[workspaceSlug]/projects/ac
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/hooks/use-toast'
+import { unwrap } from '@/lib/failures'
 
 export function AddProjectForm({ workspaceId, workspaceSlug }: { workspaceId: number; workspaceSlug: string }) {
   const router = useRouter()
@@ -18,7 +19,7 @@ export function AddProjectForm({ workspaceId, workspaceSlug }: { workspaceId: nu
   async function submit() {
     setSaving(true)
     try {
-      const project = await createProject({ workspaceId, workspaceSlug, name, icon })
+      const project = unwrap(await createProject({ workspaceId, workspaceSlug, name, icon }))
       toast({ title: `Created project "${project.name}"` })
       setName('')
       setIcon('')

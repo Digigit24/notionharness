@@ -3,6 +3,7 @@
 import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { createRuntimeProfile } from '@/app/(app)/workspace/[workspaceSlug]/settings/runtimes/actions'
+import { unwrap } from '@/lib/failures'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/hooks/use-toast'
@@ -20,7 +21,7 @@ export function AddRuntimeProfileForm({ workspaceId, workspaceSlug }: { workspac
   async function submit() {
     setSaving(true)
     try {
-      await createRuntimeProfile({ workspaceId, workspaceSlug, name, protocolFamily, commandName })
+      unwrap(await createRuntimeProfile({ workspaceId, workspaceSlug, name, protocolFamily, commandName }))
       toast({ title: `Added runtime profile "${name.trim()}"` })
       setName('')
       setCommandName('')

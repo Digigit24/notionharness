@@ -6,6 +6,23 @@ import { getCurrentPayloadUser } from '@/lib/current-user'
 import type { Task } from '@/payload-types'
 import { enqueueRun, listActiveRunsForWorkspace, listRunsForTask, listRunEvents, getTaskUsageTotals } from '@/lib/broker'
 import { buildTasksWhere, payloadSortString, type TaskFilters, type TaskSort } from '@/lib/task-views/data-layer'
+import { guard, type WithFailure } from '@/lib/failures'
+
+// R12-P1.1 — the failure spine (lib/failures.ts) is adopted here per action,
+// not per file, because this module is shared across units. Everything below
+// that is reached ONLY from `components/tasks/*` and this route's own pages
+// returns `WithFailure<T>` and is `unwrap()`ed by its callers.
+//
+// `createTask`, `updateTaskFields`, `createQuickTask`, `getTask`,
+// `getTaskRuns`, `getRunMessages` and `getActiveRunsForWorkspace` are
+// deliberately NOT converted yet: their callers include the command bar
+// (`command-bar/actions.ts`, `components/command-bar/command-bar.tsx`), the
+// editor's task block (`components/editor/blocks/task/*`) and the
+// `active-runs` page, which belong to other units. Changing their return
+// type breaks those files' compile without their owners being able to fix
+// them in the same pass, which is the flag day the envelope design exists to
+// avoid. They still throw, so their messages are still lost in production —
+// tracked, not forgotten.
 
 async function nextColumnPosition(
   payload: Awaited<ReturnType<typeof getPayloadClient>>,
@@ -76,23 +93,25 @@ export async function moveTaskToStatus({
   workspaceId: number
   workspaceSlug: string
   statusId: number
-}): Promise<Task> {
-  const payload = await getPayloadClient()
-  const [position, user] = await Promise.all([
-    nextColumnPosition(payload, workspaceId, statusId),
-    getCurrentPayloadUser(),
-  ])
-  const task = await payload.update({
-    collection: 'tasks',
-    id: taskId,
-    data: { status: statusId, position },
-    overrideAccess: true,
-    // ROADMAP P2.6 — read by Tasks.ts's afterChange hook to attribute the
-    // status_changed activity row to whoever dragged the card.
-    context: { actorId: user?.id },
+}): Promise<WithFailure<Task>> {
+  return guard(async () => {
+    const payload = await getPayloadClient()
+    const [position, user] = await Promise.all([
+      nextColumnPosition(payload, workspaceId, statusId),
+      getCurrentPayloadUser(),
+    ])
+    const task = await payload.update({
+      collection: 'tasks',
+      id: taskId,
+      data: { status: statusId, position },
+      overrideAccess: true,
+      // ROADMAP P2.6 — read by Tasks.ts's afterChange hook to attribute the
+      // status_changed activity row to whoever dragged the card.
+      context: { actorId: user?.id },
+    })
+    revalidatePath(`/workspace/${workspaceSlug}/tasks`)
+    return task
   })
-  revalidatePath(`/workspace/${workspaceSlug}/tasks`)
-  return task
 }
 
 export async function updateTaskFields({
@@ -147,35 +166,37 @@ export async function bulkUpdateTaskFields({
   taskIds: number[]
   workspaceSlug: string
   data: Partial<Pick<Task, 'status' | 'assignee' | 'agent' | 'project'>>
-}): Promise<Task[]> {
-  const payload = await getPayloadClient()
-  const user = await getCurrentPayloadUser()
-  const changesAgent = Object.prototype.hasOwnProperty.call(data, 'agent')
+}): Promise<WithFailure<Task[]>> {
+  return guard(async () => {
+    const payload = await getPayloadClient()
+    const user = await getCurrentPayloadUser()
+    const changesAgent = Object.prototype.hasOwnProperty.call(data, 'agent')
 
-  const updated = await Promise.all(
-    taskIds.map(async (taskId) => {
-      const before = changesAgent
-        ? await payload.findByID({ collection: 'tasks', id: taskId, depth: 0, overrideAccess: true })
-        : null
-      const task = await payload.update({
-        collection: 'tasks',
-        id: taskId,
-        data,
-        overrideAccess: true,
-        context: { actorId: user?.id },
-      })
-      if (changesAgent && user?.id) {
-        const beforeAgent = before ? (typeof before.agent === 'number' ? before.agent : before.agent?.id ?? null) : null
-        const afterAgent = typeof task.agent === 'number' ? task.agent : task.agent?.id ?? null
-        if (afterAgent !== null && afterAgent !== beforeAgent) {
-          await enqueueRun({ taskId, agentId: afterAgent, originatorUser: user.id, accountableUser: user.id })
+    const updated = await Promise.all(
+      taskIds.map(async (taskId) => {
+        const before = changesAgent
+          ? await payload.findByID({ collection: 'tasks', id: taskId, depth: 0, overrideAccess: true })
+          : null
+        const task = await payload.update({
+          collection: 'tasks',
+          id: taskId,
+          data,
+          overrideAccess: true,
+          context: { actorId: user?.id },
+        })
+        if (changesAgent && user?.id) {
+          const beforeAgent = before ? (typeof before.agent === 'number' ? before.agent : before.agent?.id ?? null) : null
+          const afterAgent = typeof task.agent === 'number' ? task.agent : task.agent?.id ?? null
+          if (afterAgent !== null && afterAgent !== beforeAgent) {
+            await enqueueRun({ taskId, agentId: afterAgent, originatorUser: user.id, accountableUser: user.id })
+          }
         }
-      }
-      return task
-    }),
-  )
-  revalidatePath(`/workspace/${workspaceSlug}/tasks`)
-  return updated
+        return task
+      }),
+    )
+    revalidatePath(`/workspace/${workspaceSlug}/tasks`)
+    return updated
+  })
 }
 
 export interface TaskAgentColumnData {
@@ -196,14 +217,16 @@ export interface TaskAgentColumnData {
  * functions reused as-is, not reimplemented) — a real per-task rollup query
  * would be a good follow-up if this ever shows up as a hot path, but is out
  * of scope for this pass. */
-export async function getTaskAgentColumnsData(taskIds: number[]): Promise<Record<number, TaskAgentColumnData>> {
-  const entries = await Promise.all(
-    taskIds.map(async (taskId) => {
-      const [usage, runs] = await Promise.all([getTaskUsageTotals(taskId), listRunsForTask(taskId)])
-      return [taskId, { runCount: usage.runCount, totalCostTicks: usage.totalCostTicks, lastRunStatus: runs[0]?.status ?? null }] as const
-    }),
-  )
-  return Object.fromEntries(entries)
+export async function getTaskAgentColumnsData(taskIds: number[]): Promise<WithFailure<Record<number, TaskAgentColumnData>>> {
+  return guard(async () => {
+    const entries = await Promise.all(
+      taskIds.map(async (taskId) => {
+        const [usage, runs] = await Promise.all([getTaskUsageTotals(taskId), listRunsForTask(taskId)])
+        return [taskId, { runCount: usage.runCount, totalCostTicks: usage.totalCostTicks, lastRunStatus: runs[0]?.status ?? null }] as const
+      }),
+    )
+    return Object.fromEntries(entries)
+  })
 }
 
 /**
@@ -275,17 +298,19 @@ export async function loadMoreTasks({
   statusId: number
   offset: number
   limit: number
-}): Promise<Task[]> {
-  const payload = await getPayloadClient()
-  const result = await payload.find({
-    collection: 'tasks',
-    where: { workspace: { equals: workspaceId }, status: { equals: statusId } },
-    sort: 'position',
-    limit,
-    page: Math.floor(offset / limit) + 1,
-    overrideAccess: true,
+}): Promise<WithFailure<Task[]>> {
+  return guard(async () => {
+    const payload = await getPayloadClient()
+    const result = await payload.find({
+      collection: 'tasks',
+      where: { workspace: { equals: workspaceId }, status: { equals: statusId } },
+      sort: 'position',
+      limit,
+      page: Math.floor(offset / limit) + 1,
+      overrideAccess: true,
+    })
+    return result.docs
   })
-  return result.docs
 }
 
 /**
@@ -312,29 +337,33 @@ export async function getTasksForView({
   filters: TaskFilters
   sort: TaskSort
   limit?: number
-}): Promise<{ docs: Task[]; totalDocs: number }> {
-  const payload = await getPayloadClient()
-  const result = await payload.find({
-    collection: 'tasks',
-    where: buildTasksWhere(workspaceId, filters),
-    sort: payloadSortString(sort),
-    limit,
-    depth: 1,
-    overrideAccess: true,
+}): Promise<WithFailure<{ docs: Task[]; totalDocs: number }>> {
+  return guard(async () => {
+    const payload = await getPayloadClient()
+    const result = await payload.find({
+      collection: 'tasks',
+      where: buildTasksWhere(workspaceId, filters),
+      sort: payloadSortString(sort),
+      limit,
+      depth: 1,
+      overrideAccess: true,
+    })
+    return { docs: result.docs, totalDocs: result.totalDocs }
   })
-  return { docs: result.docs, totalDocs: result.totalDocs }
 }
 
 // Read-only — the task detail drawer's Activity tab. Not exported from the
 // top-level `app/(app)/actions.ts` since it's scoped to this surface only.
 export async function getTaskActivity(taskId: number) {
-  const payload = await getPayloadClient()
-  const result = await payload.find({
-    collection: 'activity',
-    where: { entityType: { equals: 'task' }, entityId: { equals: String(taskId) } },
-    sort: '-createdAt',
-    limit: 100,
-    overrideAccess: true,
+  return guard(async () => {
+    const payload = await getPayloadClient()
+    const result = await payload.find({
+      collection: 'activity',
+      where: { entityType: { equals: 'task' }, entityId: { equals: String(taskId) } },
+      sort: '-createdAt',
+      limit: 100,
+      overrideAccess: true,
+    })
+    return result.docs
   })
-  return result.docs
 }

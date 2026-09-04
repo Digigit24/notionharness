@@ -12,6 +12,7 @@ import {
   type FallbackEntry,
   type ModelSettings,
 } from '@/app/(app)/workspace/[workspaceSlug]/settings/model/actions'
+import { unwrap } from '@/lib/failures'
 import type { ServeModelOptions } from '@/lib/runtimes/hermes/serve-client'
 
 /**
@@ -83,13 +84,15 @@ export function ModelSettingsView({
     setNotice(null)
     startTransition(async () => {
       try {
-        const result = await setProfileActiveModel({
-          workspaceSlug,
-          profile: settings.profile,
-          provider,
-          model,
-          confirmExpensive,
-        })
+        const result = unwrap(
+          await setProfileActiveModel({
+            workspaceSlug,
+            profile: settings.profile,
+            provider,
+            model,
+            confirmExpensive,
+          }),
+        )
         if (result.confirm_required) {
           // Hermes answers an expensive model with a question, not an error.
           // Passing that through as a prompt is the difference between a
@@ -111,7 +114,7 @@ export function ModelSettingsView({
     setError(null)
     startTransition(async () => {
       try {
-        setFallbacks(await setFallbackProviders({ workspaceSlug, profile: settings.profile, entries: next }))
+        setFallbacks(unwrap(await setFallbackProviders({ workspaceSlug, profile: settings.profile, entries: next })))
         setNotice('Fallback order saved.')
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Could not save the fallback order.')

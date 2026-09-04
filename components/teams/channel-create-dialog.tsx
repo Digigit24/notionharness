@@ -16,6 +16,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
+import { unwrap } from '@/lib/failures'
 import { toast } from '@/hooks/use-toast'
 import { cn } from '@/lib/utils'
 import { createChannelAction, type ChannelMemberDraft } from '@/app/(app)/workspace/[workspaceSlug]/teams/actions'
@@ -120,16 +121,18 @@ export function ChannelCreateDialog({
           ? { kind: 'agent', agentId: s.refId, displayName: s.displayName }
           : { kind: 'user', userId: s.refId, displayName: s.displayName },
       )
-      const { teamId } = await createChannelAction({
-        workspaceId,
-        workspaceSlug,
-        name,
-        topic,
-        isPrivate,
-        workspaceMode: mode,
-        members,
-        leaderIndex: leaderIndex != null && leaderIndex >= 0 ? leaderIndex : null,
-      })
+      const { teamId } = unwrap(
+        await createChannelAction({
+          workspaceId,
+          workspaceSlug,
+          name,
+          topic,
+          isPrivate,
+          workspaceMode: mode,
+          members,
+          leaderIndex: leaderIndex != null && leaderIndex >= 0 ? leaderIndex : null,
+        }),
+      )
       toast({ title: `Created #${name.trim().replace(/^#+/, '')}` })
       setOpen(false)
       reset()

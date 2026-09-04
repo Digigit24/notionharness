@@ -25,6 +25,7 @@ import {
   listTaskComments,
   startTaskRun,
 } from '@/app/(app)/workspace/[workspaceSlug]/tasks/[taskId]/actions'
+import { unwrap } from '@/lib/failures'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -78,7 +79,7 @@ export function TaskWorkTab({
   useEffect(() => {
     let active = true
     async function refresh() {
-      const [nextComments, nextRuns] = await Promise.all([listTaskComments(taskId), getTaskRuns(taskId)])
+      const [nextComments, nextRuns] = await Promise.all([listTaskComments(taskId).then(unwrap), getTaskRuns(taskId)])
       if (active) {
         setComments(nextComments)
         setRuns(nextRuns)
@@ -124,7 +125,7 @@ export function TaskWorkTab({
     setBusy(true)
     setError(null)
     try {
-      const comment = await createTaskComment({ taskId, workspaceSlug, body: text })
+      const comment = unwrap(await createTaskComment({ taskId, workspaceSlug, body: text }))
       setComments((prev) => [...prev, comment])
       setDraft('')
     } catch (err) {
@@ -143,7 +144,7 @@ export function TaskWorkTab({
     setBusy(true)
     setError(null)
     try {
-      const run = await startTaskRun({ taskId, workspaceSlug, agentId: taskAgentId, prompt: draft.trim() || undefined })
+      const run = unwrap(await startTaskRun({ taskId, workspaceSlug, agentId: taskAgentId, prompt: draft.trim() || undefined }))
       setRuns((prev) => [...prev, run])
       setDraft('')
     } catch (err) {
@@ -167,9 +168,15 @@ export function TaskWorkTab({
 
   async function handleStartDocument() {
     setCreatingDoc(true)
+    setError(null)
     try {
-      await ensureTaskDocument(taskId, workspaceSlug)
+      unwrap(await ensureTaskDocument(taskId, workspaceSlug))
       router.refresh()
+    } catch (err) {
+      // Previously this had no catch at all, so a failed create left the empty
+      // state sitting there with no explanation. Now that the action returns
+      // its sentence instead of throwing it away, there is something to show.
+      setError(err instanceof Error ? err.message : 'Failed to start the document.')
     } finally {
       setCreatingDoc(false)
     }

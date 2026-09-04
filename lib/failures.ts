@@ -212,7 +212,12 @@ export async function guard<T>(work: () => Promise<T>): Promise<WithFailure<T>> 
   } catch (err) {
     if (isControlFlowError(err)) throw err
     const info = toFailureInfo(err)
-    logger.error('action failed', { code: info.code, message: info.message, detail: info.detail })
+    // The thrown value goes in the SECOND argument and the structured fields
+    // in the third. `logger.error` is `(msg, error?, fields?)`, so passing the
+    // fields object second stringifies it to "[object Object]" and loses every
+    // one of them — which is how the first version of this file logged
+    // nothing useful for every failure in the app.
+    logger.error('action failed', err, { code: info.code, message: info.message, detail: info.detail })
     return failureEnvelope(info)
   }
 }
@@ -286,6 +291,6 @@ export async function bestEffort<T>(
  * a background loop, an event handler, a subscription. */
 export function reportFailure(err: unknown, context: string, fields?: Record<string, unknown>): FailureInfo {
   const info = toFailureInfo(err)
-  logger.error(context, { code: info.code, message: info.message, detail: info.detail, ...fields })
+  logger.error(context, err, { code: info.code, message: info.message, detail: info.detail, ...fields })
   return info
 }

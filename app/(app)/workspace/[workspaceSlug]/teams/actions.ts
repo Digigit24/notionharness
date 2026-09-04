@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { getCurrentPayloadUser } from '@/lib/current-user'
+import { guard, raise, type WithFailure } from '@/lib/failures'
 import { getPayloadClient } from '@/lib/payload'
 import { dispatchMentions } from '@/lib/teams/mention-dispatch'
 import {
@@ -94,11 +95,19 @@ import {
  * the client. `resolveMySlot` derives it from (team, logged-in user), so a
  * reaction or a read cursor cannot be attributed to somebody else's slot by
  * editing a number in a request.
+ *
+ * R12-P1 — EVERY REFUSAL BELOW IS RETURNED, NOT THROWN. A server action that
+ * throws reaches a production browser as `1:E{"digest":…}` and nothing else
+ * (the measurement is in `lib/failures.ts`), so all the sentences these guards
+ * write were only ever read in development. `guard()` turns them into a
+ * `__failure` envelope the caller `unwrap()`s in the browser, where the message
+ * survives. The `require*` helpers `raise()` with a code, so every action built
+ * on them inherits the right one without repeating the classification.
  */
 
 async function requireUser() {
   const user = await getCurrentPayloadUser()
-  if (!user) throw new Error('You must be logged in.')
+  if (!user) raise('unauthenticated', 'You must be logged in.')
   return user
 }
 
@@ -119,10 +128,10 @@ async function requireWorkspace(workspaceId: number, userId: number): Promise<vo
     overrideAccess: true,
     disableErrors: true,
   })
-  if (!workspace) throw new Error('That workspace no longer exists.')
+  if (!workspace) raise('not_found', 'That workspace no longer exists.')
   const ownerId = typeof workspace.owner === 'number' ? workspace.owner : workspace.owner?.id
   const memberIds = (workspace.members ?? []).map((m) => (typeof m === 'number' ? m : m.id))
-  if (ownerId !== userId && !memberIds.includes(userId)) throw new Error('That workspace is not yours.')
+  if (ownerId !== userId && !memberIds.includes(userId)) raise('forbidden', 'That workspace is not yours.')
 }
 
 /**
@@ -134,10 +143,13 @@ async function requireWorkspace(workspaceId: number, userId: number): Promise<vo
  */
 async function requireChannel(teamId: number, workspaceId: number, userId: number): Promise<Channel> {
   const team = await getChannel(teamId)
-  if (!team) throw new Error('That channel no longer exists.')
-  if (team.workspaceId !== workspaceId) throw new Error('That channel belongs to another workspace.')
+  if (!team) raise('not_found', 'That channel no longer exists.')
+  if (team.workspaceId !== workspaceId) raise('forbidden', 'That channel belongs to another workspace.')
   if (team.isPrivate && !(await isChannelMember(teamId, userId))) {
-    throw new Error('That channel no longer exists.')
+    // `not_found`, not `forbidden`, and deliberately the same sentence as a
+    // missing channel: telling a non-member that the room exists is the leak
+    // a private channel is for.
+    raise('not_found', 'That channel no longer exists.')
   }
   return team
 }
@@ -154,8 +166,8 @@ async function requireAccess(workspaceId: number, teamId: number) {
  * the client to have sent a slot from the room it is looking at. */
 async function requireSlot(slotId: number, teamId: number): Promise<TeamMember> {
   const slot = await getTeamMember(slotId)
-  if (!slot) throw new Error('That team slot no longer exists.')
-  if (slot.teamId !== teamId) throw new Error('That slot belongs to another team.')
+  if (!slot) raise('not_found', 'That team slot no longer exists.')
+  if (slot.teamId !== teamId) raise('forbidden', 'That slot belongs to another team.')
   return slot
 }
 
@@ -175,9 +187,9 @@ async function requireAgent(agentId: number, workspaceId: number): Promise<void>
     overrideAccess: true,
     disableErrors: true,
   })
-  if (!agent) throw new Error('That agent no longer exists.')
+  if (!agent) raise('not_found', 'That agent no longer exists.')
   const owner = typeof agent.workspace === 'object' && agent.workspace ? agent.workspace.id : agent.workspace
-  if (Number(owner) !== workspaceId) throw new Error('That agent belongs to another workspace.')
+  if (Number(owner) !== workspaceId) raise('forbidden', 'That agent belongs to another workspace.')
 }
 
 /**
@@ -200,19 +212,19 @@ async function requireWorkspaceUsers(userIds: number[], workspaceId: number): Pr
     overrideAccess: true,
     disableErrors: true,
   })
-  if (!workspace) throw new Error('That workspace no longer exists.')
+  if (!workspace) raise('not_found', 'That workspace no longer exists.')
   const ownerId = typeof workspace.owner === 'number' ? workspace.owner : workspace.owner?.id
   const allowed = new Set<number>((workspace.members ?? []).map((m) => (typeof m === 'number' ? m : m.id)))
   if (typeof ownerId === 'number') allowed.add(ownerId)
   for (const userId of userIds) {
-    if (!allowed.has(userId)) throw new Error('That person is not in this workspace.')
+    if (!allowed.has(userId)) raise('forbidden', 'That person is not in this workspace.')
   }
 }
 
 async function requireTask(taskId: number, teamId: number): Promise<TeamTask> {
   const task = await getTeamTask(taskId)
-  if (!task) throw new Error('That task no longer exists.')
-  if (task.teamId !== teamId) throw new Error('That task belongs to another team.')
+  if (!task) raise('not_found', 'That task no longer exists.')
+  if (task.teamId !== teamId) raise('forbidden', 'That task belongs to another team.')
   return task
 }
 
@@ -248,6 +260,13 @@ export interface ChannelSummary extends Channel {
  * GROUP BY on purpose — joining `team_members`, `team_messages` and
  * `team_tasks` in one FROM multiplies the rows together and every count comes
  * back inflated.
+ *
+ * The one thing here NOT wrapped in `guard()`. Its only caller is the Teams
+ * page's server render, and a throw from a server component reaches the route's
+ * error boundary with its message intact — the masking measured in
+ * `lib/failures.ts` is a property of the action RESPONSE, not of a render. So
+ * the `require*` raises above already arrive readable, and returning a union
+ * would only hand the page a shape it has no reason to unwrap.
  */
 export async function listChannelSummaries(workspaceId: number): Promise<ChannelSummary[]> {
   const user = await requireUser()
@@ -368,87 +387,89 @@ export async function createChannelAction(input: {
   /** An index into `members`, not an agent id, precisely because the same agent
    * can appear twice and "which agent leads" would then be ambiguous. */
   leaderIndex: number | null
-}): Promise<{ teamId: number }> {
-  const user = await requireUser()
-  await requireWorkspace(input.workspaceId, user.id)
-  const name = input.name.trim().replace(/^#+/, '').trim()
-  if (!name) throw new Error('A channel needs a name.')
+}): Promise<WithFailure<{ teamId: number }>> {
+  return guard(async () => {
+    const user = await requireUser()
+    await requireWorkspace(input.workspaceId, user.id)
+    const name = input.name.trim().replace(/^#+/, '').trim()
+    if (!name) raise('invalid_input', 'A channel needs a name.')
 
-  // Checked before the team row exists, so a bad id fails cleanly instead of
-  // leaving an empty channel behind. `Set` because a roster naming the same
-  // agent twice is legitimate and must not cost two lookups.
-  for (const agentId of new Set(input.members.flatMap((m) => (m.kind === 'agent' ? [m.agentId] : [])))) {
-    await requireAgent(agentId, input.workspaceId)
-  }
-  await requireWorkspaceUsers(
-    [...new Set(input.members.flatMap((m) => (m.kind === 'user' ? [m.userId] : [])))],
-    input.workspaceId,
-  )
+    // Checked before the team row exists, so a bad id fails cleanly instead of
+    // leaving an empty channel behind. `Set` because a roster naming the same
+    // agent twice is legitimate and must not cost two lookups.
+    for (const agentId of new Set(input.members.flatMap((m) => (m.kind === 'agent' ? [m.agentId] : [])))) {
+      await requireAgent(agentId, input.workspaceId)
+    }
+    await requireWorkspaceUsers(
+      [...new Set(input.members.flatMap((m) => (m.kind === 'user' ? [m.userId] : [])))],
+      input.workspaceId,
+    )
 
-  // Named before it is created, so the common case answers without waiting for
-  // a constraint violation. The catch below is still required: two people
-  // creating "#design" at the same moment is exactly what the unique index is
-  // for, and a pre-check cannot close that window.
-  const { rows: clash } = await getBrokerPool().query(
-    `SELECT 1 FROM teams WHERE workspace_id = $1 AND lower(name) = lower($2) AND archived_at IS NULL LIMIT 1`,
-    [input.workspaceId, name],
-  )
-  if (clash.length > 0) throw new Error(`#${name} already exists — pick another name.`)
+    // Named before it is created, so the common case answers without waiting for
+    // a constraint violation. The catch below is still required: two people
+    // creating "#design" at the same moment is exactly what the unique index is
+    // for, and a pre-check cannot close that window.
+    const { rows: clash } = await getBrokerPool().query(
+      `SELECT 1 FROM teams WHERE workspace_id = $1 AND lower(name) = lower($2) AND archived_at IS NULL LIMIT 1`,
+      [input.workspaceId, name],
+    )
+    if (clash.length > 0) raise('conflict', `#${name} already exists — pick another name.`)
 
-  // Sequential, not Promise.all: creating a slot writes two rows through two
-  // calls and there is no transaction spanning both from out here (opening one
-  // would mean editing `lib/broker/teams.ts`, which this unit does not own).
-  // Sequential at least fails at a known point — the channel and the slots
-  // created so far survive and the roster panel can finish the job — instead
-  // of leaving an unpredictable subset behind.
-  let team: Team
-  try {
-    team = await createTeam({
-      workspaceId: input.workspaceId,
-      name,
-      description: null,
-      workspaceMode: input.workspaceMode,
-      createdBy: user.id,
-    })
-  } catch (error) {
-    if (isDuplicateChannelName(error)) throw new Error(`#${name} already exists — pick another name.`)
-    throw error
-  }
+    // Sequential, not Promise.all: creating a slot writes two rows through two
+    // calls and there is no transaction spanning both from out here (opening one
+    // would mean editing `lib/broker/teams.ts`, which this unit does not own).
+    // Sequential at least fails at a known point — the channel and the slots
+    // created so far survive and the roster panel can finish the job — instead
+    // of leaving an unpredictable subset behind.
+    let team: Team
+    try {
+      team = await createTeam({
+        workspaceId: input.workspaceId,
+        name,
+        description: null,
+        workspaceMode: input.workspaceMode,
+        createdBy: user.id,
+      })
+    } catch (error) {
+      if (isDuplicateChannelName(error)) raise('conflict', `#${name} already exists — pick another name.`)
+      throw error
+    }
 
-  // `createTeam` predates 0013 and does not know about these two columns.
-  await getBrokerPool().query(`UPDATE teams SET topic = $2, is_private = $3 WHERE id = $1`, [
-    team.id,
-    input.topic?.trim() || null,
-    input.isPrivate,
-  ])
+    // `createTeam` predates 0013 and does not know about these two columns.
+    await getBrokerPool().query(`UPDATE teams SET topic = $2, is_private = $3 WHERE id = $1`, [
+      team.id,
+      input.topic?.trim() || null,
+      input.isPrivate,
+    ])
 
-  // The creator is always a member, and is added FIRST so index 0 is theirs.
-  // A private channel whose creator is not in it would be invisible to the
-  // person who just made it, and reactions and unread both need a slot.
-  const members: ChannelMemberDraft[] = input.members.some((m) => m.kind === 'user' && m.userId === user.id)
-    ? input.members
-    : [{ kind: 'user', userId: user.id, displayName: user.name || user.email }, ...input.members]
-  const leaderOffset = members.length - input.members.length
+    // The creator is always a member, and is added FIRST so index 0 is theirs.
+    // A private channel whose creator is not in it would be invisible to the
+    // person who just made it, and reactions and unread both need a slot.
+    const members: ChannelMemberDraft[] = input.members.some((m) => m.kind === 'user' && m.userId === user.id)
+      ? input.members
+      : [{ kind: 'user', userId: user.id, displayName: user.name || user.email }, ...input.members]
+    const leaderOffset = members.length - input.members.length
 
-  for (const [index, member] of members.entries()) {
-    await insertSlot({
-      team,
-      agentId: member.kind === 'agent' ? member.agentId : null,
-      userId: member.kind === 'user' ? member.userId : null,
-      displayName: member.displayName.trim() || `Slot ${index + 1}`,
-      index,
-      createdBy: user.id,
-    })
-  }
+    for (const [index, member] of members.entries()) {
+      await insertSlot({
+        team,
+        agentId: member.kind === 'agent' ? member.agentId : null,
+        userId: member.kind === 'user' ? member.userId : null,
+        displayName: member.displayName.trim() || `Slot ${index + 1}`,
+        index,
+        createdBy: user.id,
+      })
+    }
 
-  if (input.leaderIndex != null) {
-    const slots = await loadSlots(team.id)
-    const leader = slots[input.leaderIndex + leaderOffset]
-    if (leader) await setTeamLeader(team.id, leader.id)
-  }
+    if (input.leaderIndex != null) {
+      const slots = await loadSlots(team.id)
+      const leader = slots[input.leaderIndex + leaderOffset]
+      if (leader) await setTeamLeader(team.id, leader.id)
+    }
 
-  revalidatePath(`/workspace/${input.workspaceSlug}/teams`)
-  return { teamId: team.id }
+    revalidatePath(`/workspace/${input.workspaceSlug}/teams`)
+    return { teamId: team.id }
+  })
 }
 
 export async function addSlotAction(input: {
@@ -458,29 +479,31 @@ export async function addSlotAction(input: {
   agentId: number | null
   userId: number | null
   displayName: string
-}): Promise<TeamSlotView[]> {
-  const { user, team } = await requireAccess(input.workspaceId, input.teamId)
-  // The CHECK constraint says exactly one; saying so here gives a sentence
-  // instead of a constraint name.
-  if ((input.agentId == null) === (input.userId == null)) {
-    throw new Error('A slot is backed by an agent or by a person — one of the two.')
-  }
-  if (input.agentId != null) await requireAgent(input.agentId, input.workspaceId)
-  if (input.userId != null) await requireWorkspaceUsers([input.userId], input.workspaceId)
+}): Promise<WithFailure<TeamSlotView[]>> {
+  return guard(async () => {
+    const { user, team } = await requireAccess(input.workspaceId, input.teamId)
+    // The CHECK constraint says exactly one; saying so here gives a sentence
+    // instead of a constraint name.
+    if ((input.agentId == null) === (input.userId == null)) {
+      raise('invalid_input', 'A slot is backed by an agent or by a person — one of the two.')
+    }
+    if (input.agentId != null) await requireAgent(input.agentId, input.workspaceId)
+    if (input.userId != null) await requireWorkspaceUsers([input.userId], input.workspaceId)
 
-  const existing = await loadSlots(team.id)
-  await insertSlot({
-    team,
-    agentId: input.agentId,
-    userId: input.userId,
-    displayName: input.displayName.trim() || 'New slot',
-    // Colour follows roster size, so a second slot for the same agent gets a
-    // different colour and the two are told apart at a glance.
-    index: existing.length,
-    createdBy: user.id,
+    const existing = await loadSlots(team.id)
+    await insertSlot({
+      team,
+      agentId: input.agentId,
+      userId: input.userId,
+      displayName: input.displayName.trim() || 'New slot',
+      // Colour follows roster size, so a second slot for the same agent gets a
+      // different colour and the two are told apart at a glance.
+      index: existing.length,
+      createdBy: user.id,
+    })
+    revalidatePath(`/workspace/${input.workspaceSlug}/teams/${team.id}`)
+    return loadSlots(team.id)
   })
-  revalidatePath(`/workspace/${input.workspaceSlug}/teams/${team.id}`)
-  return loadSlots(team.id)
 }
 
 /** Joining is adding yourself, and it is the only add that does not need you
@@ -491,22 +514,24 @@ export async function joinChannelAction(input: {
   workspaceId: number
   workspaceSlug: string
   teamId: number
-}): Promise<TeamSlotView[]> {
-  const { user, team } = await requireAccess(input.workspaceId, input.teamId)
-  const mine = await resolveMySlot(team.id, user.id)
-  if (!mine) {
-    const existing = await loadSlots(team.id)
-    await insertSlot({
-      team,
-      agentId: null,
-      userId: user.id,
-      displayName: user.name || user.email,
-      index: existing.length,
-      createdBy: user.id,
-    })
-  }
-  revalidatePath(`/workspace/${input.workspaceSlug}/teams/${team.id}`)
-  return loadSlots(team.id)
+}): Promise<WithFailure<TeamSlotView[]>> {
+  return guard(async () => {
+    const { user, team } = await requireAccess(input.workspaceId, input.teamId)
+    const mine = await resolveMySlot(team.id, user.id)
+    if (!mine) {
+      const existing = await loadSlots(team.id)
+      await insertSlot({
+        team,
+        agentId: null,
+        userId: user.id,
+        displayName: user.name || user.email,
+        index: existing.length,
+        createdBy: user.id,
+      })
+    }
+    revalidatePath(`/workspace/${input.workspaceSlug}/teams/${team.id}`)
+    return loadSlots(team.id)
+  })
 }
 
 export async function removeSlotAction(input: {
@@ -514,33 +539,35 @@ export async function removeSlotAction(input: {
   workspaceSlug: string
   teamId: number
   slotId: number
-}): Promise<TeamSlotView[]> {
-  await requireAccess(input.workspaceId, input.teamId)
-  await requireSlot(input.slotId, input.teamId)
-  // Hand back whatever the departing slot was holding BEFORE deleting it.
-  //
-  // `team_tasks.owner_slot_id` is ON DELETE SET NULL, so removing a slot
-  // leaves its unfinished tasks unowned but still in `claimed`/`in_progress`.
-  // That state is a dead end: `claimableTasks` only ever offers `open` or
-  // `blocked` rows, and `claimTeamTask`'s guarded UPDATE carries the same
-  // condition — so no member could ever pick the task up again, and the human
-  // "Claim for…" control on the board would offer a claim that always loses.
-  // Releasing to `open` is the only status that puts the work back in play.
-  await getBrokerPool().query(
-    `UPDATE team_tasks
-        SET status = 'open', updated_at = now()
-      WHERE team_id = $1
-        AND owner_slot_id = $2
-        AND status IN ('claimed', 'in_progress')`,
-    [input.teamId, input.slotId],
-  )
-  // The slot's `chat_sessions` row is deliberately left alone: its transcript
-  // is history, and `team_messages.from_slot_id` is ON DELETE SET NULL, so
-  // deleting the conversation as well would erase what was said with no way to
-  // read it back.
-  await removeTeamMember(input.slotId)
-  revalidatePath(`/workspace/${input.workspaceSlug}/teams/${input.teamId}`)
-  return loadSlots(input.teamId)
+}): Promise<WithFailure<TeamSlotView[]>> {
+  return guard(async () => {
+    await requireAccess(input.workspaceId, input.teamId)
+    await requireSlot(input.slotId, input.teamId)
+    // Hand back whatever the departing slot was holding BEFORE deleting it.
+    //
+    // `team_tasks.owner_slot_id` is ON DELETE SET NULL, so removing a slot
+    // leaves its unfinished tasks unowned but still in `claimed`/`in_progress`.
+    // That state is a dead end: `claimableTasks` only ever offers `open` or
+    // `blocked` rows, and `claimTeamTask`'s guarded UPDATE carries the same
+    // condition — so no member could ever pick the task up again, and the human
+    // "Claim for…" control on the board would offer a claim that always loses.
+    // Releasing to `open` is the only status that puts the work back in play.
+    await getBrokerPool().query(
+      `UPDATE team_tasks
+          SET status = 'open', updated_at = now()
+        WHERE team_id = $1
+          AND owner_slot_id = $2
+          AND status IN ('claimed', 'in_progress')`,
+      [input.teamId, input.slotId],
+    )
+    // The slot's `chat_sessions` row is deliberately left alone: its transcript
+    // is history, and `team_messages.from_slot_id` is ON DELETE SET NULL, so
+    // deleting the conversation as well would erase what was said with no way to
+    // read it back.
+    await removeTeamMember(input.slotId)
+    revalidatePath(`/workspace/${input.workspaceSlug}/teams/${input.teamId}`)
+    return loadSlots(input.teamId)
+  })
 }
 
 export async function setLeaderAction(input: {
@@ -548,11 +575,13 @@ export async function setLeaderAction(input: {
   workspaceSlug: string
   teamId: number
   slotId: number | null
-}): Promise<void> {
-  await requireAccess(input.workspaceId, input.teamId)
-  if (input.slotId != null) await requireSlot(input.slotId, input.teamId)
-  await setTeamLeader(input.teamId, input.slotId)
-  revalidatePath(`/workspace/${input.workspaceSlug}/teams/${input.teamId}`)
+}): Promise<WithFailure<void>> {
+  return guard(async () => {
+    await requireAccess(input.workspaceId, input.teamId)
+    if (input.slotId != null) await requireSlot(input.slotId, input.teamId)
+    await setTeamLeader(input.teamId, input.slotId)
+    revalidatePath(`/workspace/${input.workspaceSlug}/teams/${input.teamId}`)
+  })
 }
 
 export async function renameChannelAction(input: {
@@ -561,34 +590,38 @@ export async function renameChannelAction(input: {
   teamId: number
   name: string
   topic: string
-}): Promise<Channel> {
-  await requireAccess(input.workspaceId, input.teamId)
-  const name = input.name.trim().replace(/^#+/, '').trim()
-  if (!name) throw new Error('A channel needs a name.')
-  try {
-    await getBrokerPool().query(`UPDATE teams SET name = $2, topic = $3 WHERE id = $1`, [
-      input.teamId,
-      name,
-      input.topic.trim() || null,
-    ])
-  } catch (error) {
-    if (isDuplicateChannelName(error)) throw new Error(`#${name} already exists — pick another name.`)
-    throw error
-  }
-  revalidatePath(`/workspace/${input.workspaceSlug}/teams`)
-  const channel = await getChannel(input.teamId)
-  if (!channel) throw new Error('That channel no longer exists.')
-  return channel
+}): Promise<WithFailure<Channel>> {
+  return guard(async () => {
+    await requireAccess(input.workspaceId, input.teamId)
+    const name = input.name.trim().replace(/^#+/, '').trim()
+    if (!name) raise('invalid_input', 'A channel needs a name.')
+    try {
+      await getBrokerPool().query(`UPDATE teams SET name = $2, topic = $3 WHERE id = $1`, [
+        input.teamId,
+        name,
+        input.topic.trim() || null,
+      ])
+    } catch (error) {
+      if (isDuplicateChannelName(error)) raise('conflict', `#${name} already exists — pick another name.`)
+      throw error
+    }
+    revalidatePath(`/workspace/${input.workspaceSlug}/teams`)
+    const channel = await getChannel(input.teamId)
+    if (!channel) raise('not_found', 'That channel no longer exists.')
+    return channel
+  })
 }
 
 export async function deleteTeamAction(input: {
   workspaceId: number
   workspaceSlug: string
   teamId: number
-}): Promise<void> {
-  await requireAccess(input.workspaceId, input.teamId)
-  await deleteTeam(input.teamId)
-  revalidatePath(`/workspace/${input.workspaceSlug}/teams`)
+}): Promise<WithFailure<void>> {
+  return guard(async () => {
+    await requireAccess(input.workspaceId, input.teamId)
+    await deleteTeam(input.teamId)
+    revalidatePath(`/workspace/${input.workspaceSlug}/teams`)
+  })
 }
 
 // --- The channel feed -------------------------------------------------------
@@ -622,61 +655,63 @@ export async function postChannelMessageAction(input: {
   kind?: TeamMessageKind
   toSlotId?: number | null
   threadRootId?: number | null
-}): Promise<PostMessageResult> {
-  const { user, team } = await requireAccess(input.workspaceId, input.teamId)
-  const body = input.body.trim()
-  if (!body) throw new Error('Write something first.')
+}): Promise<WithFailure<PostMessageResult>> {
+  return guard(async () => {
+    const { user, team } = await requireAccess(input.workspaceId, input.teamId)
+    const body = input.body.trim()
+    if (!body) raise('invalid_input', 'Write something first.')
 
-  // Also the dead-letter guard at this end: a slot removed while the compose
-  // box was open is refused here rather than accepted into a mailbox that will
-  // never be opened.
-  if (input.toSlotId != null) await requireSlot(input.toSlotId, input.teamId)
-  // `postChannelMessage` re-checks that the root belongs to this channel, so a
-  // thread id from another room is refused in the data layer as well as here.
+    // Also the dead-letter guard at this end: a slot removed while the compose
+    // box was open is refused here rather than accepted into a mailbox that will
+    // never be opened.
+    if (input.toSlotId != null) await requireSlot(input.toSlotId, input.teamId)
+    // `postChannelMessage` re-checks that the root belongs to this channel, so a
+    // thread id from another room is refused in the data layer as well as here.
 
-  const [mine, roster] = await Promise.all([resolveMySlot(team.id, user.id), loadSlots(team.id)])
-  const message = await postChannelMessage({
-    teamId: team.id,
-    // `fromSlotId: null` is how somebody with no slot speaks — the column is
-    // nullable and, since 0012, a NULL sender with no `system_kind` is
-    // unambiguously "a person typed this".
-    fromSlotId: mine?.id ?? null,
-    toSlotId: input.toSlotId ?? null,
-    kind: input.kind ?? 'status',
-    body,
-    threadRootId: input.threadRootId ?? null,
-    mentions: parseMentions(body, roster),
+    const [mine, roster] = await Promise.all([resolveMySlot(team.id, user.id), loadSlots(team.id)])
+    const message = await postChannelMessage({
+      teamId: team.id,
+      // `fromSlotId: null` is how somebody with no slot speaks — the column is
+      // nullable and, since 0012, a NULL sender with no `system_kind` is
+      // unambiguously "a person typed this".
+      fromSlotId: mine?.id ?? null,
+      toSlotId: input.toSlotId ?? null,
+      kind: input.kind ?? 'status',
+      body,
+      threadRootId: input.threadRootId ?? null,
+      mentions: parseMentions(body, roster),
+    })
+
+    // Posting is reading: you have seen everything up to your own message.
+    if (mine) await markChannelRead(mine.id, message.id).catch(() => undefined)
+
+    // MENTIONING AN AGENT WAKES IT. Until this existed, naming an agent wrote a
+    // mention row and nothing else happened at all — the message looked sent to
+    // someone and reached no one.
+    //
+    // Awaited rather than fired and forgotten, because the caller needs to know
+    // whether anything was actually started: a mention that was deliberately
+    // skipped (a person, a slot mid-turn) must be reported, and silence is the
+    // exact failure being fixed here. Enqueueing is a single INSERT; the turn
+    // itself runs in the dispatcher, so this does not hold the post open.
+    const dispatch = await dispatchMentions({
+      message,
+      channelName: team.name,
+      roster,
+      authorName: mine?.displayName ?? user.name ?? user.email,
+      accountableUserId: user.id,
+    }).catch(() => ({ dispatched: [], skipped: [] }))
+
+    // No revalidatePath: the channel appends the returned row locally.
+    // Re-rendering the whole room to show a message we already hold is exactly
+    // the round trip on a UI action D0 forbids.
+    return {
+      message: { ...message, systemKind: null, undeliverableAt: null, addresseeMissing: false },
+      mySlotId: mine?.id ?? null,
+      dispatched: dispatch.dispatched,
+      mentionsSkipped: dispatch.skipped,
+    }
   })
-
-  // Posting is reading: you have seen everything up to your own message.
-  if (mine) await markChannelRead(mine.id, message.id).catch(() => undefined)
-
-  // MENTIONING AN AGENT WAKES IT. Until this existed, naming an agent wrote a
-  // mention row and nothing else happened at all — the message looked sent to
-  // someone and reached no one.
-  //
-  // Awaited rather than fired and forgotten, because the caller needs to know
-  // whether anything was actually started: a mention that was deliberately
-  // skipped (a person, a slot mid-turn) must be reported, and silence is the
-  // exact failure being fixed here. Enqueueing is a single INSERT; the turn
-  // itself runs in the dispatcher, so this does not hold the post open.
-  const dispatch = await dispatchMentions({
-    message,
-    channelName: team.name,
-    roster,
-    authorName: mine?.displayName ?? user.name ?? user.email,
-    accountableUserId: user.id,
-  }).catch(() => ({ dispatched: [], skipped: [] }))
-
-  // No revalidatePath: the channel appends the returned row locally.
-  // Re-rendering the whole room to show a message we already hold is exactly
-  // the round trip on a UI action D0 forbids.
-  return {
-    message: { ...message, systemKind: null, undeliverableAt: null, addresseeMissing: false },
-    mySlotId: mine?.id ?? null,
-    dispatched: dispatch.dispatched,
-    mentionsSkipped: dispatch.skipped,
-  }
 }
 
 /**
@@ -694,18 +729,20 @@ export async function toggleReactionAction(input: {
   teamId: number
   messageId: number
   emoji: string
-}): Promise<{ added: boolean; actorSlotId: number }> {
-  const { user, team } = await requireAccess(input.workspaceId, input.teamId)
-  const mine = await resolveMySlot(team.id, user.id)
-  if (!mine) throw new Error('Join this channel before reacting — a reaction is recorded against a member.')
-  const emoji = input.emoji.trim()
-  // A short whitelist rather than arbitrary text: `emoji` is a TEXT column with
-  // no constraint, and the grouping query would happily aggregate a paragraph.
-  if (!emoji || [...emoji].length > 4) throw new Error('That is not an emoji.')
-  const message = await getChannelMessage(input.messageId)
-  if (!message || message.teamId !== team.id) throw new Error('That message is not in this channel.')
-  const { added } = await toggleReaction({ messageId: input.messageId, actorSlotId: mine.id, emoji })
-  return { added, actorSlotId: mine.id }
+}): Promise<WithFailure<{ added: boolean; actorSlotId: number }>> {
+  return guard(async () => {
+    const { user, team } = await requireAccess(input.workspaceId, input.teamId)
+    const mine = await resolveMySlot(team.id, user.id)
+    if (!mine) raise('forbidden', 'Join this channel before reacting — a reaction is recorded against a member.')
+    const emoji = input.emoji.trim()
+    // A short whitelist rather than arbitrary text: `emoji` is a TEXT column with
+    // no constraint, and the grouping query would happily aggregate a paragraph.
+    if (!emoji || [...emoji].length > 4) raise('invalid_input', 'That is not an emoji.')
+    const message = await getChannelMessage(input.messageId)
+    if (!message || message.teamId !== team.id) raise('not_found', 'That message is not in this channel.')
+    const { added } = await toggleReaction({ messageId: input.messageId, actorSlotId: mine.id, emoji })
+    return { added, actorSlotId: mine.id }
+  })
 }
 
 /** One thread: its root and every reply, in order. */
@@ -713,16 +750,18 @@ export async function loadThreadAction(input: {
   workspaceId: number
   teamId: number
   rootId: number
-}): Promise<RoomFeedMessage[]> {
-  const { team } = await requireAccess(input.workspaceId, input.teamId)
-  const messages = await listThread(input.rootId)
-  // `listThread` takes a bare id and knows nothing about teams, so a root from
-  // another workspace's channel would otherwise be readable through a channel
-  // the caller can open. Refuse the whole thread rather than filtering it: a
-  // partially-foreign thread is not a thread.
-  if (messages.length === 0 || messages.some((m) => m.teamId !== team.id)) return []
-  const room = await listTeamRoomMessages(team.id, { limit: 1000 })
-  return mergeReliability(messages, room)
+}): Promise<WithFailure<RoomFeedMessage[]>> {
+  return guard(async () => {
+    const { team } = await requireAccess(input.workspaceId, input.teamId)
+    const messages = await listThread(input.rootId)
+    // `listThread` takes a bare id and knows nothing about teams, so a root from
+    // another workspace's channel would otherwise be readable through a channel
+    // the caller can open. Refuse the whole thread rather than filtering it: a
+    // partially-foreign thread is not a thread.
+    if (messages.length === 0 || messages.some((m) => m.teamId !== team.id)) return []
+    const room = await listTeamRoomMessages(team.id, { limit: 1000 })
+    return mergeReliability(messages, room)
+  })
 }
 
 /**
@@ -736,11 +775,13 @@ export async function markChannelReadAction(input: {
   workspaceId: number
   teamId: number
   messageId: number
-}): Promise<void> {
-  const { user, team } = await requireAccess(input.workspaceId, input.teamId)
-  const mine = await resolveMySlot(team.id, user.id)
-  if (!mine) return
-  await markChannelRead(mine.id, input.messageId)
+}): Promise<WithFailure<void>> {
+  return guard(async () => {
+    const { user, team } = await requireAccess(input.workspaceId, input.teamId)
+    const mine = await resolveMySlot(team.id, user.id)
+    if (!mine) return
+    await markChannelRead(mine.id, input.messageId)
+  })
 }
 
 // --- The canvas -------------------------------------------------------------
@@ -769,57 +810,59 @@ export interface ChannelCanvas {
 export async function ensureChannelCanvasAction(input: {
   workspaceId: number
   teamId: number
-}): Promise<ChannelCanvas> {
-  const { team } = await requireAccess(input.workspaceId, input.teamId)
-  const payload = await getPayloadClient()
+}): Promise<WithFailure<ChannelCanvas>> {
+  return guard(async () => {
+    const { team } = await requireAccess(input.workspaceId, input.teamId)
+    const payload = await getPayloadClient()
 
-  const existing = await payload.find({
-    collection: 'pages',
-    where: {
-      and: [
-        { workspace: { equals: input.workspaceId } },
-        { linkedSourceType: { equals: 'team' } },
-        { linkedSourceId: { equals: String(team.id) } },
-      ],
-    },
-    limit: 1,
-    depth: 0,
-    overrideAccess: true,
+    const existing = await payload.find({
+      collection: 'pages',
+      where: {
+        and: [
+          { workspace: { equals: input.workspaceId } },
+          { linkedSourceType: { equals: 'team' } },
+          { linkedSourceId: { equals: String(team.id) } },
+        ],
+      },
+      limit: 1,
+      depth: 0,
+      overrideAccess: true,
+    })
+
+    const page =
+      existing.docs[0] ??
+      (await payload
+        .create({
+          collection: 'pages',
+          data: {
+            title: `Canvas for #${team.name}`,
+            workspace: input.workspaceId,
+            linkedSourceType: 'team',
+            linkedSourceId: String(team.id),
+          },
+          overrideAccess: true,
+        })
+        .catch((error: unknown) => {
+          // Reported as itself instead of being swallowed into an empty pane.
+          //
+          // `linkedSourceType` is a Payload `select` AND a postgres enum, so
+          // 'team' had to be added in two places: the options in
+          // `collections/Pages.ts` and `enum_pages_linked_source_type` (see
+          // `migrations/20260904_page_linked_source_team.sql`). Both are in
+          // place; if this ever fails with an invalid-enum-value error, that
+          // migration has not been applied to the database being talked to.
+          raise('unknown', 'The channel canvas could not be created.', {
+            detail: error instanceof Error ? error.message : String(error),
+          })
+        }))
+
+    return {
+      pageId: page.id,
+      title: page.title,
+      docState: page.docState,
+      isLocked: !!page.isLocked,
+    }
   })
-
-  const page =
-    existing.docs[0] ??
-    (await payload
-      .create({
-        collection: 'pages',
-        data: {
-          title: `Canvas for #${team.name}`,
-          workspace: input.workspaceId,
-          linkedSourceType: 'team',
-          linkedSourceId: String(team.id),
-        },
-        overrideAccess: true,
-      })
-      .catch((error: unknown) => {
-        // Reported as itself instead of being swallowed into an empty pane.
-        //
-        // `linkedSourceType` is a Payload `select` AND a postgres enum, so
-        // 'team' had to be added in two places: the options in
-        // `collections/Pages.ts` and `enum_pages_linked_source_type` (see
-        // `migrations/20260904_page_linked_source_team.sql`). Both are in
-        // place; if this ever fails with an invalid-enum-value error, that
-        // migration has not been applied to the database being talked to.
-        throw new Error(
-          `The channel canvas could not be created: ${error instanceof Error ? error.message : String(error)}`,
-        )
-      }))
-
-  return {
-    pageId: page.id,
-    title: page.title,
-    docState: page.docState,
-    isLocked: !!page.isLocked,
-  }
 }
 
 // --- Polling ----------------------------------------------------------------
@@ -886,59 +929,61 @@ export async function pollTeamRoomAction(input: {
    * is actually showing. */
   feedSince: number
   threadRootId?: number | null
-}): Promise<TeamRoomDelta> {
-  const { team } = await requireAccess(input.workspaceId, input.teamId)
+}): Promise<WithFailure<TeamRoomDelta>> {
+  return guard(async () => {
+    const { team } = await requireAccess(input.workspaceId, input.teamId)
 
-  // R6.6 — the sweep runs FIRST and is awaited, not fired alongside the reads.
-  // If it hands a task back to the board, the very same poll must return the
-  // released task and the announcement it wrote; running them in parallel
-  // would show the room a board one tick out of date with the message
-  // explaining it, which is the specific kind of disagreement that makes
-  // people distrust the feed.
-  //
-  // This is also, today, the ONLY thing that runs the sweep — see the closing
-  // note in `lib/teams/reliability.ts`. A room nobody has open detects nothing.
-  const sweep = await sweepTeamSlots(team.id)
+    // R6.6 — the sweep runs FIRST and is awaited, not fired alongside the reads.
+    // If it hands a task back to the board, the very same poll must return the
+    // released task and the announcement it wrote; running them in parallel
+    // would show the room a board one tick out of date with the message
+    // explaining it, which is the specific kind of disagreement that makes
+    // people distrust the feed.
+    //
+    // This is also, today, the ONLY thing that runs the sweep — see the closing
+    // note in `lib/teams/reliability.ts`. A room nobody has open detects nothing.
+    const sweep = await sweepTeamSlots(team.id)
 
-  // Started before the await below so it overlaps every other read.
-  const pendingApprovalsPromise = listPendingChannelApprovals(team.id).catch(() => [])
+    // Started before the await below so it overlaps every other read.
+    const pendingApprovalsPromise = listPendingChannelApprovals(team.id).catch(() => [])
 
-  const [messages, feedRoots, tasks, claimable, stop, threadRows] = await Promise.all([
-    listTeamRoomMessages(team.id, { since: input.sinceMessageId, limit: 200 }),
-    listChannelFeed(team.id, { since: input.feedSince, limit: 200 }),
-    listTeamTasks(team.id),
-    claimableTasks(team.id),
-    readTeamStopState(team.id),
-    input.threadRootId ? listThread(input.threadRootId) : Promise.resolve(null),
-  ])
-  // Read alongside, not after. See `approvals` on TeamRoomDelta.
-  const approvals = await pendingApprovalsPromise
+    const [messages, feedRoots, tasks, claimable, stop, threadRows] = await Promise.all([
+      listTeamRoomMessages(team.id, { since: input.sinceMessageId, limit: 200 }),
+      listChannelFeed(team.id, { since: input.feedSince, limit: 200 }),
+      listTeamTasks(team.id),
+      claimableTasks(team.id),
+      readTeamStopState(team.id),
+      input.threadRootId ? listThread(input.threadRootId) : Promise.resolve(null),
+    ])
+    // Read alongside, not after. See `approvals` on TeamRoomDelta.
+    const approvals = await pendingApprovalsPromise
 
-  // The reliability columns for the window, read once from the same rows the
-  // Lanes view already needed. `since` is the older of the two cursors so a
-  // refreshed root can still find its own extras.
-  const reliabilityWindow =
-    input.feedSince < input.sinceMessageId
-      ? await listTeamRoomMessages(team.id, { since: input.feedSince, limit: 400 })
-      : messages
+    // The reliability columns for the window, read once from the same rows the
+    // Lanes view already needed. `since` is the older of the two cursors so a
+    // refreshed root can still find its own extras.
+    const reliabilityWindow =
+      input.feedSince < input.sinceMessageId
+        ? await listTeamRoomMessages(team.id, { since: input.feedSince, limit: 400 })
+        : messages
 
-  return {
-    messages,
-    feed: mergeReliability(feedRoots, reliabilityWindow),
-    thread:
-      threadRows && threadRows.length > 0 && threadRows.every((m) => m.teamId === team.id)
-        ? mergeReliability(threadRows, reliabilityWindow)
-        : threadRows
-          ? []
-          : null,
-    tasks,
-    claimableIds: claimable.map((t) => t.id),
-    health: sweep.health,
-    stop,
-    approvals,
-    lostSlotIds: sweep.lostSlotIds,
-    releasedTaskIds: sweep.releasedTaskIds,
-  }
+    return {
+      messages,
+      feed: mergeReliability(feedRoots, reliabilityWindow),
+      thread:
+        threadRows && threadRows.length > 0 && threadRows.every((m) => m.teamId === team.id)
+          ? mergeReliability(threadRows, reliabilityWindow)
+          : threadRows
+            ? []
+            : null,
+      tasks,
+      claimableIds: claimable.map((t) => t.id),
+      health: sweep.health,
+      stop,
+      approvals,
+      lostSlotIds: sweep.lostSlotIds,
+      releasedTaskIds: sweep.releasedTaskIds,
+    }
+  })
 }
 
 // --- Stopping the room ------------------------------------------------------
@@ -972,33 +1017,37 @@ export interface RoomStopResult {
 export async function stopTeamRoomAction(input: {
   workspaceId: number
   teamId: number
-}): Promise<RoomStopResult> {
-  const { user, team } = await requireAccess(input.workspaceId, input.teamId)
+}): Promise<WithFailure<RoomStopResult>> {
+  return guard(async () => {
+    const { user, team } = await requireAccess(input.workspaceId, input.teamId)
 
-  // Scoped by team, and the ids come from the database rather than the client.
-  // A run id off the wire would be a way to stop any run in the installation.
-  const inFlight = await listTeamRunsInFlight(team.id)
+    // Scoped by team, and the ids come from the database rather than the client.
+    // A run id off the wire would be a way to stop any run in the installation.
+    const inFlight = await listTeamRunsInFlight(team.id)
 
-  // In parallel: these are independent runs, and stopping five members one
-  // after another would let the last one keep working while the first is
-  // already dead — the whole point of a ROOM-wide stop is that it is one event.
-  const results = await Promise.all(
-    inFlight.map(async (run) => ({ run, ...(await requestRunCancel(run.runId).catch(() => ({ cancelled: false }))) })),
-  )
-  const stopped = results.filter((r) => r.cancelled).map((r) => r.run.runId)
-  const alreadySettled = results.filter((r) => !r.cancelled).map((r) => r.run.runId)
+    // In parallel: these are independent runs, and stopping five members one
+    // after another would let the last one keep working while the first is
+    // already dead — the whole point of a ROOM-wide stop is that it is one event.
+    const results = await Promise.all(
+      inFlight.map(async (run) => ({ run, ...(await requestRunCancel(run.runId).catch(() => ({ cancelled: false }))) })),
+    )
+    const stopped = results.filter((r) => r.cancelled).map((r) => r.run.runId)
+    const alreadySettled = results.filter((r) => !r.cancelled).map((r) => r.run.runId)
 
-  await recordTeamStopRequest({ teamId: team.id, requestedBy: user.id, runIds: stopped })
-  return { stopped, alreadySettled }
+    await recordTeamStopRequest({ teamId: team.id, requestedBy: user.id, runIds: stopped })
+    return { stopped, alreadySettled }
+  })
 }
 
 /** Clears the stop mark. A person decides the room is running again — nothing
  * infers it, because "a new run appeared" is also what a stray retry looks
  * like, and silently un-stopping a room somebody paused is worse than a banner
  * that outstays its welcome. */
-export async function clearTeamStopAction(input: { workspaceId: number; teamId: number }): Promise<void> {
-  await requireAccess(input.workspaceId, input.teamId)
-  await clearTeamStopRequest(input.teamId)
+export async function clearTeamStopAction(input: { workspaceId: number; teamId: number }): Promise<WithFailure<void>> {
+  return guard(async () => {
+    await requireAccess(input.workspaceId, input.teamId)
+    await clearTeamStopRequest(input.teamId)
+  })
 }
 
 /** Undeliverable mail, newest first — the dead-letter queue R6.6 asks for,
@@ -1007,9 +1056,11 @@ export async function clearTeamStopAction(input: { workspaceId: number; teamId: 
 export async function listTeamDeadLettersAction(input: {
   workspaceId: number
   teamId: number
-}): Promise<TeamRoomMessage[]> {
-  await requireAccess(input.workspaceId, input.teamId)
-  return listTeamDeadLetters(input.teamId)
+}): Promise<WithFailure<TeamRoomMessage[]>> {
+  return guard(async () => {
+    await requireAccess(input.workspaceId, input.teamId)
+    return listTeamDeadLetters(input.teamId)
+  })
 }
 
 // --- The board --------------------------------------------------------------
@@ -1021,22 +1072,24 @@ export async function createTeamTaskAction(input: {
   description?: string
   ownerSlotId: number | null
   blockedBy: number[]
-}): Promise<TeamTask> {
-  await requireAccess(input.workspaceId, input.teamId)
-  const subject = input.subject.trim()
-  if (!subject) throw new Error('A task needs a subject.')
-  if (input.ownerSlotId != null) await requireSlot(input.ownerSlotId, input.teamId)
-  // Every blocker is re-checked against this team. `team_task_deps` has a
-  // foreign key to `team_tasks` but not to a team, so without this a task
-  // could be blocked by another team's task and the claimability query would
-  // hold it hostage to work this room cannot even see.
-  for (const blocker of input.blockedBy) await requireTask(blocker, input.teamId)
-  return createTeamTask({
-    teamId: input.teamId,
-    subject,
-    description: input.description?.trim() || null,
-    ownerSlotId: input.ownerSlotId,
-    blockedBy: input.blockedBy,
+}): Promise<WithFailure<TeamTask>> {
+  return guard(async () => {
+    await requireAccess(input.workspaceId, input.teamId)
+    const subject = input.subject.trim()
+    if (!subject) raise('invalid_input', 'A task needs a subject.')
+    if (input.ownerSlotId != null) await requireSlot(input.ownerSlotId, input.teamId)
+    // Every blocker is re-checked against this team. `team_task_deps` has a
+    // foreign key to `team_tasks` but not to a team, so without this a task
+    // could be blocked by another team's task and the claimability query would
+    // hold it hostage to work this room cannot even see.
+    for (const blocker of input.blockedBy) await requireTask(blocker, input.teamId)
+    return createTeamTask({
+      teamId: input.teamId,
+      subject,
+      description: input.description?.trim() || null,
+      ownerSlotId: input.ownerSlotId,
+      blockedBy: input.blockedBy,
+    })
   })
 }
 
@@ -1045,16 +1098,18 @@ export async function claimTeamTaskAction(input: {
   teamId: number
   taskId: number
   slotId: number
-}): Promise<TeamTask> {
-  await requireAccess(input.workspaceId, input.teamId)
-  await requireTask(input.taskId, input.teamId)
-  await requireSlot(input.slotId, input.teamId)
-  const task = await claimTeamTask(input.taskId, input.slotId)
-  // Null means the guarded UPDATE matched nothing — somebody else claimed it
-  // first, or its dependencies came back. Say so plainly rather than silently
-  // leaving the stale row on screen.
-  if (!task) throw new Error('Somebody claimed that task first — refresh the board.')
-  return task
+}): Promise<WithFailure<TeamTask>> {
+  return guard(async () => {
+    await requireAccess(input.workspaceId, input.teamId)
+    await requireTask(input.taskId, input.teamId)
+    await requireSlot(input.slotId, input.teamId)
+    const task = await claimTeamTask(input.taskId, input.slotId)
+    // Null means the guarded UPDATE matched nothing — somebody else claimed it
+    // first, or its dependencies came back. Say so plainly rather than silently
+    // leaving the stale row on screen.
+    if (!task) raise('conflict', 'Somebody claimed that task first — refresh the board.')
+    return task
+  })
 }
 
 export async function setTeamTaskStatusAction(input: {
@@ -1062,13 +1117,15 @@ export async function setTeamTaskStatusAction(input: {
   teamId: number
   taskId: number
   status: TeamTaskStatus
-}): Promise<TeamTask> {
-  await requireAccess(input.workspaceId, input.teamId)
-  await requireTask(input.taskId, input.teamId)
-  await updateTeamTaskStatus(input.taskId, input.status)
-  const task = await getTeamTask(input.taskId)
-  if (!task) throw new Error('That task no longer exists.')
-  return task
+}): Promise<WithFailure<TeamTask>> {
+  return guard(async () => {
+    await requireAccess(input.workspaceId, input.teamId)
+    await requireTask(input.taskId, input.teamId)
+    await updateTeamTaskStatus(input.taskId, input.status)
+    const task = await getTeamTask(input.taskId)
+    if (!task) raise('not_found', 'That task no longer exists.')
+    return task
+  })
 }
 
 export interface ReportDoneActionResult {
@@ -1085,19 +1142,21 @@ export async function reportTeamTaskDoneAction(input: {
   taskId: number
   slotId: number | null
   summary: string
-}): Promise<ReportDoneActionResult> {
-  await requireAccess(input.workspaceId, input.teamId)
-  await requireTask(input.taskId, input.teamId)
-  if (input.slotId != null) await requireSlot(input.slotId, input.teamId)
-  const summary = input.summary.trim()
-  if (!summary) throw new Error('Say what the task produced.')
-  const result = await reportTeamTaskDone({ taskId: input.taskId, slotId: input.slotId, summary })
-  if (!result.task) throw new Error('That task no longer exists.')
-  // Re-read the whole board rather than patching one row locally: settling a
-  // task also flips every dependent that is now unblocked, in the same
-  // transaction, so a local patch would leave the other columns lying.
-  const tasks = await listTeamTasks(input.teamId)
-  return { task: result.task, releasedIds: result.released.map((t) => t.id), tasks }
+}): Promise<WithFailure<ReportDoneActionResult>> {
+  return guard(async () => {
+    await requireAccess(input.workspaceId, input.teamId)
+    await requireTask(input.taskId, input.teamId)
+    if (input.slotId != null) await requireSlot(input.slotId, input.teamId)
+    const summary = input.summary.trim()
+    if (!summary) raise('invalid_input', 'Say what the task produced.')
+    const result = await reportTeamTaskDone({ taskId: input.taskId, slotId: input.slotId, summary })
+    if (!result.task) raise('not_found', 'That task no longer exists.')
+    // Re-read the whole board rather than patching one row locally: settling a
+    // task also flips every dependent that is now unblocked, in the same
+    // transaction, so a local patch would leave the other columns lying.
+    const tasks = await listTeamTasks(input.teamId)
+    return { task: result.task, releasedIds: result.released.map((t) => t.id), tasks }
+  })
 }
 
 // --- A mention, followed through (this unit) --------------------------------
@@ -1119,23 +1178,25 @@ export async function loadChannelRunsAction(input: {
   workspaceId: number
   teamId: number
   messageIds: number[]
-}): Promise<Record<number, { runId: number; sessionId: number | null; status: string }>> {
-  const { team } = await requireAccess(input.workspaceId, input.teamId)
-  // Bounded, and the ids are re-checked against this channel below rather than
-  // trusted: `runs.channel_message_id` has no team column, so an id from
-  // another workspace's room would otherwise return that room's run.
-  const ids = [...new Set(input.messageIds.filter((id) => Number.isSafeInteger(id) && id > 0))].slice(0, 500)
-  if (ids.length === 0) return {}
-  const { rows } = await getBrokerPool().query<{ id: string }>(
-    `SELECT id FROM team_messages WHERE team_id = $1 AND id = ANY($2::bigint[])`,
-    [team.id, ids],
-  )
-  const mine = rows.map((r) => Number(r.id))
-  if (mine.length === 0) return {}
-  const runs = await getRunsForChannelMessages(mine)
-  const out: Record<number, { runId: number; sessionId: number | null; status: string }> = {}
-  for (const [messageId, link] of runs) out[messageId] = link
-  return out
+}): Promise<WithFailure<Record<number, { runId: number; sessionId: number | null; status: string }>>> {
+  return guard(async () => {
+    const { team } = await requireAccess(input.workspaceId, input.teamId)
+    // Bounded, and the ids are re-checked against this channel below rather than
+    // trusted: `runs.channel_message_id` has no team column, so an id from
+    // another workspace's room would otherwise return that room's run.
+    const ids = [...new Set(input.messageIds.filter((id) => Number.isSafeInteger(id) && id > 0))].slice(0, 500)
+    if (ids.length === 0) return {}
+    const { rows } = await getBrokerPool().query<{ id: string }>(
+      `SELECT id FROM team_messages WHERE team_id = $1 AND id = ANY($2::bigint[])`,
+      [team.id, ids],
+    )
+    const mine = rows.map((r) => Number(r.id))
+    if (mine.length === 0) return {}
+    const runs = await getRunsForChannelMessages(mine)
+    const out: Record<number, { runId: number; sessionId: number | null; status: string }> = {}
+    for (const [messageId, link] of runs) out[messageId] = link
+    return out
+  })
 }
 
 /**
@@ -1157,25 +1218,27 @@ export async function loadChannelRunSnapshotAction(input: {
   workspaceId: number
   teamId: number
   runId: number
-}): Promise<Array<{ run: Run; events: RunMessageRow[] }>> {
-  const { team } = await requireAccess(input.workspaceId, input.teamId)
-  // Shape-checked before it touches a query. A server action deserializes
-  // whatever the client sent, so `runId: number` in the signature is a claim,
-  // not a guarantee.
-  if (!Number.isSafeInteger(input.runId) || input.runId <= 0) throw new Error('That is not a run.')
-  const run = await getRun(input.runId)
-  if (!run) return []
-  const { rows } = await getBrokerPool().query<{ ok: boolean }>(
-    `SELECT EXISTS (
-       SELECT 1 FROM team_messages m
-        WHERE m.team_id = $1
-          AND m.id = (SELECT channel_message_id FROM runs WHERE id = $2)
-     ) AS ok`,
-    [team.id, input.runId],
-  )
-  if (!rows[0]?.ok) throw new Error('That run did not come from this channel.')
-  const events = await listRunEvents(input.runId)
-  return [{ run, events }]
+}): Promise<WithFailure<Array<{ run: Run; events: RunMessageRow[] }>>> {
+  return guard(async () => {
+    const { team } = await requireAccess(input.workspaceId, input.teamId)
+    // Shape-checked before it touches a query. A server action deserializes
+    // whatever the client sent, so `runId: number` in the signature is a claim,
+    // not a guarantee.
+    if (!Number.isSafeInteger(input.runId) || input.runId <= 0) raise('invalid_input', 'That is not a run.')
+    const run = await getRun(input.runId)
+    if (!run) return []
+    const { rows } = await getBrokerPool().query<{ ok: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM team_messages m
+          WHERE m.team_id = $1
+            AND m.id = (SELECT channel_message_id FROM runs WHERE id = $2)
+       ) AS ok`,
+      [team.id, input.runId],
+    )
+    if (!rows[0]?.ok) raise('forbidden', 'That run did not come from this channel.')
+    const events = await listRunEvents(input.runId)
+    return [{ run, events }]
+  })
 }
 
 /**
@@ -1196,30 +1259,32 @@ export async function createTaskFromMessageAction(input: {
   teamId: number
   messageId: number
   ownerSlotId?: number | null
-}): Promise<{ task: TeamTask; messageId: number }> {
-  const { team } = await requireAccess(input.workspaceId, input.teamId)
-  const message = await getChannelMessage(input.messageId)
-  if (!message || message.teamId !== team.id) throw new Error('That message is not in this channel.')
-  if (message.taskId != null) throw new Error('That message already has a task.')
-  if (input.ownerSlotId != null) await requireSlot(input.ownerSlotId, team.id)
+}): Promise<WithFailure<{ task: TeamTask; messageId: number }>> {
+  return guard(async () => {
+    const { team } = await requireAccess(input.workspaceId, input.teamId)
+    const message = await getChannelMessage(input.messageId)
+    if (!message || message.teamId !== team.id) raise('not_found', 'That message is not in this channel.')
+    if (message.taskId != null) raise('conflict', 'That message already has a task.')
+    if (input.ownerSlotId != null) await requireSlot(input.ownerSlotId, team.id)
 
-  const subject = subjectFromBody(message.body)
-  if (!subject) throw new Error('That message has nothing to make a subject from.')
-  const task = await createTeamTask({
-    teamId: team.id,
-    subject,
-    // Only when the body says more than its first line — a description that
-    // repeats the subject verbatim is noise on every card that shows both.
-    description: message.body.trim() === subject ? null : message.body.trim(),
-    ownerSlotId: input.ownerSlotId ?? null,
-    blockedBy: [],
+    const subject = subjectFromBody(message.body)
+    if (!subject) raise('invalid_input', 'That message has nothing to make a subject from.')
+    const task = await createTeamTask({
+      teamId: team.id,
+      subject,
+      // Only when the body says more than its first line — a description that
+      // repeats the subject verbatim is noise on every card that shows both.
+      description: message.body.trim() === subject ? null : message.body.trim(),
+      ownerSlotId: input.ownerSlotId ?? null,
+      blockedBy: [],
+    })
+    await getBrokerPool().query(`UPDATE team_messages SET task_id = $1 WHERE id = $2 AND team_id = $3`, [
+      task.id,
+      message.id,
+      team.id,
+    ])
+    return { task, messageId: message.id }
   })
-  await getBrokerPool().query(`UPDATE team_messages SET task_id = $1 WHERE id = $2 AND team_id = $3`, [
-    task.id,
-    message.id,
-    team.id,
-  ])
-  return { task, messageId: message.id }
 }
 
 /*

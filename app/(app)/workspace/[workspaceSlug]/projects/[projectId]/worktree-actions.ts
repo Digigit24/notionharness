@@ -30,6 +30,7 @@ import {
   type GitCommit,
   type GitStatus,
 } from '@/lib/git/repo'
+import { guard, raise, type WithFailure } from '@/lib/failures'
 
 /**
  * Project git bindings and worktrees.
@@ -48,7 +49,7 @@ import {
 
 async function requireUser() {
   const user = await getCurrentPayloadUser()
-  if (!user) throw new Error('You must be logged in.')
+  if (!user) raise('unauthenticated', 'You must be logged in.')
   return user
 }
 
@@ -117,26 +118,28 @@ export interface ProjectGitOverview {
   statuses: Record<number, GitStatus | null>
 }
 
-export async function getProjectGitOverview(projectId: number): Promise<ProjectGitOverview> {
-  await requireUser()
-  const [resources, worktrees, gh] = await Promise.all([
-    loadResources(projectId),
-    listWorktreesForProject(projectId),
-    readGhStatus(),
-  ])
+export async function getProjectGitOverview(projectId: number): Promise<WithFailure<ProjectGitOverview>> {
+  return guard(async () => {
+    await requireUser()
+    const [resources, worktrees, gh] = await Promise.all([
+      loadResources(projectId),
+      listWorktreesForProject(projectId),
+      readGhStatus(),
+    ])
 
-  // Read every worktree's status in parallel; one broken checkout must not
-  // stop the others from rendering.
-  const entries = await Promise.all(
-    worktrees.map(async (worktree) => {
-      if (worktree.status !== 'active') return [worktree.id, null] as const
-      const present = await directoryExists(worktree.path)
-      if (!present) return [worktree.id, null] as const
-      return [worktree.id, await readStatus(worktree.path).catch(() => null)] as const
-    }),
-  )
+    // Read every worktree's status in parallel; one broken checkout must not
+    // stop the others from rendering.
+    const entries = await Promise.all(
+      worktrees.map(async (worktree) => {
+        if (worktree.status !== 'active') return [worktree.id, null] as const
+        const present = await directoryExists(worktree.path)
+        if (!present) return [worktree.id, null] as const
+        return [worktree.id, await readStatus(worktree.path).catch(() => null)] as const
+      }),
+    )
 
-  return { resources, worktrees, gh, statuses: Object.fromEntries(entries) }
+    return { resources, worktrees, gh, statuses: Object.fromEntries(entries) }
+  })
 }
 
 export interface WorktreeDetail {
@@ -147,19 +150,21 @@ export interface WorktreeDetail {
   missing: boolean
 }
 
-export async function getWorktreeDetail(worktreeId: number): Promise<WorktreeDetail> {
-  await requireUser()
-  const worktree = await getWorktree(worktreeId)
-  if (!worktree) throw new Error('That worktree no longer exists.')
-  const present = await directoryExists(worktree.path)
-  if (!present) return { worktree, status: null, commits: [], branches: [], missing: true }
+export async function getWorktreeDetail(worktreeId: number): Promise<WithFailure<WorktreeDetail>> {
+  return guard(async () => {
+    await requireUser()
+    const worktree = await getWorktree(worktreeId)
+    if (!worktree) raise('not_found', 'That worktree no longer exists.')
+    const present = await directoryExists(worktree.path)
+    if (!present) return { worktree, status: null, commits: [], branches: [], missing: true }
 
-  const [status, commits, branches] = await Promise.all([
-    readStatus(worktree.path).catch(() => null),
-    readCommits(worktree.path, 20).catch(() => []),
-    readBranches(worktree.path).catch(() => []),
-  ])
-  return { worktree, status, commits, branches, missing: false }
+    const [status, commits, branches] = await Promise.all([
+      readStatus(worktree.path).catch(() => null),
+      readCommits(worktree.path, 20).catch(() => []),
+      readBranches(worktree.path).catch(() => []),
+    ])
+    return { worktree, status, commits, branches, missing: false }
+  })
 }
 
 /** Binds an existing directory on this machine. */
@@ -168,32 +173,34 @@ export async function addLocalResource(input: {
   projectId: number
   path: string
   role?: string
-}): Promise<ProjectResourceSummary[]> {
-  await requireUser()
-  const path = input.path.trim()
-  if (!path) throw new Error('A path is required.')
-  if (!(await directoryExists(path))) {
-    throw new Error(`No directory at ${path} on the machine running Hermes.`)
-  }
-  const repo = await isGitRepo(path)
+}): Promise<WithFailure<ProjectResourceSummary[]>> {
+  return guard(async () => {
+    await requireUser()
+    const path = input.path.trim()
+    if (!path) raise('invalid_input', 'A path is required.')
+    if (!(await directoryExists(path))) {
+      raise('not_found', `No directory at ${path} on the machine running Hermes.`)
+    }
+    const repo = await isGitRepo(path)
 
-  const payload = await getPayloadClient()
-  await payload.create({
-    collection: 'project-resources',
-    data: {
-      project: input.projectId,
-      // The filesystem decides which this is, not the person filling the form.
-      kind: repo ? 'git_repo' : 'local_dir',
-      path,
-      defaultBranch: repo ? await resolveBaseRef(path).catch(() => null) : null,
-      role: input.role ?? 'reference',
-      exists: true,
-      lastVerifiedAt: new Date().toISOString(),
-    } as never,
-    overrideAccess: true,
+    const payload = await getPayloadClient()
+    await payload.create({
+      collection: 'project-resources',
+      data: {
+        project: input.projectId,
+        // The filesystem decides which this is, not the person filling the form.
+        kind: repo ? 'git_repo' : 'local_dir',
+        path,
+        defaultBranch: repo ? await resolveBaseRef(path).catch(() => null) : null,
+        role: input.role ?? 'reference',
+        exists: true,
+        lastVerifiedAt: new Date().toISOString(),
+      } as never,
+      overrideAccess: true,
+    })
+    revalidatePath(`/workspace/${input.workspaceSlug}/projects/${input.projectId}`)
+    return loadResources(input.projectId)
   })
-  revalidatePath(`/workspace/${input.workspaceSlug}/projects/${input.projectId}`)
-  return loadResources(input.projectId)
 }
 
 /** Clones a GitHub repository with `gh` and binds the result. */
@@ -202,45 +209,51 @@ export async function addGitHubResource(input: {
   projectId: number
   repo: string
   role?: string
-}): Promise<ProjectResourceSummary[]> {
-  await requireUser()
-  const repo = input.repo.trim()
-  // `gh repo clone` accepts `owner/name` or a full URL; anything else is a
-  // typo worth catching before a two-minute clone attempt.
-  if (!/^[\w.-]+\/[\w.-]+$/.test(repo) && !/^https?:\/\//.test(repo) && !/^git@/.test(repo)) {
-    throw new Error('Give a repository as owner/name, or a full URL.')
-  }
-  const gh = await readGhStatus()
-  if (!gh.installed) throw new Error('The GitHub CLI (gh) is not installed on this machine.')
-  if (!gh.authenticated) {
-    throw new Error('GitHub is not connected. Run `gh auth login` on this machine, then try again.')
-  }
+}): Promise<WithFailure<ProjectResourceSummary[]>> {
+  return guard(async () => {
+    await requireUser()
+    const repo = input.repo.trim()
+    // `gh repo clone` accepts `owner/name` or a full URL; anything else is a
+    // typo worth catching before a two-minute clone attempt.
+    if (!/^[\w.-]+\/[\w.-]+$/.test(repo) && !/^https?:\/\//.test(repo) && !/^git@/.test(repo)) {
+      raise('invalid_input', 'Give a repository as owner/name, or a full URL.')
+    }
+    const gh = await readGhStatus()
+    // `unknown`, not `git_missing`: git may be perfectly healthy here — it is
+    // the GitHub CLI that is absent — and `FailureCode` has no code for that.
+    // Inventing one of the git codes would make a log lie about which tool
+    // broke, so this stays honest until the shared list gains a name for it.
+    if (!gh.installed) raise('unknown', 'The GitHub CLI (gh) is not installed on this machine.')
+    if (!gh.authenticated) {
+      raise('unknown', 'GitHub is not connected. Run `gh auth login` on this machine, then try again.')
+    }
 
-  const name = repo.replace(/\.git$/, '').split('/').slice(-2).join('/')
-  const target = join(projectsRoot(), ...name.split('/'))
-  if (await directoryExists(target)) {
-    if (!(await isGitRepo(target))) throw new Error(`${target} already exists and is not a git repository.`)
-  } else {
-    await ghClone(repo, target)
-  }
+    const name = repo.replace(/\.git$/, '').split('/').slice(-2).join('/')
+    const target = join(projectsRoot(), ...name.split('/'))
+    if (await directoryExists(target)) {
+      if (!(await isGitRepo(target))) raise('conflict', `${target} already exists and is not a git repository.`)
+    } else {
+      await ghClone(repo, target)
+    }
 
-  const payload = await getPayloadClient()
-  await payload.create({
-    collection: 'project-resources',
-    data: {
-      project: input.projectId,
-      kind: 'git_repo',
-      path: target,
-      repoUrl: /^https?:\/\/|^git@/.test(repo) ? repo : `https://github.com/${name}`,
-      defaultBranch: await resolveBaseRef(target).catch(() => null),
-      role: input.role ?? 'primary',
-      exists: true,
-      lastVerifiedAt: new Date().toISOString(),
-    } as never,
-    overrideAccess: true,
+    const payload = await getPayloadClient()
+    await payload.create({
+      collection: 'project-resources',
+      data: {
+        project: input.projectId,
+        kind: 'git_repo',
+        path: target,
+        repoUrl: /^https?:\/\/|^git@/.test(repo) ? repo : `https://github.com/${name}`,
+        defaultBranch: await resolveBaseRef(target).catch(() => null),
+        role: input.role ?? 'primary',
+        exists: true,
+        lastVerifiedAt: new Date().toISOString(),
+      } as never,
+      overrideAccess: true,
+    })
+    revalidatePath(`/workspace/${input.workspaceSlug}/projects/${input.projectId}`)
+    return loadResources(input.projectId)
   })
-  revalidatePath(`/workspace/${input.workspaceSlug}/projects/${input.projectId}`)
-  return loadResources(input.projectId)
 }
 
 export async function createProjectWorktree(input: {
@@ -250,43 +263,45 @@ export async function createProjectWorktree(input: {
   name: string
   baseRef?: string
   sessionId?: number | null
-}): Promise<Worktree> {
-  const user = await requireUser()
-  const resources = await loadResources(input.projectId)
-  const resource = resources.find((entry) => entry.id === input.resourceId)
-  if (!resource) throw new Error('That resource does not belong to this project.')
-  if (!resource.exists) throw new Error(`${resource.path} is not on this machine.`)
-  if (!resource.isRepo) {
-    // The distinction that makes this feature honest rather than confusing.
-    throw new Error('Only a git repository can have worktrees. This binding is a plain folder.')
-  }
+}): Promise<WithFailure<Worktree>> {
+  return guard(async () => {
+    const user = await requireUser()
+    const resources = await loadResources(input.projectId)
+    const resource = resources.find((entry) => entry.id === input.resourceId)
+    if (!resource) raise('not_found', 'That resource does not belong to this project.')
+    if (!resource.exists) raise('not_found', `${resource.path} is not on this machine.`)
+    if (!resource.isRepo) {
+      // The distinction that makes this feature honest rather than confusing.
+      raise('not_a_repository', 'Only a git repository can have worktrees. This binding is a plain folder.')
+    }
 
-  const slug = slugifyBranch(input.name)
-  // Unique per project so two projects binding the same repo cannot collide,
-  // and stamped so a repeated name is a new checkout rather than an error.
-  const unique = `${slug}-${Date.now().toString(36).slice(-4)}`
-  const branch = `agent/${unique}`
-  const path = join(worktreesRoot(), String(input.projectId), unique)
+    const slug = slugifyBranch(input.name)
+    // Unique per project so two projects binding the same repo cannot collide,
+    // and stamped so a repeated name is a new checkout rather than an error.
+    const unique = `${slug}-${Date.now().toString(36).slice(-4)}`
+    const branch = `agent/${unique}`
+    const path = join(worktreesRoot(), String(input.projectId), unique)
 
-  const created = await addWorktree(resource.path, {
-    path,
-    branch,
-    baseRef: input.baseRef || resource.defaultBranch || undefined,
-    fetch: true,
+    const created = await addWorktree(resource.path, {
+      path,
+      branch,
+      baseRef: input.baseRef || resource.defaultBranch || undefined,
+      fetch: true,
+    })
+
+    const row = await createWorktreeRow({
+      projectId: input.projectId,
+      resourceId: resource.id,
+      path: created.path,
+      branch: created.branch,
+      baseRef: created.baseRef,
+      displayName: input.name.trim() || slug,
+      createdBySessionId: input.sessionId ?? null,
+      createdBy: user.id,
+    })
+    revalidatePath(`/workspace/${input.workspaceSlug}/projects/${input.projectId}`)
+    return row
   })
-
-  const row = await createWorktreeRow({
-    projectId: input.projectId,
-    resourceId: resource.id,
-    path: created.path,
-    branch: created.branch,
-    baseRef: created.baseRef,
-    displayName: input.name.trim() || slug,
-    createdBySessionId: input.sessionId ?? null,
-    createdBy: user.id,
-  })
-  revalidatePath(`/workspace/${input.workspaceSlug}/projects/${input.projectId}`)
-  return row
 }
 
 export async function removeProjectWorktree(input: {
@@ -295,35 +310,41 @@ export async function removeProjectWorktree(input: {
   worktreeId: number
   force?: boolean
   deleteBranch?: boolean
-}): Promise<void> {
-  await requireUser()
-  const worktree = await getWorktree(input.worktreeId)
-  if (!worktree) return
-  if (worktree.projectId !== input.projectId) throw new Error('That worktree belongs to another project.')
+}): Promise<WithFailure<void>> {
+  return guard(async () => {
+    await requireUser()
+    const worktree = await getWorktree(input.worktreeId)
+    if (!worktree) return
+    if (worktree.projectId !== input.projectId) raise('forbidden', 'That worktree belongs to another project.')
 
-  const resources = await loadResources(input.projectId)
-  const resource = resources.find((entry) => entry.id === worktree.resourceId)
+    const resources = await loadResources(input.projectId)
+    const resource = resources.find((entry) => entry.id === worktree.resourceId)
 
-  if (resource?.exists && (await directoryExists(worktree.path))) {
-    try {
-      await removeWorktree(resource.path, {
-        path: worktree.path,
-        branch: worktree.branch,
-        force: input.force,
-        deleteBranch: input.deleteBranch,
-      })
-    } catch (err) {
-      // git refuses to remove a dirty worktree without --force, and saying so
-      // is far better than a silent failure that leaves the row behind.
-      const message = err instanceof Error ? err.message : String(err)
-      if (/contains modified or untracked files/i.test(message) && !input.force) {
-        throw new Error('This worktree has uncommitted changes. Remove it with force to discard them.')
+    if (resource?.exists && (await directoryExists(worktree.path))) {
+      try {
+        await removeWorktree(resource.path, {
+          path: worktree.path,
+          branch: worktree.branch,
+          force: input.force,
+          deleteBranch: input.deleteBranch,
+        })
+      } catch (err) {
+        // git refuses to remove a dirty worktree without --force, and saying so
+        // is far better than a silent failure that leaves the row behind.
+        const message = err instanceof Error ? err.message : String(err)
+        if (/contains modified or untracked files/i.test(message) && !input.force) {
+          // git's own stderr rides along as `detail` — it names the files, which
+          // is the one thing the person deciding whether to force actually wants.
+          raise('worktree_dirty', 'This worktree has uncommitted changes. Remove it with force to discard them.', {
+            detail: message,
+          })
+        }
+        throw err
       }
-      throw err
     }
-  }
 
-  await detachSessionsFromWorktree(worktree.id)
-  await markWorktreeStatus(worktree.id, 'removed')
-  revalidatePath(`/workspace/${input.workspaceSlug}/projects/${input.projectId}`)
+    await detachSessionsFromWorktree(worktree.id)
+    await markWorktreeStatus(worktree.id, 'removed')
+    revalidatePath(`/workspace/${input.workspaceSlug}/projects/${input.projectId}`)
+  })
 }

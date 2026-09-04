@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
 import { updateProject } from '@/app/(app)/workspace/[workspaceSlug]/projects/[projectId]/actions'
+import { unwrap } from '@/lib/failures'
 import { formatTimestamp } from '@/lib/relative-time'
 
 export interface ProjectStatusCount {
@@ -56,7 +57,7 @@ export function ProjectOverviewTab({
     setSaving(true)
     setError(null)
     try {
-      const updated = await updateProject({ projectId, workspaceSlug, data: { description } })
+      const updated = unwrap(await updateProject({ projectId, workspaceSlug, data: { description } }))
       setSaved(updated.description ?? '')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save brief.')

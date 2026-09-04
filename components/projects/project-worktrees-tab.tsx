@@ -14,6 +14,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { formatRelativeTime } from '@/lib/relative-time'
+import { ClientFailure, unwrap } from '@/lib/failures'
 import {
   addGitHubResource,
   addLocalResource,
@@ -144,7 +145,7 @@ export function ProjectWorktreesTab({
                 disabled={busy || !localPath.trim()}
                 onClick={() =>
                   run(async () => {
-                    setResources(await addLocalResource({ workspaceSlug, projectId, path: localPath.trim() }))
+                    setResources(unwrap(await addLocalResource({ workspaceSlug, projectId, path: localPath.trim() })))
                     setLocalPath('')
                   })
                 }
@@ -180,7 +181,7 @@ export function ProjectWorktreesTab({
                 disabled={busy || !ghRepo.trim() || !overview.gh.authenticated}
                 onClick={() =>
                   run(async () => {
-                    setResources(await addGitHubResource({ workspaceSlug, projectId, repo: ghRepo.trim() }))
+                    setResources(unwrap(await addGitHubResource({ workspaceSlug, projectId, repo: ghRepo.trim() })))
                     setGhRepo('')
                   })
                 }
@@ -232,12 +233,14 @@ export function ProjectWorktreesTab({
               disabled={busy || !newName.trim() || selectedResourceId == null}
               onClick={() =>
                 run(async () => {
-                  await createProjectWorktree({
-                    workspaceSlug,
-                    projectId,
-                    resourceId: selectedResourceId!,
-                    name: newName.trim(),
-                  })
+                  unwrap(
+                    await createProjectWorktree({
+                      workspaceSlug,
+                      projectId,
+                      resourceId: selectedResourceId!,
+                      name: newName.trim(),
+                    }),
+                  )
                   setNewName('')
                 })
               }
@@ -308,13 +311,15 @@ export function ProjectWorktreesTab({
                         disabled={busy}
                         onClick={() =>
                           run(async () => {
-                            await removeProjectWorktree({
-                              workspaceSlug,
-                              projectId,
-                              worktreeId: worktree.id,
-                              force: true,
-                              deleteBranch: true,
-                            })
+                            unwrap(
+                              await removeProjectWorktree({
+                                workspaceSlug,
+                                projectId,
+                                worktreeId: worktree.id,
+                                force: true,
+                                deleteBranch: true,
+                              }),
+                            )
                             setConfirmRemove(null)
                           })
                         }
@@ -334,12 +339,16 @@ export function ProjectWorktreesTab({
                       onClick={() =>
                         run(async () => {
                           try {
-                            await removeProjectWorktree({ workspaceSlug, projectId, worktreeId: worktree.id })
+                            unwrap(await removeProjectWorktree({ workspaceSlug, projectId, worktreeId: worktree.id }))
                           } catch (err) {
                             // A dirty worktree needs an explicit decision, so
                             // escalate to the confirm affordance rather than
-                            // just reporting a failure.
-                            if (err instanceof Error && /uncommitted/i.test(err.message)) {
+                            // just reporting a failure. R12-P1.1 makes that
+                            // branch on the failure's CODE rather than on a
+                            // regex over its sentence — the sentence is written
+                            // for a person and may be reworded any day; the code
+                            // is the part that promised not to change.
+                            if (err instanceof ClientFailure && err.code === 'worktree_dirty') {
                               setConfirmRemove(worktree.id)
                               return
                             }

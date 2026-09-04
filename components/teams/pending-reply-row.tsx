@@ -3,6 +3,7 @@
 import { useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { ExternalLink, Loader2, TriangleAlert, X } from 'lucide-react'
+import { unwrap } from '@/lib/failures'
 import { cn } from '@/lib/utils'
 import { useRunEventStream } from '@/components/runs/use-run-event-stream'
 import { StreamingText } from '@/components/thread/StreamingText'
@@ -55,7 +56,11 @@ export function PendingReplyRow({
   const slot = slotById(slots, pending.slotId)
 
   const loader = useCallback(
-    async (runId: number) => loadChannelRunSnapshotAction({ workspaceId, teamId, runId }),
+    // `unwrap` rather than a silent empty array: `useRunEventStream` already
+    // owns the retry-and-report path for a loader that rejects, so a refused
+    // snapshot surfaces as the stream's own reconnecting state instead of as a
+    // ghost row that never fills in.
+    async (runId: number) => unwrap(await loadChannelRunSnapshotAction({ workspaceId, teamId, runId })),
     [workspaceId, teamId],
   )
   // `observed` is unconditionally true: this component only ever mounts while

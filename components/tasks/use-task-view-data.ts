@@ -43,6 +43,7 @@ import {
   type TaskGroupBy,
   type TaskSort,
 } from '@/lib/task-views/data-layer'
+import { unwrap } from '@/lib/failures'
 import type { Task, TaskStatus, Workspace } from '@/payload-types'
 
 export type TaskViewKind = 'board' | 'list' | 'table'
@@ -104,7 +105,7 @@ export function useTaskViewData({
     const id = ++requestId.current
     setViewLoading(true)
     try {
-      const result = await getTasksForView({ workspaceId: workspace.id, filters, sort })
+      const result = unwrap(await getTasksForView({ workspaceId: workspace.id, filters, sort }))
       if (id !== requestId.current) return // superseded by a newer request
       setViewTasks(result.docs)
       setViewTotal(result.totalDocs)
@@ -185,8 +186,9 @@ export function useTaskViewData({
     relocateInBoardCache(taskId, updatedTask, found.statusId, targetStatusId)
     setViewTasks((prev) => (prev ? prev.map((t) => (t.id === taskId ? updatedTask : t)) : prev))
 
-    moveTaskToStatus({ taskId, workspaceId: workspace.id, workspaceSlug: workspace.slug, statusId: targetStatusId }).catch(
-      (err) => {
+    moveTaskToStatus({ taskId, workspaceId: workspace.id, workspaceSlug: workspace.slug, statusId: targetStatusId })
+      .then(unwrap)
+      .catch((err) => {
         const message = err instanceof Error ? err.message : 'Failed to move task.'
         setError(message)
         // ROADMAP B-6 "Finish" (state-craft sweep) — the plan's optimistic
@@ -194,11 +196,13 @@ export function useTaskViewData({
         // what failed." The board cache reset below is the visible
         // rollback (the card snaps back to its prior column); this is the
         // toast half of that pair, for the app's flagship optimistic
-        // interaction (drag-and-drop).
+        // interaction (drag-and-drop). R12-P1.1 is what makes the toast
+        // worth reading in production: `unwrap` above rebuilds the failure
+        // as a browser-side Error, so `err.message` is the sentence the
+        // action wrote rather than React's digest placeholder.
         toast({ title: 'Couldn’t move task', description: message, variant: 'destructive' })
         setTasksByStatus(Object.fromEntries(columns.map((c) => [c.status.id, c.tasks])))
-      },
-    )
+      })
   }
 
   async function handleAddTask(statusId: number, title: string) {
@@ -226,7 +230,7 @@ export function useTaskViewData({
   async function handleLoadMore(statusId: number) {
     const current = tasksByStatus[statusId] ?? []
     try {
-      const more = await loadMoreTasks({ workspaceId: workspace.id, statusId, offset: current.length, limit: pageSize })
+      const more = unwrap(await loadMoreTasks({ workspaceId: workspace.id, statusId, offset: current.length, limit: pageSize }))
       setTasksByStatus((prev) => ({ ...prev, [statusId]: [...current, ...more] }))
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load more tasks.')

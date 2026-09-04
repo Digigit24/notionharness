@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { unwrap } from '@/lib/failures'
 import { toast } from '@/hooks/use-toast'
 import { cn } from '@/lib/utils'
 import {
@@ -124,14 +125,16 @@ export function BoardView({
   async function createTask() {
     setSaving(true)
     try {
-      const task = await createTeamTaskAction({
-        workspaceId,
-        teamId,
-        subject,
-        description,
-        ownerSlotId,
-        blockedBy,
-      })
+      const task = unwrap(
+        await createTeamTaskAction({
+          workspaceId,
+          teamId,
+          subject,
+          description,
+          ownerSlotId,
+          blockedBy,
+        }),
+      )
       onTasksChanged([...tasks, task])
       setSubject('')
       setDescription('')
@@ -338,12 +341,14 @@ export function BoardView({
                             disabled={busy}
                             onValueChange={(v) =>
                               void withBusy(task.id, async () => {
-                                const next = await claimTeamTaskAction({
-                                  workspaceId,
-                                  teamId,
-                                  taskId: task.id,
-                                  slotId: Number(v),
-                                })
+                                const next = unwrap(
+                                  await claimTeamTaskAction({
+                                    workspaceId,
+                                    teamId,
+                                    taskId: task.id,
+                                    slotId: Number(v),
+                                  }),
+                                )
                                 replaceTask(next)
                               })
                             }
@@ -366,12 +371,14 @@ export function BoardView({
                           disabled={busy}
                           onValueChange={(v) =>
                             void withBusy(task.id, async () => {
-                              const next = await setTeamTaskStatusAction({
-                                workspaceId,
-                                teamId,
-                                taskId: task.id,
-                                status: v as TeamTaskStatus,
-                              })
+                              const next = unwrap(
+                                await setTeamTaskStatusAction({
+                                  workspaceId,
+                                  teamId,
+                                  taskId: task.id,
+                                  status: v as TeamTaskStatus,
+                                }),
+                              )
                               replaceTask(next)
                             })
                           }
@@ -419,13 +426,15 @@ export function BoardView({
                           disabled={busy || !summary.trim()}
                           onClick={() =>
                             void withBusy(task.id, async () => {
-                              const result = await reportTeamTaskDoneAction({
-                                workspaceId,
-                                teamId,
-                                taskId: task.id,
-                                slotId: task.ownerSlotId,
-                                summary,
-                              })
+                              const result = unwrap(
+                                await reportTeamTaskDoneAction({
+                                  workspaceId,
+                                  teamId,
+                                  taskId: task.id,
+                                  slotId: task.ownerSlotId,
+                                  summary,
+                                }),
+                              )
                               // The whole board, not one row: settling a task
                               // flips every dependent it unblocked in the same
                               // transaction.

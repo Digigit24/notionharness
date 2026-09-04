@@ -7,6 +7,7 @@ import { TASK_STATUS_CATEGORIES } from '@/collections/TaskStatuses'
 import { ProjectDetailView } from '@/components/projects/project-detail-view'
 import { getProjectRuns, listProjectResources } from './actions'
 import { getProjectGitOverview } from './worktree-actions'
+import { isFailureEnvelope, unwrap } from '@/lib/failures'
 import type { ColumnData } from '@/components/tasks/task-board'
 import type { Agent, User } from '@/payload-types'
 
@@ -94,10 +95,10 @@ export default async function ProjectDetailPage({
     assignableUsers.push(...resolved.docs)
   }
 
-  const [activeRuns, usageRollup, initialRuns, lastActiveTask, projectPages, initialResources, gitOverview] = await Promise.all([
+  const [activeRuns, usageRollup, initialRuns, lastActiveTask, projectPages, initialResources, gitOverviewResult] = await Promise.all([
     listActiveRunsForProject(project.id),
     getProjectUsageRollup(project.id, 30),
-    getProjectRuns({ projectId: project.id }),
+    getProjectRuns({ projectId: project.id }).then(unwrap),
     payload.find({
       collection: 'tasks',
       where: { project: { equals: project.id } },
@@ -117,12 +118,15 @@ export default async function ProjectDetailPage({
       depth: 0,
       overrideAccess: true,
     }),
-    listProjectResources(project.id),
+    listProjectResources(project.id).then(unwrap),
     // Reads real git state (status per worktree, `gh auth status`), so it is
     // allowed to fail without taking the page down — the tab renders an
-    // explanation instead.
-    getProjectGitOverview(project.id).catch(() => null),
+    // explanation instead. That used to be a `.catch(() => null)`; now that
+    // the action RETURNS its failure, the check below does the same job
+    // without also swallowing the redirects `guard` deliberately re-throws.
+    getProjectGitOverview(project.id),
   ])
+  const gitOverview = isFailureEnvelope(gitOverviewResult) ? null : gitOverviewResult
 
   return (
     <ProjectDetailView

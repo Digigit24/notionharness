@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { updateProject } from '@/app/(app)/workspace/[workspaceSlug]/projects/[projectId]/actions'
+import { unwrap } from '@/lib/failures'
 import type { Project } from '@/payload-types'
 
 // ROADMAP B-1 (project detail, Settings tab) — `collections/Projects.ts`
@@ -40,11 +41,13 @@ export function ProjectSettingsTab({
     setSaving(true)
     setError(null)
     try {
-      const updated = await updateProject({
-        projectId: project.id,
-        workspaceSlug,
-        data: { name: name || 'Untitled', icon: icon || null, description: description || null },
-      })
+      const updated = unwrap(
+        await updateProject({
+          projectId: project.id,
+          workspaceSlug,
+          data: { name: name || 'Untitled', icon: icon || null, description: description || null },
+        }),
+      )
       onUpdated(updated)
       setSavedAt(Date.now())
     } catch (err) {

@@ -1,3 +1,5 @@
+import { RuntimeDefaultsForm } from '@/components/runtimes/runtime-defaults-form'
+import type { AgentHandshake } from '@/lib/runtimes/handshake'
 import { notFound } from 'next/navigation'
 import { Server } from 'lucide-react'
 import { getPayloadClient } from '@/lib/payload'
@@ -10,6 +12,7 @@ import { RuntimesRefreshButton } from '@/components/runtimes/refresh-button'
 import { AddRuntimeProfileForm } from '@/components/runtimes/add-profile-form'
 import { ToggleRuntimeProfileEnabledButton } from '@/components/runtimes/toggle-enabled-button'
 import { RuntimeProbeButton } from '@/components/runtimes/probe-button'
+import { explainProbeCode } from '@/lib/runtimes/probe-codes'
 import { formatRelativeTime } from '@/lib/relative-time'
 import type { Agent, Runtime, RuntimeProfile } from '@/payload-types'
 
@@ -179,7 +182,7 @@ function RuntimeRow({
           {info?.profilesAvailable != null && <span>{info.profilesAvailable} Hermes profile(s) available</span>}
         </div>
 
-        {status === 'down' && info?.error && <p className="text-xs text-destructive">{info.error}</p>}
+        {status === 'down' && info?.error && <DownReason error={info.error} />}
 
         {/* A specific, real state worth naming: the runtime runs, but the
             Hermes-only settings screens (profiles, memories, MCP config) have
@@ -194,13 +197,48 @@ function RuntimeRow({
           </p>
         )}
 
+        {/* R12-P4.2 - the runtime's own settings, edited here rather than
+            once per agent. Rendered from what the runtime declared about
+            itself at probe time, so there is no Claude-specific screen and no
+            model list of ours to keep current. */}
+        <RuntimeDefaultsForm
+          workspaceSlug={workspaceSlug}
+          profileId={profile.id}
+          handshake={(profile.handshake as AgentHandshake | null) ?? null}
+          initialValues={
+            profile.defaultSessionConfig && typeof profile.defaultSessionConfig === 'object'
+              ? (profile.defaultSessionConfig as Record<string, unknown>)
+              : {}
+          }
+        />
+
         <div className="text-xs text-faint">
           {agents.length === 0
             ? 'No agents bound to this runtime.'
-            : `Agents: ${agents.map((a) => a.name).join(', ')}`}
+            : `Agents: ${agents.map((a) => a.name).join(', ')}. They inherit the defaults above unless they set their own.`}
         </div>
       </CardContent>
     </Card>
+  )
+}
+
+/**
+ * Why a runtime is down.
+ *
+ * `connectionInfo.error` holds free-form text most of the time, but the health
+ * loop falls back to the bare probe code when a stored probe had no detail
+ * (see `checkAcpRuntime` in `lib/runtimes/hermes/runtime-health.ts`), so this
+ * line could read exactly `acp_init_timeout` and nothing else. When that
+ * happens, say what it means and what to do instead — same map the Probe
+ * button uses, so the two never disagree about one code.
+ */
+function DownReason({ error }: { error: string }) {
+  const explanation = explainProbeCode(error)
+  if (!explanation) return <p className="text-xs text-destructive">{error}</p>
+  return (
+    <p className="text-xs text-destructive">
+      {explanation.title}. {explanation.whatItMeans} <span className="font-medium">{explanation.whatToDo}</span>
+    </p>
   )
 }
 

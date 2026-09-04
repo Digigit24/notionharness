@@ -3,6 +3,7 @@
 import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { toggleRuntimeProfileEnabled } from '@/app/(app)/workspace/[workspaceSlug]/settings/runtimes/actions'
+import { unwrap } from '@/lib/failures'
 import { toast } from '@/hooks/use-toast'
 
 export function ToggleRuntimeProfileEnabledButton({
@@ -21,7 +22,7 @@ export function ToggleRuntimeProfileEnabledButton({
   async function toggle() {
     setBusy(true)
     try {
-      await toggleRuntimeProfileEnabled({ workspaceSlug, profileId, enabled: !enabled })
+      unwrap(await toggleRuntimeProfileEnabled({ workspaceSlug, profileId, enabled: !enabled }))
       startTransition(() => router.refresh())
     } catch (error) {
       toast({

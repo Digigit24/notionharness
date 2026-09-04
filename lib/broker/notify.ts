@@ -1,5 +1,7 @@
 import { Client } from 'pg'
 import { EventEmitter } from 'node:events'
+import { bestEffort } from '@/lib/failures'
+import { logger } from '@/lib/logger'
 
 /** Channel `appendRunEvent` (messages.ts) NOTIFYs on after every insert, and
  * this module LISTENs on — the push half of the P5.7 SSE route's
@@ -52,9 +54,12 @@ async function ensureListening(): Promise<void> {
     // forever: clear the cached client so the next subscribe re-dials.
     // Every open SSE route still has its own fallback poll in the meantime.
     client.on('error', (err) => {
-      console.error('[broker/notify] LISTEN connection error, will reconnect on next subscribe', err)
+      logger.error('LISTEN connection error — will reconnect on the next subscribe', err, { channel: CHANNEL })
       global._notionforgeListenClient = null
-      client.end().catch(() => {})
+      void bestEffort(
+        client.end(),
+        'a connection that is already broken cannot fail to close in a way that matters',
+      )
     })
     client.on('end', () => {
       global._notionforgeListenClient = null
@@ -85,7 +90,7 @@ async function ensureListening(): Promise<void> {
  * this function throwing. */
 export async function subscribeToRunNotifications(runId: number, onNotify: () => void): Promise<() => void> {
   await ensureListening().catch((err) => {
-    console.error('[broker/notify] failed to establish LISTEN connection — falling back to polling only', err)
+    logger.error('could not establish the LISTEN connection — falling back to polling only', err, { runId })
   })
   const emitter = getEmitter()
   const event = `run:${runId}`

@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Radio, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { pingAgentRuntime, pingAgentModel } from '@/app/(app)/workspace/[workspaceSlug]/agents/actions'
+import { unwrap } from '@/lib/failures'
 
 interface PingResult {
   ok: boolean
@@ -47,7 +48,7 @@ export function RuntimePingButton({ agentId }: { agentId: number }) {
     setPinging(true)
     setRuntimeResult(null)
     try {
-      setRuntimeResult(await pingAgentRuntime(agentId))
+      setRuntimeResult(unwrap(await pingAgentRuntime(agentId)))
     } catch (err) {
       setRuntimeResult({ ok: false, output: err instanceof Error ? err.message : 'Ping failed.', durationMs: 0 })
     } finally {
@@ -59,7 +60,7 @@ export function RuntimePingButton({ agentId }: { agentId: number }) {
     setModelPinging(true)
     setModelResult(null)
     try {
-      setModelResult(await pingAgentModel(agentId))
+      setModelResult(unwrap(await pingAgentModel(agentId)))
     } catch (err) {
       setModelResult({ ok: false, output: err instanceof Error ? err.message : 'Test failed.', durationMs: 0 })
     } finally {

@@ -1,9 +1,10 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Columns3, Hash, Lock, MessageSquare, Network, NotebookPen, OctagonX } from 'lucide-react'
+import { Columns3, Hash, Loader2, Lock, MessageSquare, Network, NotebookPen, OctagonX } from 'lucide-react'
 import type { ChannelApproval, TeamTask } from '@/lib/broker'
 import type { TeamRoomMessage, TeamSlotHealth, TeamStopState } from '@/lib/teams/reliability'
+import { unwrap } from '@/lib/failures'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/hooks/use-toast'
@@ -53,6 +54,18 @@ const VIEWS: Array<{ id: RoomView; label: string; icon: typeof MessageSquare }> 
  * enough that a delegation does not feel lost. The real fix is a push channel
  * — see `pollTeamRoomAction`. */
 const POLL_MS = 6000
+
+/**
+ * How many polls in a row have to fail before the room says so.
+ *
+ * R12-P1.5. Three, not one: a single missed tick is a hiccup — a laptop lid, a
+ * dev server restarting, one dropped request — and a strip that flashed for
+ * every one of those would be the thing people learn to ignore. Three
+ * consecutive failures is eighteen seconds of silence, long enough to mean the
+ * room really has stopped hearing from the server and short enough to say so
+ * before anybody concludes the channel is simply quiet.
+ */
+const POLLS_BEFORE_RECONNECTING = 3
 
 /**
  * How many recent roots each poll re-reads.
@@ -135,6 +148,8 @@ export function TeamRoom({
   const [health, setHealth] = useState(initialHealth)
   const [stop, setStop] = useState(initialStop)
   const [stopping, setStopping] = useState(false)
+  /** Consecutive failed polls. See `POLLS_BEFORE_RECONNECTING`. */
+  const [pollFailures, setPollFailures] = useState(0)
   const [joining, setJoining] = useState(false)
   const [threadRootId, setThreadRootId] = useState<number | null>(null)
   const [thread, setThread] = useState<RoomFeedMessage[]>([])
@@ -261,6 +276,15 @@ export function TeamRoom({
     setThread((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)))
   }, [])
 
+  /**
+   * Poll now, for the header's Retry.
+   *
+   * Held in a ref rather than lifted out of the effect: `tick` closes over that
+   * effect's own `cancelled` and `inFlight` flags, and a second copy outside
+   * would be a second poller the in-flight guard cannot see.
+   */
+  const pollNowRef = useRef<(() => void) | null>(null)
+
   useEffect(() => {
     let cancelled = false
     let inFlight = false
@@ -271,13 +295,15 @@ export function TeamRoom({
       if (document.hidden || inFlight) return
       inFlight = true
       try {
-        const delta = await pollTeamRoomAction({
-          workspaceId,
-          teamId: channel.id,
-          sinceMessageId: lastMessageIdRef.current,
-          feedSince: feedSinceRef.current,
-          threadRootId: threadRootIdRef.current,
-        })
+        const delta = unwrap(
+          await pollTeamRoomAction({
+            workspaceId,
+            teamId: channel.id,
+            sinceMessageId: lastMessageIdRef.current,
+            feedSince: feedSinceRef.current,
+            threadRootId: threadRootIdRef.current,
+          }),
+        )
         if (cancelled) return
         mergeMessages(delta.messages)
         mergeFeed(delta.feed)
@@ -287,17 +313,26 @@ export function TeamRoom({
         setHealth(delta.health)
         setStop(delta.stop)
         setApprovals(delta.approvals)
+        // Cleared on the FIRST success, so the strip below states something
+        // about the connection now rather than tallying everything that has
+        // ever failed in this room.
+        setPollFailures((n) => (n === 0 ? n : 0))
       } catch {
-        // Swallowed on purpose: a failed poll is not an event worth a toast
-        // every six seconds. The next tick either works or the page is dead
-        // anyway, and every mutation surfaces its own error.
+        // Still not a toast — one every six seconds would be worse than the bug
+        // it reports, which is why this was a bare swallow. Counted instead
+        // (R12-P1.5), so a room that has genuinely stopped hearing from the
+        // server says so once, quietly, in its header: until this, a dead poll
+        // and a quiet channel looked exactly the same.
+        if (!cancelled) setPollFailures((n) => n + 1)
       } finally {
         inFlight = false
       }
     }
+    pollNowRef.current = () => void tick()
     const handle = window.setInterval(tick, POLL_MS)
     return () => {
       cancelled = true
+      pollNowRef.current = null
       window.clearInterval(handle)
     }
   }, [workspaceId, channel.id, mergeMessages, mergeFeed])
@@ -316,7 +351,14 @@ export function TeamRoom({
     (messageId: number) => {
       if (messageId <= markedRef.current) return
       markedRef.current = messageId
-      void markChannelReadAction({ workspaceId, teamId: channel.id, messageId }).catch(() => undefined)
+      // `.then(unwrap)` so the swallow stays reachable: a refusal now arrives
+      // as a returned envelope rather than a rejection, and without it the
+      // `.catch` would be dead code. Still swallowed — the cursor is written on
+      // every intersection and `markChannelRead` is a `GREATEST` update, so the
+      // next scroll re-sends it.
+      void markChannelReadAction({ workspaceId, teamId: channel.id, messageId })
+        .then(unwrap)
+        .catch(() => undefined)
     },
     [workspaceId, channel.id],
   )
@@ -330,8 +372,18 @@ export function TeamRoom({
       const root = feed.find((m) => m.id === rootId)
       setThread(root ? [root] : [])
       void loadThreadAction({ workspaceId, teamId: channel.id, rootId })
-        .then((rows) => setThread(rows))
-        .catch(() => undefined)
+        .then((rows) => setThread(unwrap(rows)))
+        .catch((error: unknown) => {
+          // Said out loud rather than swallowed. The pane is already open on
+          // the seeded root, so a silent failure is indistinguishable from a
+          // thread that genuinely has no replies — which is the wrong thing to
+          // let somebody believe about a conversation.
+          toast({
+            title: 'Could not open the thread',
+            description: error instanceof Error ? error.message : undefined,
+            variant: 'destructive',
+          })
+        })
     },
     [workspaceId, channel.id, feed],
   )
@@ -358,7 +410,7 @@ export function TeamRoom({
   const join = useCallback(async () => {
     setJoining(true)
     try {
-      setSlots(await joinChannelAction({ workspaceId, workspaceSlug, teamId: channel.id }))
+      setSlots(unwrap(await joinChannelAction({ workspaceId, workspaceSlug, teamId: channel.id })))
     } catch (error) {
       toast({
         title: 'Could not join the channel',
@@ -490,9 +542,9 @@ export function TeamRoom({
     if (unasked.length === 0) return
     let cancelled = false
     void loadChannelRunsAction({ workspaceId, teamId: channel.id, messageIds: unasked })
-      .then((found) => {
+      .then((result) => {
         if (cancelled) return
-        const entries = Object.entries(found)
+        const entries = Object.entries(unwrap(result))
         if (entries.length === 0) return
         setRuns((prev) => {
           const next = new Map(prev)
@@ -500,6 +552,9 @@ export function TeamRoom({
           return next
         })
       })
+      // Deliberately quiet, and this one stays quiet: all it resolves is the
+      // "See full run" link on a message. Interrupting a conversation to report
+      // a missing decoration would cost more than the decoration is worth.
       .catch(() => undefined)
     return () => {
       cancelled = true
@@ -590,7 +645,9 @@ export function TeamRoom({
   const makeTaskFromMessage = useCallback(
     async (messageId: number): Promise<string | null> => {
       try {
-        const { task } = await createTaskFromMessageAction({ workspaceId, teamId: channel.id, messageId })
+        const { task } = unwrap(
+          await createTaskFromMessageAction({ workspaceId, teamId: channel.id, messageId }),
+        )
         setTasks((prev) => (prev.some((t) => t.id === task.id) ? prev : [...prev, task]))
         // Patched locally rather than re-read: the action told us the id it
         // wrote, and re-fetching the room to show a chip we already hold is
@@ -648,14 +705,16 @@ export function TeamRoom({
         // became an unhandled rejection, and left a refused `/task` looking
         // exactly like a successful one: nothing on screen either way.
         try {
-          const task = await createTeamTaskAction({
-            workspaceId,
-            teamId: channel.id,
-            subject: subjectFromBody(rest),
-            description: rest === subjectFromBody(rest) ? undefined : rest,
-            ownerSlotId: null,
-            blockedBy: [],
-          })
+          const task = unwrap(
+            await createTeamTaskAction({
+              workspaceId,
+              teamId: channel.id,
+              subject: subjectFromBody(rest),
+              description: rest === subjectFromBody(rest) ? undefined : rest,
+              ownerSlotId: null,
+              blockedBy: [],
+            }),
+          )
           setTasks((prev) => [...prev, task])
           return null
         } catch (error) {
@@ -675,14 +734,16 @@ export function TeamRoom({
         const subject = rest.slice(target.displayName.length + 1).trim()
         if (!subject) return `Say what ${target.displayName} should do: /assign @${target.displayName} <subject>`
         try {
-          const task = await createTeamTaskAction({
-            workspaceId,
-            teamId: channel.id,
-            subject: subjectFromBody(subject),
-            description: subject === subjectFromBody(subject) ? undefined : subject,
-            ownerSlotId: target.id,
-            blockedBy: [],
-          })
+          const task = unwrap(
+            await createTeamTaskAction({
+              workspaceId,
+              teamId: channel.id,
+              subject: subjectFromBody(subject),
+              description: subject === subjectFromBody(subject) ? undefined : subject,
+              ownerSlotId: target.id,
+              blockedBy: [],
+            }),
+          )
           setTasks((prev) => [...prev, task])
           return null
         } catch (error) {
@@ -716,7 +777,7 @@ export function TeamRoom({
   const stopRoom = useCallback(async () => {
     setStopping(true)
     try {
-      const result = await stopTeamRoomAction({ workspaceId, teamId: channel.id })
+      const result = unwrap(await stopTeamRoomAction({ workspaceId, teamId: channel.id }))
       toast({
         title:
           result.stopped.length === 0
@@ -764,6 +825,38 @@ export function TeamRoom({
             {channel.workspaceMode === 'shared' ? 'shared worktree' : 'worktree per member'}
           </p>
         </div>
+
+        {/*
+          R12-P1.5 — the room's connection line, and deliberately the same
+          object as `components/thread/connection-status-banner.tsx`: the same
+          amber, the same spinner, the same "Retry now". A run stream dropping
+          and a room poll dropping are two mechanisms but one fact to whoever is
+          reading them, and giving them two treatments would make one product
+          look like two.
+
+          Smaller than its sibling because it has less to say. The poll never
+          gives up, so there is no terminal "offline" state to warn about; and
+          it sits in the header rather than across the top of the feed because
+          the space above a conversation belongs to the conversation.
+        */}
+        {pollFailures >= POLLS_BEFORE_RECONNECTING && (
+          <span
+            role="status"
+            className="inline-flex items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-700 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-400"
+            title="The room could not reach the server on its last few polls. It keeps trying."
+          >
+            <Loader2 size={12} className="animate-spin" />
+            Reconnecting…
+            <span className="tabular-nums opacity-70">({pollFailures})</span>
+            <button
+              type="button"
+              onClick={() => pollNowRef.current?.()}
+              className="font-medium underline-offset-2 hover:underline"
+            >
+              Retry now
+            </button>
+          </span>
+        )}
 
         <Button
           type="button"
@@ -896,8 +989,20 @@ export function TeamRoom({
                 className="ml-auto"
                 onClick={() =>
                   void clearTeamStopAction({ workspaceId, teamId: channel.id })
-                    .then(() => setStop((prev) => ({ ...prev, requestedAt: null, requestedBy: null })))
-                    .catch(() => undefined)
+                    .then((result) => {
+                      unwrap(result)
+                      setStop((prev) => ({ ...prev, requestedAt: null, requestedBy: null }))
+                    })
+                    // Toasted rather than swallowed: a banner that stays exactly
+                    // where it was is what a click that never reached the server
+                    // and a click that did nothing both look like.
+                    .catch((error: unknown) =>
+                      toast({
+                        title: 'Could not clear the stop',
+                        description: error instanceof Error ? error.message : undefined,
+                        variant: 'destructive',
+                      }),
+                    )
                 }
               >
                 Clear

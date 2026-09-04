@@ -10,6 +10,7 @@ import {
   writeSkill,
   type SkillsSettings,
 } from '@/app/(app)/workspace/[workspaceSlug]/settings/skills/actions'
+import { unwrap } from '@/lib/failures'
 import { formatCount } from '@/lib/relative-time'
 
 /** Skills for one Hermes profile: enable, disable, read and edit. */
@@ -59,7 +60,7 @@ export function SkillsSettingsView({
     setError(null)
     startTransition(async () => {
       try {
-        await setSkillEnabled({ workspaceSlug, profile: settings.profile, name, enabled })
+        unwrap(await setSkillEnabled({ workspaceSlug, profile: settings.profile, name, enabled }))
       } catch (err) {
         setSkills((current) => current.map((s) => (s.name === name ? { ...s, enabled: !enabled } : s)))
         setError(err instanceof Error ? err.message : 'Could not change that skill.')
@@ -74,7 +75,7 @@ export function SkillsSettingsView({
     setError(null)
     startTransition(async () => {
       try {
-        setDraft(await readSkill(settings.profile, name))
+        setDraft(unwrap(await readSkill(settings.profile, name)))
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Could not read that skill.')
         setEditing(null)
@@ -89,7 +90,7 @@ export function SkillsSettingsView({
     setError(null)
     startTransition(async () => {
       try {
-        await writeSkill({ workspaceSlug, profile: settings.profile, name: editing, content: draft })
+        unwrap(await writeSkill({ workspaceSlug, profile: settings.profile, name: editing, content: draft }))
         setEditing(null)
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Could not save that skill.')

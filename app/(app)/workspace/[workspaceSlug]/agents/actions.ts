@@ -2,9 +2,11 @@
 
 import { revalidatePath } from 'next/cache'
 import { getPayloadClient } from '@/lib/payload'
+import type { Agent } from '@/payload-types'
 import { pingAcpRuntime, type RuntimePingResult } from '@/lib/runtimes/hermes/ping'
 import { enqueueRun, getRun, listRunEvents, TERMINAL_STATUSES } from '@/lib/broker'
 import { getCurrentPayloadUser } from '@/lib/current-user'
+import { guard, raise, type WithFailure } from '@/lib/failures'
 import { getActiveModelConfig } from '@/lib/runtimes/hermes/providers'
 import { listHermesProfiles, type HermesProfileSummary } from '@/lib/runtimes/hermes/profiles'
 import {
@@ -17,14 +19,23 @@ import {
   type MemoryTarget,
 } from '@/lib/runtimes/hermes/agent-memory'
 
-export async function saveAgent({ workspaceId, workspaceSlug, id, data }: { workspaceId: number; workspaceSlug: string; id?: number; data: Record<string, unknown> }) {
-  const payload = await getPayloadClient()
-  const agent = id
-    ? await payload.update({ collection: 'agents', id, data: { ...data, workspace: workspaceId } as never, overrideAccess: true })
-    : await payload.create({ collection: 'agents', data: { ...data, workspace: workspaceId } as never, overrideAccess: true })
-  revalidatePath(`/workspace/${workspaceSlug}/agents`)
-  revalidatePath(`/workspace/${workspaceSlug}/agents/${agent.id}`)
-  return agent
+// R12-P1.1 — every action below that a BUTTON calls returns its failures
+// rather than throwing them. A thrown message reaches a production browser as
+// `1:E{"digest":…}` and nothing else (the measurement is in
+// `lib/failures.ts`), so a rejected agent save has been showing a generic
+// React sentence in place of Payload's own validation error — which is the
+// only part of it worth reading.
+
+export async function saveAgent({ workspaceId, workspaceSlug, id, data }: { workspaceId: number; workspaceSlug: string; id?: number; data: Record<string, unknown> }): Promise<WithFailure<Agent>> {
+  return guard(async () => {
+    const payload = await getPayloadClient()
+    const agent = id
+      ? await payload.update({ collection: 'agents', id, data: { ...data, workspace: workspaceId } as never, overrideAccess: true })
+      : await payload.create({ collection: 'agents', data: { ...data, workspace: workspaceId } as never, overrideAccess: true })
+    revalidatePath(`/workspace/${workspaceSlug}/agents`)
+    revalidatePath(`/workspace/${workspaceSlug}/agents/${agent.id}`)
+    return agent
+  })
 }
 
 /**
@@ -34,21 +45,27 @@ export async function saveAgent({ workspaceId, workspaceSlug, id, data }: { work
  * an MCP profile returns a clear "not supported yet" result rather than
  * silently no-op'ing or guessing at an equivalent MCP health check.
  */
-export async function pingAgentRuntime(agentId: number): Promise<RuntimePingResult> {
-  const payload = await getPayloadClient()
-  const agent = await payload
-    .findByID({ collection: 'agents', id: agentId, depth: 1, overrideAccess: true, disableErrors: true })
-    .catch(() => null)
-  if (!agent) return { ok: false, output: 'Agent not found.', durationMs: 0 }
+export async function pingAgentRuntime(agentId: number): Promise<WithFailure<RuntimePingResult>> {
+  // The in-shape `{ ok: false, output }` returns below stay exactly as they
+  // are: "this agent has no runtime profile" is the ping's ANSWER, and belongs
+  // on the result line under the button. The envelope is for the ping never
+  // happening — a database that will not answer, say.
+  return guard(async () => {
+    const payload = await getPayloadClient()
+    const agent = await payload
+      .findByID({ collection: 'agents', id: agentId, depth: 1, overrideAccess: true, disableErrors: true })
+      .catch(() => null)
+    if (!agent) return { ok: false, output: 'Agent not found.', durationMs: 0 }
 
-  const runtimeProfile = agent.runtimeProfile
-  if (!runtimeProfile || typeof runtimeProfile === 'number') {
-    return { ok: false, output: 'This agent has no runtime profile configured.', durationMs: 0 }
-  }
-  if (runtimeProfile.protocolFamily !== 'acp') {
-    return { ok: false, output: `Test connection isn't supported yet for ${runtimeProfile.protocolFamily.toUpperCase()} runtime profiles.`, durationMs: 0 }
-  }
-  return pingAcpRuntime(runtimeProfile.commandName)
+    const runtimeProfile = agent.runtimeProfile
+    if (!runtimeProfile || typeof runtimeProfile === 'number') {
+      return { ok: false, output: 'This agent has no runtime profile configured.', durationMs: 0 }
+    }
+    if (runtimeProfile.protocolFamily !== 'acp') {
+      return { ok: false, output: `Test connection isn't supported yet for ${runtimeProfile.protocolFamily.toUpperCase()} runtime profiles.`, durationMs: 0 }
+    }
+    return pingAcpRuntime(runtimeProfile.commandName)
+  })
 }
 
 const MODEL_PING_PROMPT = 'Reply with exactly one word: pong'
@@ -74,69 +91,73 @@ const MODEL_PING_POLL_MS = 1500
  * Kimi outage this session) — this returns the actual reply text rather
  * than trying to guess-classify it, so the caller can judge for themselves.
  */
-export async function pingAgentModel(agentId: number): Promise<RuntimePingResult> {
-  const start = Date.now()
-  const user = await getCurrentPayloadUser()
-  if (!user) return { ok: false, output: 'You must be logged in.', durationMs: 0 }
+export async function pingAgentModel(agentId: number): Promise<WithFailure<RuntimePingResult>> {
+  return guard(async () => {
+    const start = Date.now()
+    const user = await getCurrentPayloadUser()
+    if (!user) raise('unauthenticated', 'You must be logged in.')
 
-  const payload = await getPayloadClient()
-  const agent = await payload
-    .findByID({ collection: 'agents', id: agentId, depth: 0, overrideAccess: true, disableErrors: true })
-    .catch(() => null)
-  if (!agent || agent.enabled === false) {
-    return { ok: false, output: 'Agent not found or disabled.', durationMs: 0 }
-  }
+    const payload = await getPayloadClient()
+    const agent = await payload
+      .findByID({ collection: 'agents', id: agentId, depth: 0, overrideAccess: true, disableErrors: true })
+      .catch(() => null)
+    if (!agent || agent.enabled === false) {
+      return { ok: false, output: 'Agent not found or disabled.', durationMs: 0 }
+    }
 
-  // Resolve what SHOULD answer before asking, so the result can name it. A
-  // reply proves something responded; naming the profile and model proves the
-  // right thing responded — which is the actual question when an agent is
-  // pinned to a non-default profile.
-  const profileName = typeof agent.hermesProfile === 'string' ? agent.hermesProfile.trim() : ''
-  const expected = await getActiveModelConfig(profileName || null).catch(() => null)
-  const attribution = {
-    profile: profileName,
-    provider: expected?.provider,
-    model: expected?.model,
-  }
+    // Resolve what SHOULD answer before asking, so the result can name it. A
+    // reply proves something responded; naming the profile and model proves the
+    // right thing responded — which is the actual question when an agent is
+    // pinned to a non-default profile.
+    const profileName = typeof agent.hermesProfile === 'string' ? agent.hermesProfile.trim() : ''
+    const expected = await getActiveModelConfig(profileName || null).catch(() => null)
+    const attribution = {
+      profile: profileName,
+      provider: expected?.provider,
+      model: expected?.model,
+    }
 
-  const run = await enqueueRun({
-    agentId,
-    originatorUser: user.id,
-    accountableUser: user.id,
-    prompt: MODEL_PING_PROMPT,
-  })
+    const run = await enqueueRun({
+      agentId,
+      originatorUser: user.id,
+      accountableUser: user.id,
+      prompt: MODEL_PING_PROMPT,
+    })
 
-  while (Date.now() - start < MODEL_PING_TIMEOUT_MS) {
-    await new Promise((resolve) => setTimeout(resolve, MODEL_PING_POLL_MS))
-    const current = await getRun(run.id)
-    if (!current) break
-    if (TERMINAL_STATUSES.includes(current.status)) {
-      const events = await listRunEvents(run.id)
-      const messageEvent = events.find((e) => e.event.type === 'message' && e.event.role === 'assistant')
-      const replyText = messageEvent && messageEvent.event.type === 'message' ? messageEvent.event.text : null
-      return {
-        ok: current.status === 'completed' && !!replyText,
-        output: replyText ?? current.error ?? `Run ended with status "${current.status}" and no reply.`,
-        durationMs: Date.now() - start,
-        ...attribution,
+    while (Date.now() - start < MODEL_PING_TIMEOUT_MS) {
+      await new Promise((resolve) => setTimeout(resolve, MODEL_PING_POLL_MS))
+      const current = await getRun(run.id)
+      if (!current) break
+      if (TERMINAL_STATUSES.includes(current.status)) {
+        const events = await listRunEvents(run.id)
+        const messageEvent = events.find((e) => e.event.type === 'message' && e.event.role === 'assistant')
+        const replyText = messageEvent && messageEvent.event.type === 'message' ? messageEvent.event.text : null
+        return {
+          ok: current.status === 'completed' && !!replyText,
+          output: replyText ?? current.error ?? `Run ended with status "${current.status}" and no reply.`,
+          durationMs: Date.now() - start,
+          ...attribution,
+        }
       }
     }
-  }
-  return {
-    ok: false,
-    output: `Timed out waiting ${MODEL_PING_TIMEOUT_MS / 1000}s for a reply.`,
-    durationMs: Date.now() - start,
-    ...attribution,
-  }
+    return {
+      ok: false,
+      output: `Timed out waiting ${MODEL_PING_TIMEOUT_MS / 1000}s for a reply.`,
+      durationMs: Date.now() - start,
+      ...attribution,
+    }
+  })
 }
 
 /** Profiles offered by the agent settings form's picker. Server-side so the
  * list always reflects the Hermes install on THIS machine rather than
  * anything mirrored into the database. */
-export async function listAgentHermesProfiles(): Promise<HermesProfileSummary[]> {
-  const user = await getCurrentPayloadUser()
-  if (!user) throw new Error('You must be logged in.')
-  return listHermesProfiles()
+export async function listAgentHermesProfiles(): Promise<WithFailure<HermesProfileSummary[]>> {
+  return guard(async () => {
+    const user = await getCurrentPayloadUser()
+    if (!user) raise('unauthenticated', 'You must be logged in.')
+    return listHermesProfiles()
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -150,30 +171,34 @@ export async function listAgentHermesProfiles(): Promise<HermesProfileSummary[]>
 
 async function requireAgent(agentId: number) {
   const user = await getCurrentPayloadUser()
-  if (!user) throw new Error('You must be logged in.')
+  if (!user) raise('unauthenticated', 'You must be logged in.')
   const payload = await getPayloadClient()
   const agent = await payload
     .findByID({ collection: 'agents', id: agentId, depth: 0, overrideAccess: true, disableErrors: true })
     .catch(() => null)
-  if (!agent) throw new Error('Agent not found.')
+  if (!agent) raise('not_found', 'That agent no longer exists.')
   return agent
 }
 
-export async function getAgentMemory(agentId: number): Promise<AgentMemory> {
-  await requireAgent(agentId)
-  return readAgentMemory(agentId)
+export async function getAgentMemory(agentId: number): Promise<WithFailure<AgentMemory>> {
+  return guard(async () => {
+    await requireAgent(agentId)
+    return readAgentMemory(agentId)
+  })
 }
 
 export async function addAgentMemory(
   agentId: number,
   target: MemoryTarget,
   text: string,
-): Promise<AgentMemoryFile> {
-  await requireAgent(agentId)
-  const trimmed = text.trim()
-  if (!trimmed) throw new Error('A memory entry cannot be empty.')
-  if (trimmed.length > 20_000) throw new Error('That entry is too long (20,000 characters max).')
-  return addAgentMemoryEntry(agentId, target, trimmed)
+): Promise<WithFailure<AgentMemoryFile>> {
+  return guard(async () => {
+    await requireAgent(agentId)
+    const trimmed = text.trim()
+    if (!trimmed) raise('invalid_input', 'A memory entry cannot be empty.')
+    if (trimmed.length > 20_000) raise('invalid_input', 'That entry is too long (20,000 characters max).')
+    return addAgentMemoryEntry(agentId, target, trimmed)
+  })
 }
 
 export async function updateAgentMemory(
@@ -181,19 +206,23 @@ export async function updateAgentMemory(
   target: MemoryTarget,
   index: number,
   text: string,
-): Promise<AgentMemoryFile> {
-  await requireAgent(agentId)
-  const trimmed = text.trim()
-  if (!trimmed) throw new Error('A memory entry cannot be empty.')
-  if (trimmed.length > 20_000) throw new Error('That entry is too long (20,000 characters max).')
-  return updateAgentMemoryEntry(agentId, target, index, trimmed)
+): Promise<WithFailure<AgentMemoryFile>> {
+  return guard(async () => {
+    await requireAgent(agentId)
+    const trimmed = text.trim()
+    if (!trimmed) raise('invalid_input', 'A memory entry cannot be empty.')
+    if (trimmed.length > 20_000) raise('invalid_input', 'That entry is too long (20,000 characters max).')
+    return updateAgentMemoryEntry(agentId, target, index, trimmed)
+  })
 }
 
 export async function deleteAgentMemory(
   agentId: number,
   target: MemoryTarget,
   index: number,
-): Promise<AgentMemoryFile> {
-  await requireAgent(agentId)
-  return deleteAgentMemoryEntry(agentId, target, index)
+): Promise<WithFailure<AgentMemoryFile>> {
+  return guard(async () => {
+    await requireAgent(agentId)
+    return deleteAgentMemoryEntry(agentId, target, index)
+  })
 }

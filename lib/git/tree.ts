@@ -30,7 +30,8 @@ import { execFile } from 'node:child_process'
 import { readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
-import { git, pathIsInside } from './repo'
+import { AppFailure, isAppFailure, raise, type FailureCode } from '@/lib/failures'
+import { git, gitFailureFor, pathIsInside } from './repo'
 
 const exec = promisify(execFile)
 
@@ -64,9 +65,17 @@ const GIT_ENV: NodeJS.ProcessEnv = {
   GIT_OPTIONAL_LOCKS: '0',
 }
 
-export class RepoPathError extends Error {
-  constructor(message: string) {
-    super(message)
+/**
+ * A path or ref this module refused to hand to git.
+ *
+ * An `AppFailure` rather than a bare `Error` so a rejected path arrives at
+ * the browser as `invalid_input` (or `bad_ref` for a ref name) instead of a
+ * digest — these sentences are the ones a person can actually act on, and
+ * they were the ones being swallowed.
+ */
+export class RepoPathError extends AppFailure {
+  constructor(message: string, code: FailureCode = 'invalid_input') {
+    super({ code, message, retryable: false })
     this.name = 'RepoPathError'
   }
 }
@@ -127,9 +136,9 @@ export function normaliseRepoPath(raw: string | null | undefined): string {
  */
 export function normaliseRef(raw: string | null | undefined): string {
   const ref = (raw ?? '').trim() || 'HEAD'
-  if (ref.length > 255) throw new RepoPathError('That ref name is too long.')
+  if (ref.length > 255) throw new RepoPathError('That ref name is too long.', 'bad_ref')
   if (!/^[A-Za-z0-9][A-Za-z0-9._/+-]*$/.test(ref) || ref.includes('..')) {
-    throw new RepoPathError('That is not a valid branch, tag or commit.')
+    throw new RepoPathError('That is not a valid branch, tag or commit.', 'bad_ref')
   }
   return ref
 }
@@ -517,18 +526,31 @@ export interface RepoBlob {
  * UTF-8 and a lossy decode destroys the NUL bytes that binary detection
  * depends on. Everything else about it matches `git()` deliberately. */
 async function gitBuffer(cwd: string, args: string[], maxBuffer: number): Promise<Buffer> {
-  const { stdout } = await exec('git', args, {
-    cwd,
-    timeout: 30_000,
-    windowsHide: true,
-    maxBuffer,
-    encoding: 'buffer',
-    env: GIT_ENV,
-  })
-  return stdout
+  try {
+    const { stdout } = await exec('git', args, {
+      cwd,
+      timeout: 30_000,
+      windowsHide: true,
+      maxBuffer,
+      encoding: 'buffer',
+      env: GIT_ENV,
+    })
+    return stdout
+  } catch (err) {
+    // The same classification `git()` applies, because these are the same
+    // failures: a missing binary and a moved checkout look no different for
+    // being read as bytes. Without this the one read that matters most — the
+    // file you clicked — was the only one whose stderr was thrown away.
+    throw await gitFailureFor(cwd, args, err)
+  }
 }
 
+/** True for the one failure that is not really a failure: the file is larger
+ * than the cap, which the caller turns into `tooLarge`. Recognised through
+ * the classified code as well as the raw Node fields, since `gitBuffer` now
+ * rejects with a `GitError`. */
 function isMaxBufferError(err: unknown): boolean {
+  if (err instanceof AppFailure) return err.code === 'repo_too_large'
   const e = err as { code?: string; message?: string }
   return e?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' || /maxBuffer length exceeded/i.test(String(e?.message ?? ''))
 }
@@ -539,6 +561,18 @@ function decodeBlob(buf: Buffer): { binary: boolean; text: string | null } {
   // Strip a UTF-8 BOM: it is invisible in an editor and would otherwise show
   // up as a stray character at the head of the first line.
   return { binary: false, text: buf.toString('utf8').replace(/^﻿/, '') }
+}
+
+/** Whether a ref resolves at all, for the one place that has to tell a
+ * missing ref from a missing path. Swallows the failure deliberately: this is
+ * a question, and the answer is the boolean. */
+async function refExists(repoDir: string, ref: string): Promise<boolean> {
+  try {
+    await git(repoDir, ['rev-parse', '--verify', `${ref}^{commit}`], 10_000)
+    return true
+  } catch {
+    return false
+  }
 }
 
 export interface ReadBlobOptions {
@@ -569,7 +603,11 @@ export async function readBlob(repoDir: string, options: ReadBlobOptions): Promi
   const source: RepoBlobSource = options.source === 'worktree' ? 'worktree' : 'ref'
 
   if (source === 'worktree') {
-    const info = await stat(abs)
+    // `stat` throws a bare ENOENT whose message is a server-side absolute
+    // path; a file that is not on disk is `not_found` and says so.
+    const info = await stat(abs).catch((err: NodeJS.ErrnoException) => {
+      throw new RepoPathError(`${rel} is not in the working tree.`, err.code === 'ENOENT' ? 'not_found' : 'invalid_input')
+    })
     if (!info.isFile()) throw new RepoPathError('That path is not a file.')
     if (info.size > MAX_BLOB_BYTES) {
       return { path: rel, ref, source, oid: null, size: info.size, binary: false, text: null, tooLarge: true }
@@ -579,7 +617,20 @@ export async function readBlob(repoDir: string, options: ReadBlobOptions): Promi
     return { path: rel, ref, source, oid: null, size: buf.length, ...decoded, tooLarge: false }
   }
 
-  const oid = (await git(repoDir, ['rev-parse', '--verify', `${ref}:${rel}`], 10_000)).trim()
+  const oid = (
+    await git(repoDir, ['rev-parse', '--verify', `${ref}:${rel}`], 10_000).catch(async (err: unknown) => {
+      // `rev-parse <ref>:<path>` fails with the same "Needed a single
+      // revision" for a ref that is gone and for a path that was never in
+      // it. Asking git which one costs one more call, on the error path
+      // only, and it is the difference between "that branch was deleted"
+      // and "that file does not exist at this commit" — two problems with
+      // nothing in common.
+      if (isAppFailure(err) && err.code === 'bad_ref' && (await refExists(repoDir, ref))) {
+        raise('not_found', `${rel} does not exist at ${ref}.`, { detail: err.detail })
+      }
+      throw err
+    })
+  ).trim()
   const cached = blobCache.get(oid)
   if (cached) {
     return { path: rel, ref, source, oid, size: cached.size, binary: cached.binary, text: cached.text, tooLarge: false }

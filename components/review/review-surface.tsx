@@ -31,12 +31,28 @@ import {
 import type { ChangedFile, WorktreeState } from '@/lib/run-worktrees/diff'
 import type { ReviewComment } from '@/lib/review-comments'
 import type { Run, RunStatus } from '@/lib/broker'
+import { ClientFailure, unwrap, type FailureInfo } from '@/lib/failures'
 import { DetailLayout, type DetailLayoutTab } from '@/components/layout/detail-layout'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { formatTimestamp } from '@/lib/relative-time'
 import { ReviewFileTree, buildFileTree } from './file-tree'
 import { SideBySideDiff, type NewReviewComment } from './side-by-side-diff'
+
+/**
+ * The failure to show for something that was thrown.
+ *
+ * `unwrap` re-throws a returned failure as a `ClientFailure` built in the
+ * browser, so its message is the server's own sentence and its `detail` is
+ * the underlying text — neither of which survives a server action that
+ * throws.
+ */
+function toFailureInfo(err: unknown, fallback: string): FailureInfo {
+  if (err instanceof ClientFailure) {
+    return { code: err.code, message: err.message, detail: err.detail, retryable: err.retryable }
+  }
+  return { code: 'unknown', message: err instanceof Error ? err.message : fallback, retryable: false }
+}
 
 const STATUS_BADGE_VARIANT: Record<RunStatus, 'default' | 'secondary' | 'destructive' | 'outline'> = {
   completed: 'default',
@@ -99,7 +115,10 @@ export function ReviewSurface({
   const [wrap, setWrap] = useState(false)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  // The whole failure, not just its sentence. On this surface the underlying
+  // text is git's — `git diff` against a branch that no longer exists says
+  // exactly that, and the sentence above it cannot.
+  const [error, setError] = useState<FailureInfo | null>(null)
   // Comment writes are optimistic; the persist runs in a transition so a slow
   // database never blocks the next comment being typed.
   const [, startPersist] = useTransition()
@@ -120,10 +139,10 @@ export function ReviewSurface({
       if (patches[file.path]) return
       if (!silent) setLoadingPath(file.path)
       try {
-        const { patch } = await getFileDiffAction(run.id, file.path)
+        const { patch } = unwrap(await getFileDiffAction(run.id, file.path))
         setPatches((prev) => (prev[file.path] ? prev : { ...prev, [file.path]: { patch, isBinary: isBinaryPatch(patch) } }))
       } catch (err) {
-        if (!silent) setError(err instanceof Error ? err.message : 'Failed to load diff.')
+        if (!silent) setError(toFailureInfo(err, 'Failed to load diff.'))
       } finally {
         if (!silent) setLoadingPath((prev) => (prev === file.path ? null : prev))
       }
@@ -170,21 +189,23 @@ export function ReviewSurface({
     setComments((prev) => [...prev, optimistic])
     startPersist(async () => {
       try {
-        const saved = await addReviewCommentAction({
-          runId: run.id,
-          filePath: optimistic.filePath,
-          side: draft.side,
-          lineNumber: draft.lineNumber,
-          body: draft.body,
-          lineContent: draft.lineContent,
-        })
+        const saved = unwrap(
+          await addReviewCommentAction({
+            runId: run.id,
+            filePath: optimistic.filePath,
+            side: draft.side,
+            lineNumber: draft.lineNumber,
+            body: draft.body,
+            lineContent: draft.lineContent,
+          }),
+        )
         setComments((prev) => prev.map((c) => (c.id === tempId ? saved : c)))
       } catch (err) {
         // Roll the optimistic row back rather than leaving a comment on screen
         // that no send will ever pick up — an unsent comment that looks sent
         // is the worst outcome this feature can produce.
         setComments((prev) => prev.filter((c) => c.id !== tempId))
-        setError(err instanceof Error ? err.message : 'Failed to save comment.')
+        setError(toFailureInfo(err, 'Failed to save comment.'))
       }
     })
   }
@@ -197,10 +218,10 @@ export function ReviewSurface({
     if (id < 0) return
     startPersist(async () => {
       try {
-        await deleteReviewCommentAction(run.id, id)
+        unwrap(await deleteReviewCommentAction(run.id, id))
       } catch (err) {
         setComments(previous)
-        setError(err instanceof Error ? err.message : 'Failed to delete comment.')
+        setError(toFailureInfo(err, 'Failed to delete comment.'))
       }
     })
   }
@@ -210,7 +231,7 @@ export function ReviewSurface({
     setError(null)
     setNotice(null)
     try {
-      const result = await sendReviewCommentsAction(run.id, workspaceSlug, note)
+      const result = unwrap(await sendReviewCommentsAction(run.id, workspaceSlug, note))
       // Flip locally instead of refetching: the server just told us exactly
       // which run took the batch, and a re-read would be a round trip for
       // information already in hand. Flipped by the ids the server actually
@@ -241,12 +262,14 @@ export function ReviewSurface({
         // `buildPromptText` in lib/dispatcher/worker.ts ignores `run.prompt`
         // whenever the run has a task attached. Saying so is the only honest
         // option until the dispatcher is fixed.
-        setError(
-          `Queued follow-up run #${result.runId} with ${result.commentCount} comments — but this run has no conversation, and the dispatcher currently drops a task-scoped run's prompt (lib/dispatcher/worker.ts, buildPromptText). The composed review was saved to the task's Activity entry, and your comments are deliberately still unsent so they can be delivered for real once that is fixed.`,
-        )
+        setError({
+          code: 'unknown',
+          message: `Queued follow-up run #${result.runId} with ${result.commentCount} comments — but this run has no conversation, and the dispatcher currently drops a task-scoped run's prompt (lib/dispatcher/worker.ts, buildPromptText). The composed review was saved to the task's Activity entry, and your comments are deliberately still unsent so they can be delivered for real once that is fixed.`,
+          retryable: false,
+        })
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to send review comments.')
+      setError(toFailureInfo(err, 'Failed to send review comments.'))
     } finally {
       setBusy(false)
     }
@@ -257,16 +280,19 @@ export function ReviewSurface({
     setError(null)
     setNotice(null)
     try {
-      const result = await approveAndMergeRun(run.id, workspaceSlug)
+      const result = unwrap(await approveAndMergeRun(run.id, workspaceSlug))
       if (result.merged) {
         setNotice(
           `Merged (${result.fastForward ? 'fast-forward' : 'merge commit'}${result.mergeCommit ? `: ${result.mergeCommit.slice(0, 10)}` : ''}).`,
         )
       } else {
-        setError(result.error ?? 'Merge did not complete.')
+        // `approveMerge` reports a refused merge in its own result rather
+        // than by failing, and `result.error` is git's merge output — the
+        // conflict list, which is the whole answer to "why not".
+        setError({ code: 'conflict', message: 'The merge did not complete.', detail: result.error ?? undefined, retryable: false })
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to approve and merge.')
+      setError(toFailureInfo(err, 'Failed to approve and merge.'))
     } finally {
       setBusy(false)
     }
@@ -293,7 +319,19 @@ export function ReviewSurface({
       {(notice || error) && (
         <div className="border-b border-black/10 px-6 py-2 dark:border-white/10">
           {notice && <p className="text-xs text-green-600 dark:text-green-400">{notice}</p>}
-          {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
+          {error && (
+            <>
+              <p className="text-xs text-red-600 dark:text-red-400">{error.message}</p>
+              {/* Visually secondary to the sentence, and unmissable when it
+                  matters: git's stderr names the ref, the path or the
+                  conflicting file, none of which a written sentence knows. */}
+              {error.detail && (
+                <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-red-600/70 dark:text-red-400/70">
+                  {error.detail}
+                </pre>
+              )}
+            </>
+          )}
         </div>
       )}
 

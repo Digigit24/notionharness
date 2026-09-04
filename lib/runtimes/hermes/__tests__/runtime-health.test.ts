@@ -7,7 +7,8 @@
 // report `reachable: true` on a non-2xx, and must never fabricate a
 // profile count when the response shape doesn't match.
 //
-// `HERMES_BASE_URL`/`HERMES_API_KEY` (lib/hermes-api.ts) are plain module-
+// `HERMES_BASE_URL`/`HERMES_API_KEY` (lib/runtimes/hermes/api-proxy.ts) are
+// plain module-
 // level constants, computed once from `process.env` at import time — not
 // re-read per call — so stubbing `process.env` per test has no effect on
 // them. Mocking `@/lib/hermes-api` with getters backed by a mutable,
@@ -19,7 +20,14 @@ import { describe, expect, it, vi, afterEach } from 'vitest'
 
 const hermesConfig = vi.hoisted(() => ({ baseUrl: '', apiKey: '' }))
 
-vi.mock('@/lib/hermes-api', () => ({
+// The module these constants live in MOVED during R1's runtime-neutral
+// refactor — `lib/hermes-api.ts` became
+// `lib/runtimes/hermes/api-proxy.ts` — and this mock kept pointing at the old
+// path. `vi.mock` on a module nobody imports is not an error, so the mock
+// silently did nothing, the real constants were empty under test, and all five
+// reachability cases failed while looking like a behaviour regression. Mocking
+// a path is only as good as the path.
+vi.mock('@/lib/runtimes/hermes/api-proxy', () => ({
   get HERMES_BASE_URL() {
     return hermesConfig.baseUrl
   },

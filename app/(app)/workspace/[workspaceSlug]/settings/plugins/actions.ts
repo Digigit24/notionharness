@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache'
 
 import { getCurrentPayloadUser } from '@/lib/current-user'
+import { guard, raise, type WithFailure } from '@/lib/failures'
 import { getPayloadClient } from '@/lib/payload'
 import { getWorkspaceBySlug } from '@/lib/pages-cache'
 import { pluginToMcpServer } from '@/lib/plugins/resolve'
@@ -15,11 +16,17 @@ import { pluginToMcpServer } from '@/lib/plugins/resolve'
  * set and whether each has a value, which is everything a person needs to
  * manage them and nothing an onlooker can use. That matches how this codebase
  * already treats provider keys and Hermes `auth.json`.
+ *
+ * R12-P1.1 — the three WRITES return their failures rather than throwing
+ * them, since "That plugin no longer exists." is how this file refuses an id
+ * belonging to another workspace, and that refusal has to be readable. The
+ * two reads still throw: both are awaited by the server component in
+ * `page.tsx`, where a throw IS delivered (see `lib/failures.ts`).
  */
 
 async function requireUser() {
   const user = await getCurrentPayloadUser()
-  if (!user) throw new Error('You must be logged in.')
+  if (!user) raise('unauthenticated', 'You must be logged in.')
   return user
 }
 
@@ -155,73 +162,86 @@ export interface SavePluginInput {
   configOptions?: PluginConfigOption[]
 }
 
-export async function savePlugin(workspaceSlug: string, input: SavePluginInput): Promise<{ id: number }> {
-  await requireUser()
-  const workspace = await getWorkspaceBySlug(workspaceSlug)
-  if (!workspace) throw new Error('Workspace not found.')
-  if (!input.name.trim()) throw new Error('A plugin needs a name.')
+export async function savePlugin(
+  workspaceSlug: string,
+  input: SavePluginInput,
+): Promise<WithFailure<{ id: number }>> {
+  return guard(async () => {
+    await requireUser()
+    const workspace = await getWorkspaceBySlug(workspaceSlug)
+    if (!workspace) raise('not_found', 'That workspace no longer exists.')
+    if (!input.name.trim()) raise('invalid_input', 'A plugin needs a name.')
 
-  const payload = await getPayloadClient()
-  const data = {
-    workspace: workspace.id,
-    name: input.name.trim(),
-    description: input.description?.trim() || null,
-    transport: input.transport,
-    url: input.transport === 'stdio' ? null : input.url?.trim() || null,
-    command: input.transport === 'stdio' ? input.command?.trim() || null : null,
-    args: input.args ?? [],
-    headers: (input.headers ?? []).filter((h) => h.name.trim() && h.value.length > 0),
-    env: (input.env ?? []).filter((e) => e.name.trim() && e.value.length > 0),
-    enabled: input.enabled,
-    scope: input.scope,
-    agents: input.scope === 'agents' ? (input.agentIds ?? []) : [],
-    configOptions: input.configOptions ?? [],
-  }
+    const payload = await getPayloadClient()
+    const data = {
+      workspace: workspace.id,
+      name: input.name.trim(),
+      description: input.description?.trim() || null,
+      transport: input.transport,
+      url: input.transport === 'stdio' ? null : input.url?.trim() || null,
+      command: input.transport === 'stdio' ? input.command?.trim() || null : null,
+      args: input.args ?? [],
+      headers: (input.headers ?? []).filter((h) => h.name.trim() && h.value.length > 0),
+      env: (input.env ?? []).filter((e) => e.name.trim() && e.value.length > 0),
+      enabled: input.enabled,
+      scope: input.scope,
+      agents: input.scope === 'agents' ? (input.agentIds ?? []) : [],
+      configOptions: input.configOptions ?? [],
+    }
 
-  if (input.id) {
-    // Scoped to this workspace so an id from elsewhere cannot be edited by
-    // guessing it.
+    if (input.id) {
+      // Scoped to this workspace so an id from elsewhere cannot be edited by
+      // guessing it.
+      const existing = await payload
+        .findByID({ collection: 'plugins', id: input.id, depth: 0, overrideAccess: true, disableErrors: true })
+        .catch(() => null)
+      const existingWorkspace = typeof existing?.workspace === 'number' ? existing.workspace : existing?.workspace?.id
+      if (!existing || existingWorkspace !== workspace.id) raise('not_found', 'That plugin no longer exists.')
+      await payload.update({ collection: 'plugins', id: input.id, data, overrideAccess: true })
+      revalidatePath(`/workspace/${workspaceSlug}/settings/plugins`)
+      return { id: input.id }
+    }
+
+    const created = await payload.create({ collection: 'plugins', data, overrideAccess: true })
+    revalidatePath(`/workspace/${workspaceSlug}/settings/plugins`)
+    return { id: created.id }
+  })
+}
+
+export async function setPluginEnabled(
+  workspaceSlug: string,
+  id: number,
+  enabled: boolean,
+): Promise<WithFailure<void>> {
+  return guard(async () => {
+    await requireUser()
+    const workspace = await getWorkspaceBySlug(workspaceSlug)
+    if (!workspace) raise('not_found', 'That workspace no longer exists.')
+    const payload = await getPayloadClient()
     const existing = await payload
-      .findByID({ collection: 'plugins', id: input.id, depth: 0, overrideAccess: true, disableErrors: true })
+      .findByID({ collection: 'plugins', id, depth: 0, overrideAccess: true, disableErrors: true })
       .catch(() => null)
     const existingWorkspace = typeof existing?.workspace === 'number' ? existing.workspace : existing?.workspace?.id
-    if (!existing || existingWorkspace !== workspace.id) throw new Error('Plugin not found.')
-    await payload.update({ collection: 'plugins', id: input.id, data, overrideAccess: true })
+    if (!existing || existingWorkspace !== workspace.id) raise('not_found', 'That plugin no longer exists.')
+    await payload.update({ collection: 'plugins', id, data: { enabled }, overrideAccess: true })
     revalidatePath(`/workspace/${workspaceSlug}/settings/plugins`)
-    return { id: input.id }
-  }
-
-  const created = await payload.create({ collection: 'plugins', data, overrideAccess: true })
-  revalidatePath(`/workspace/${workspaceSlug}/settings/plugins`)
-  return { id: created.id }
+  })
 }
 
-export async function setPluginEnabled(workspaceSlug: string, id: number, enabled: boolean): Promise<void> {
-  await requireUser()
-  const workspace = await getWorkspaceBySlug(workspaceSlug)
-  if (!workspace) throw new Error('Workspace not found.')
-  const payload = await getPayloadClient()
-  const existing = await payload
-    .findByID({ collection: 'plugins', id, depth: 0, overrideAccess: true, disableErrors: true })
-    .catch(() => null)
-  const existingWorkspace = typeof existing?.workspace === 'number' ? existing.workspace : existing?.workspace?.id
-  if (!existing || existingWorkspace !== workspace.id) throw new Error('Plugin not found.')
-  await payload.update({ collection: 'plugins', id, data: { enabled }, overrideAccess: true })
-  revalidatePath(`/workspace/${workspaceSlug}/settings/plugins`)
-}
-
-export async function deletePlugin(workspaceSlug: string, id: number): Promise<void> {
-  await requireUser()
-  const workspace = await getWorkspaceBySlug(workspaceSlug)
-  if (!workspace) throw new Error('Workspace not found.')
-  const payload = await getPayloadClient()
-  const existing = await payload
-    .findByID({ collection: 'plugins', id, depth: 0, overrideAccess: true, disableErrors: true })
-    .catch(() => null)
-  const existingWorkspace = typeof existing?.workspace === 'number' ? existing.workspace : existing?.workspace?.id
-  if (!existing || existingWorkspace !== workspace.id) throw new Error('Plugin not found.')
-  await payload.delete({ collection: 'plugins', id, overrideAccess: true })
-  revalidatePath(`/workspace/${workspaceSlug}/settings/plugins`)
+export async function deletePlugin(workspaceSlug: string, id: number): Promise<WithFailure<void>> {
+  return guard(async () => {
+    await requireUser()
+    const workspace = await getWorkspaceBySlug(workspaceSlug)
+    if (!workspace) raise('not_found', 'That workspace no longer exists.')
+    const payload = await getPayloadClient()
+    const existing = await payload
+      .findByID({ collection: 'plugins', id, depth: 0, overrideAccess: true, disableErrors: true })
+      .catch(() => null)
+    const existingWorkspace = typeof existing?.workspace === 'number' ? existing.workspace : existing?.workspace?.id
+    if (!existing || existingWorkspace !== workspace.id) raise('not_found', 'That plugin no longer exists.')
+    await payload.delete({ collection: 'plugins', id, overrideAccess: true })
+    revalidatePath(`/workspace/${workspaceSlug}/settings/plugins`)
+  })
 }
 
 export interface AgentOption {

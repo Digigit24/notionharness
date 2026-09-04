@@ -11,8 +11,9 @@
 // every link verified against the database rather than against what the
 // caller said. Path safety on top of that lives in lib/git/tree.ts.
 import { getPayloadClient } from '@/lib/payload'
+import { guard, raise, type WithFailure } from '@/lib/failures'
 import { getCurrentPayloadUser } from '@/lib/current-user'
-import { directoryExists, isGitRepo, readBranches } from '@/lib/git/repo'
+import { assertGitRepo, directoryExists, readBranches } from '@/lib/git/repo'
 import {
   listDirectory,
   normaliseRepoPath,
@@ -59,7 +60,7 @@ async function resolveRepo(input: {
   resourceId?: number | null
 }): Promise<ResolvedRepo> {
   const user = await getCurrentPayloadUser()
-  if (!user) throw new Error('You must be logged in.')
+  if (!user) raise('unauthenticated', 'You must be logged in.')
 
   const payload = await getPayloadClient()
 
@@ -71,7 +72,7 @@ async function resolveRepo(input: {
     overrideAccess: true,
   })
   const workspace = workspaces.docs[0]
-  if (!workspace) throw new Error('That workspace does not exist.')
+  if (!workspace) raise('not_found', 'That workspace does not exist.')
 
   // `getWorkspaceBySlug` resolves a slug and nothing else — it does not check
   // who is asking. Membership is therefore checked here rather than assumed,
@@ -79,10 +80,10 @@ async function resolveRepo(input: {
   const ownerId = typeof workspace.owner === 'number' ? workspace.owner : workspace.owner?.id
   const memberIds = (workspace.members ?? []).map((member) => (typeof member === 'number' ? member : member.id))
   if (ownerId !== user.id && !memberIds.includes(user.id)) {
-    throw new Error('You do not have access to that workspace.')
+    raise('forbidden', 'You do not have access to that workspace.')
   }
 
-  if (!Number.isInteger(input.projectId)) throw new Error('That project does not exist.')
+  if (!Number.isInteger(input.projectId)) raise('not_found', 'That project does not exist.')
   const project = await payload.findByID({
     collection: 'projects',
     id: input.projectId,
@@ -90,9 +91,9 @@ async function resolveRepo(input: {
     overrideAccess: true,
     disableErrors: true,
   })
-  if (!project) throw new Error('That project does not exist.')
+  if (!project) raise('not_found', 'That project does not exist.')
   const projectWorkspaceId = typeof project.workspace === 'number' ? project.workspace : project.workspace?.id
-  if (projectWorkspaceId !== workspace.id) throw new Error('That project does not exist.')
+  if (projectWorkspaceId !== workspace.id) raise('not_found', 'That project does not exist.')
 
   const resources = await payload.find({
     collection: 'project-resources',
@@ -110,14 +111,19 @@ async function resolveRepo(input: {
       : // No explicit choice: prefer a binding the row already claims is a
         // repository, so the common case avoids stat-ing every folder.
         candidates.find((doc) => doc.kind === 'git_repo') ?? candidates[0]
-  if (!chosen) throw new Error('This project is not bound to a repository.')
+  if (!chosen) raise('not_found', 'This project is not bound to a repository.')
 
   const path = String(chosen.path)
   // The filesystem decides, not the `kind` column: a binding labelled
   // `git_repo` whose clone failed is not a repo, and browsing it would put a
   // git error in front of the user instead of an explanation.
-  if (!(await directoryExists(path))) throw new Error(`${path} is not on this machine.`)
-  if (!(await isGitRepo(path))) throw new Error(`${path} is not a git repository.`)
+  if (!(await directoryExists(path))) raise('worktree_missing', `${path} is not on this machine.`)
+  // `assertGitRepo` rather than the boolean `isGitRepo`: that one answers
+  // `false` for a missing git binary just as readily as for a directory that
+  // is not a repository, and telling a user their clone is not a repository
+  // when the real problem is that git is not installed is precisely the kind
+  // of misdirection this screen exists to stop.
+  await assertGitRepo(path)
 
   return {
     workspaceId: workspace.id,
@@ -216,7 +222,16 @@ const MAX_PREVIEW_BYTES = 400_000
  * the change stamp, so navigating a directory is one round trip rather than
  * three.
  */
-export async function readRepoView(request: RepoViewRequest): Promise<RepoViewPayload> {
+export async function readRepoView(request: RepoViewRequest): Promise<WithFailure<RepoViewPayload>> {
+  return guard(async () => readRepoViewInner(request))
+}
+
+/**
+ * Split out so `guard()` wraps ONE expression and the body below reads the
+ * way it did before — every `raise` in the chain, and every failure git
+ * hands back, becomes an envelope the browser can actually read.
+ */
+async function readRepoViewInner(request: RepoViewRequest): Promise<RepoViewPayload> {
   const repo = await resolveRepo(request)
   const binding: RepoBinding = {
     resourceId: repo.resourceId,
@@ -284,7 +299,9 @@ export async function readRepoStampFor(input: {
   workspaceSlug: string
   projectId: number
   resourceId?: number | null
-}): Promise<string> {
-  const repo = await resolveRepo(input)
-  return readRepoStamp(repo.path)
+}): Promise<WithFailure<string>> {
+  return guard(async () => {
+    const repo = await resolveRepo(input)
+    return readRepoStamp(repo.path)
+  })
 }

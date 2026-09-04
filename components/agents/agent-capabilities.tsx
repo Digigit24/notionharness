@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { saveAgent } from '@/app/(app)/workspace/[workspaceSlug]/agents/actions'
 import { Button } from '@/components/ui/button'
+import { unwrap } from '@/lib/failures'
 import type { Agent } from '@/components/agents/agent-editor'
 import { formatTimestamp } from '@/lib/relative-time'
 
@@ -395,12 +396,14 @@ export function AgentCapabilities({
     const optimisticAgent: Agent = { ...agent, skills: next }
     onAgentUpdated(optimisticAgent)
     try {
-      const updated = await saveAgent({
-        workspaceId,
-        workspaceSlug,
-        id: agent.id,
-        data: { skills: next },
-      })
+      const updated = unwrap(
+        await saveAgent({
+          workspaceId,
+          workspaceSlug,
+          id: agent.id,
+          data: { skills: next },
+        }),
+      )
       onAgentUpdated(updated as Agent)
     } catch (error) {
       onAgentUpdated({ ...agent, skills: previousSkills })

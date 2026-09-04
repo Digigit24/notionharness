@@ -22,6 +22,7 @@ import { mkdir, rm } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import type { RunWorktree } from './manager'
+import { bestEffort } from '@/lib/failures'
 
 const exec = promisify(execFile)
 
@@ -82,7 +83,11 @@ export async function mergeRunBranch(worktree: RunWorktree, opts: MergeRunBranch
       try {
         await run(integrationPath, ['merge', '--no-edit', branch])
       } catch (mergeErr) {
-        await run(integrationPath, ['merge', '--abort']).catch(() => undefined)
+        await bestEffort(
+          run(integrationPath, ['merge', '--abort']),
+          'the conflict below is what the caller is told about; a failed abort in a throwaway worktree must not replace it',
+          { branch },
+        )
         return {
           merged: false,
           fastForward: false,
@@ -126,8 +131,16 @@ export async function mergeRunBranch(worktree: RunWorktree, opts: MergeRunBranch
 
     return { merged: true, fastForward, mergeCommit, error: null }
   } finally {
-    await gitBare(barePath, ['worktree', 'remove', integrationPath, '--force']).catch(() => undefined)
-    await rm(integrationPath, { recursive: true, force: true }).catch(() => undefined)
+    await bestEffort(
+      gitBare(barePath, ['worktree', 'remove', integrationPath, '--force']),
+      'the merge result is already decided; a leftover integration worktree is reclaimed later rather than reported now',
+      { integrationPath },
+    )
+    await bestEffort(
+      rm(integrationPath, { recursive: true, force: true }),
+      'the same, one step further: the directory outliving the run costs disk, not correctness',
+      { integrationPath },
+    )
   }
 }
 

@@ -22,6 +22,7 @@ import {
   markChannelMentionRead,
   retryRunInbox,
 } from '@/app/(app)/workspace/[workspaceSlug]/inbox/actions'
+import { unwrap } from '@/lib/failures'
 import type { ApprovalOption } from '@/collections/Approvals'
 import { formatTimestamp } from '@/lib/relative-time'
 
@@ -93,11 +94,19 @@ export function InboxList({ items: initialItems, workspaceSlug }: { items: Inbox
     })
   }
 
+  // R12-P1.1 — every inbox action returns its failure instead of throwing it,
+  // so `unwrap` is what turns one back into a throw the catch below already
+  // knew how to render. It lives HERE, in the one funnel all eleven call sites
+  // go through, rather than at each of them: an envelope that reaches this
+  // function un-unwrapped would count as success and silently strike the row
+  // off the list. (The signature cannot enforce that — `WithFailure<unknown>`
+  // is just `unknown` — which is precisely why there is one funnel to police
+  // instead of eleven call sites.)
   async function runAction(id: string, fn: () => Promise<unknown>) {
     setPendingIds((prev) => new Set(prev).add(id))
     setErrorMessage(null)
     try {
-      await fn()
+      unwrap(await fn())
       removeItem(id)
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : 'Something went wrong.')

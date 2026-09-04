@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { getProjectRuns, type ProjectRunRow } from '@/app/(app)/workspace/[workspaceSlug]/projects/[projectId]/actions'
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
+import { unwrap } from '@/lib/failures'
 import type { Agent } from '@/payload-types'
 import type { RunStatus } from '@/lib/broker'
 import { PlayCircle } from 'lucide-react'
@@ -56,6 +57,7 @@ export function ProjectRunsTab({
     let active = true
     setLoading(true)
     getProjectRuns({ projectId, agentId: agentFilter === 'all' ? null : agentFilter })
+      .then(unwrap)
       .then((next) => {
         if (active) setRows(next)
       })

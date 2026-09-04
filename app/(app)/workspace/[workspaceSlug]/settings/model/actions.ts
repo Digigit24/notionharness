@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { getCurrentPayloadUser } from '@/lib/current-user'
+import { guard, raise, type WithFailure } from '@/lib/failures'
 import {
   getModelInfo,
   getModelOptions,
@@ -26,11 +27,19 @@ import {
  * (which models a provider actually offers, whether one is expensive enough
  * to warrant a confirmation). Two writers to one file is a bug waiting to
  * happen; the API is the one that should win.
+ *
+ * R12-P1.1 — the two WRITES return their failures rather than throwing them,
+ * because Hermes's own validation errors ("no such model for that provider",
+ * "config is locked") are the whole value of routing through its API, and a
+ * thrown message never reaches a production browser (`lib/failures.ts`). The
+ * reads still throw: `getModelSettings` is awaited by the server component,
+ * and `getModelOptionsFor` is a best-effort catalogue whose absence the page
+ * already renders as "still loading the pickers".
  */
 
 async function requireUser() {
   const user = await getCurrentPayloadUser()
-  if (!user) throw new Error('You must be logged in.')
+  if (!user) raise('unauthenticated', 'You must be logged in.')
   return user
 }
 
@@ -123,14 +132,16 @@ export async function setProfileActiveModel(input: {
   provider: string
   model: string
   confirmExpensive?: boolean
-}): Promise<SetModelResult> {
-  await requireUser()
-  const result = await setActiveModel(
-    { provider: input.provider, model: input.model, confirmExpensive: input.confirmExpensive },
-    input.profile,
-  )
-  revalidatePath(`/workspace/${input.workspaceSlug}/settings/model`)
-  return result
+}): Promise<WithFailure<SetModelResult>> {
+  return guard(async () => {
+    await requireUser()
+    const result = await setActiveModel(
+      { provider: input.provider, model: input.model, confirmExpensive: input.confirmExpensive },
+      input.profile,
+    )
+    revalidatePath(`/workspace/${input.workspaceSlug}/settings/model`)
+    return result
+  })
 }
 
 /**
@@ -145,29 +156,31 @@ export async function setFallbackProviders(input: {
   workspaceSlug: string
   profile: string
   entries: FallbackEntry[]
-}): Promise<FallbackEntry[]> {
-  await requireUser()
-  const cleaned = input.entries
-    .map((entry) => ({
-      provider: String(entry.provider ?? '').trim(),
-      model: String(entry.model ?? '').trim(),
-      ...(entry.base_url ? { base_url: String(entry.base_url).trim() } : {}),
-      ...(entry.key_env ? { key_env: String(entry.key_env).trim() } : {}),
-    }))
-    .filter((entry) => entry.provider && entry.model)
+}): Promise<WithFailure<FallbackEntry[]>> {
+  return guard(async () => {
+    await requireUser()
+    const cleaned = input.entries
+      .map((entry) => ({
+        provider: String(entry.provider ?? '').trim(),
+        model: String(entry.model ?? '').trim(),
+        ...(entry.base_url ? { base_url: String(entry.base_url).trim() } : {}),
+        ...(entry.key_env ? { key_env: String(entry.key_env).trim() } : {}),
+      }))
+      .filter((entry) => entry.provider && entry.model)
 
-  // Hermes dedupes on (provider, model, base_url) when it loads this, so
-  // sending duplicates would silently drop entries and make the saved list
-  // differ from the one on screen.
-  const seen = new Set<string>()
-  const unique = cleaned.filter((entry) => {
-    const key = `${entry.provider}::${entry.model}::${entry.base_url ?? ''}`
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
+    // Hermes dedupes on (provider, model, base_url) when it loads this, so
+    // sending duplicates would silently drop entries and make the saved list
+    // differ from the one on screen.
+    const seen = new Set<string>()
+    const unique = cleaned.filter((entry) => {
+      const key = `${entry.provider}::${entry.model}::${entry.base_url ?? ''}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+
+    await writeConfigSubset({ [FALLBACK_PATH]: unique }, input.profile)
+    revalidatePath(`/workspace/${input.workspaceSlug}/settings/model`)
+    return unique
   })
-
-  await writeConfigSubset({ [FALLBACK_PATH]: unique }, input.profile)
-  revalidatePath(`/workspace/${input.workspaceSlug}/settings/model`)
-  return unique
 }

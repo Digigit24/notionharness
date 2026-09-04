@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { getPayloadClient } from '@/lib/payload'
+import { guard, raise, type WithFailure } from '@/lib/failures'
 import type { Project } from '@/payload-types'
 
 // Closes the real gap flagged in this page's own empty state ("Create a
@@ -20,21 +21,23 @@ export async function createProject({
   name: string
   icon?: string
   description?: string
-}): Promise<Project> {
-  const trimmedName = name.trim()
-  if (!trimmedName) throw new Error('Name is required.')
+}): Promise<WithFailure<Project>> {
+  return guard(async () => {
+    const trimmedName = name.trim()
+    if (!trimmedName) raise('invalid_input', 'Name is required.')
 
-  const payload = await getPayloadClient()
-  const created = await payload.create({
-    collection: 'projects',
-    data: {
-      workspace: workspaceId,
-      name: trimmedName,
-      icon: icon?.trim() || undefined,
-      description: description?.trim() || undefined,
-    },
-    overrideAccess: true,
+    const payload = await getPayloadClient()
+    const created = await payload.create({
+      collection: 'projects',
+      data: {
+        workspace: workspaceId,
+        name: trimmedName,
+        icon: icon?.trim() || undefined,
+        description: description?.trim() || undefined,
+      },
+      overrideAccess: true,
+    })
+    revalidatePath(`/workspace/${workspaceSlug}/projects`)
+    return created
   })
-  revalidatePath(`/workspace/${workspaceSlug}/projects`)
-  return created
 }

@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { EmptyState } from '@/components/ui/empty-state'
 import { toast } from '@/hooks/use-toast'
+import { unwrap } from '@/lib/failures'
 import {
   createProjectResource,
   deleteProjectResource,
@@ -45,18 +46,20 @@ export function ProjectResourcesTab({
   async function handleCreate() {
     setSaving(true)
     try {
-      const resource = await createProjectResource({
-        projectId,
-        workspaceSlug,
-        data: {
-          kind,
-          role,
-          path: path.trim() || null,
-          repoUrl: kind === 'git_repo' ? repoUrl.trim() || null : null,
-          defaultBranch: kind === 'git_repo' ? defaultBranch.trim() || null : null,
-          writable: true,
-        },
-      })
+      const resource = unwrap(
+        await createProjectResource({
+          projectId,
+          workspaceSlug,
+          data: {
+            kind,
+            role,
+            path: path.trim() || null,
+            repoUrl: kind === 'git_repo' ? repoUrl.trim() || null : null,
+            defaultBranch: kind === 'git_repo' ? defaultBranch.trim() || null : null,
+            writable: true,
+          },
+        }),
+      )
       setResources((current) => [...current, resource])
       setAdding(false)
       setPath('')
@@ -74,7 +77,19 @@ export function ProjectResourcesTab({
   }
 
   async function handleDelete(resourceId: number) {
-    await deleteProjectResource({ resourceId, projectId, workspaceSlug })
+    try {
+      unwrap(await deleteProjectResource({ resourceId, projectId, workspaceSlug }))
+    } catch (err) {
+      // A failed delete used to remove the row from the list anyway, so the
+      // resource reappeared on the next refresh with nothing said. Keep it,
+      // and say why.
+      toast({
+        title: 'Could not delete resource',
+        description: err instanceof Error ? err.message : undefined,
+        variant: 'destructive',
+      })
+      return
+    }
     setResources((current) => current.filter((r) => r.id !== resourceId))
     setPendingDeleteId(null)
     router.refresh()

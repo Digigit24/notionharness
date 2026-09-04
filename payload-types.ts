@@ -509,6 +509,15 @@ export interface RuntimeProfile {
     | number
     | boolean
     | null;
+  defaultSessionConfig?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
   lastProbeCode?: string | null;
   lastProbeDetail?: string | null;
   lastProbedAt?: string | null;
@@ -1308,6 +1317,7 @@ export interface RuntimeProfilesSelect<T extends boolean = true> {
   enabled?: T;
   homeStrategy?: T;
   handshake?: T;
+  defaultSessionConfig?: T;
   lastProbeCode?: T;
   lastProbeDetail?: T;
   lastProbedAt?: T;

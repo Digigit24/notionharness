@@ -6,6 +6,7 @@ import { loadRunReview } from '@/lib/run-worktrees/review'
 import { TaskDetailView, type ChangeSummary } from '@/components/tasks/task-detail-view'
 import { getTaskActivity } from '@/app/(app)/workspace/[workspaceSlug]/tasks/actions'
 import { listSubtasks, listTaskComments } from './actions'
+import { unwrap } from '@/lib/failures'
 import type { Agent, Page, Project, TaskStatus, User } from '@/payload-types'
 
 // ROADMAP B-1 "Detail" — full-bleed task detail. The drawer (task-drawer.tsx)
@@ -71,9 +72,13 @@ export default async function TaskDetailPage({
     }),
     listRunsForTask(taskId),
     getTaskUsageTotals(taskId),
-    listSubtasks(taskId),
-    listTaskComments(taskId),
-    getTaskActivity(taskId),
+    // A server component is one of the three places a throw DOES reach the
+    // reader (lib/failures.ts's header), so `unwrap` here is not ceremony: it
+    // hands the route's error boundary the real sentence instead of an
+    // envelope this page would otherwise try to render as data.
+    listSubtasks(taskId).then(unwrap),
+    listTaskComments(taskId).then(unwrap),
+    getTaskActivity(taskId).then(unwrap),
     pagePromise,
   ])
 

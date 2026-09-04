@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { getCurrentPayloadUser } from '@/lib/current-user'
+import { guard, raise, type WithFailure } from '@/lib/failures'
 import {
   getSkillContent,
   listServeProfiles,
@@ -24,11 +25,18 @@ import {
  * thing from an agent's `enabledSkills`, which decides what gets linked into
  * that run's overlay. A skill has to be enabled here to exist for the
  * profile, and selected on the agent to reach a particular run.
+ *
+ * R12-P1.1 — the toggle, the read-one and the write all return their failures
+ * rather than throwing them. "That skill no longer exists" and Hermes's own
+ * refusal to write a file are precisely the sentences this screen needs, and
+ * a thrown one never reaches a production browser (`lib/failures.ts`).
+ * `getSkillsSettings` still throws: it is awaited by the server component in
+ * `page.tsx`, and already reports an unreachable Hermes in band.
  */
 
 async function requireUser() {
   const user = await getCurrentPayloadUser()
-  if (!user) throw new Error('You must be logged in.')
+  if (!user) raise('unauthenticated', 'You must be logged in.')
   return user
 }
 
@@ -80,16 +88,20 @@ export async function setSkillEnabled(input: {
   profile: string
   name: string
   enabled: boolean
-}): Promise<void> {
-  await requireUser()
-  await toggleSkill(input.name, input.enabled, input.profile)
-  revalidatePath(`/workspace/${input.workspaceSlug}/settings/skills`)
+}): Promise<WithFailure<void>> {
+  return guard(async () => {
+    await requireUser()
+    await toggleSkill(input.name, input.enabled, input.profile)
+    revalidatePath(`/workspace/${input.workspaceSlug}/settings/skills`)
+  })
 }
 
-export async function readSkill(profile: string, name: string): Promise<string> {
-  await requireUser()
-  const body = await getSkillContent(name, profile)
-  return body.content ?? ''
+export async function readSkill(profile: string, name: string): Promise<WithFailure<string>> {
+  return guard(async () => {
+    await requireUser()
+    const body = await getSkillContent(name, profile)
+    return body.content ?? ''
+  })
 }
 
 export async function writeSkill(input: {
@@ -97,9 +109,11 @@ export async function writeSkill(input: {
   profile: string
   name: string
   content: string
-}): Promise<void> {
-  await requireUser()
-  if (!input.content.trim()) throw new Error('A skill cannot be empty.')
-  await setSkillContent(input.name, input.content, input.profile)
-  revalidatePath(`/workspace/${input.workspaceSlug}/settings/skills`)
+}): Promise<WithFailure<void>> {
+  return guard(async () => {
+    await requireUser()
+    if (!input.content.trim()) raise('invalid_input', 'A skill cannot be empty.')
+    await setSkillContent(input.name, input.content, input.profile)
+    revalidatePath(`/workspace/${input.workspaceSlug}/settings/skills`)
+  })
 }

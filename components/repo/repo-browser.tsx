@@ -22,6 +22,7 @@ import {
   type RepoViewPayload,
 } from '@/app/(app)/workspace/[workspaceSlug]/projects/[projectId]/files/actions'
 import type { RepoEntry } from '@/lib/git/tree'
+import { ClientFailure, unwrap, type FailureInfo } from '@/lib/failures'
 
 /** Query-parameter names. Prefixed so they cannot collide with
  * `DetailLayout`'s own `?tab=`, which shares the URL on the project page. */
@@ -89,6 +90,24 @@ function writeUrl(position: Position, line: number | null, mode: 'push' | 'repla
   window.history[mode === 'push' ? 'pushState' : 'replaceState'](null, '', url.toString())
 }
 
+/**
+ * What to show for something that was thrown.
+ *
+ * `unwrap` re-throws a returned failure as a `ClientFailure` created HERE in
+ * the browser, so its message and detail are the server's own — unlike a
+ * server action that throws, whose message React replaces with a digest.
+ */
+function toFailureLine(err: unknown): FailureInfo {
+  if (err instanceof ClientFailure) {
+    return { code: err.code, message: err.message, detail: err.detail, retryable: err.retryable }
+  }
+  return {
+    code: 'unknown',
+    message: err instanceof Error ? err.message : 'That could not be read.',
+    retryable: false,
+  }
+}
+
 export function RepoBrowser({
   workspaceSlug,
   projectId,
@@ -103,12 +122,14 @@ export function RepoBrowser({
    * tab, where the tab body is a client component and there is no server
    * boundary to hand one down — that case fetches on mount instead. */
   initialView: RepoViewPayload | null
-  /** A server-side failure to report instead of an empty panel. */
-  initialError?: string | null
+  /** A server-side failure to report instead of an empty panel. The whole
+   * failure, not just its sentence: git's stderr is the line that says which
+   * of the six git problems this is. */
+  initialError?: FailureInfo | null
   variant?: 'page' | 'tab'
 }) {
   const [view, setView] = useState<RepoViewPayload | null>(initialView)
-  const [error, setError] = useState<string | null>(initialError ?? null)
+  const [error, setError] = useState<FailureInfo | null>(initialError ?? null)
   const [pending, startTransition] = useTransition()
   const [busyPath, setBusyPath] = useState<string | null>(null)
   const [line, setLine] = useState<number | null>(null)
@@ -130,15 +151,17 @@ export function RepoBrowser({
       setError(null)
       startTransition(async () => {
         try {
-          const next = await readRepoView({
-            workspaceSlug,
-            projectId,
-            resourceId: position.resourceId,
-            ref: position.ref,
-            path: position.path,
-            kind: position.kind,
-            worktree: position.worktree,
-          })
+          const next = unwrap(
+            await readRepoView({
+              workspaceSlug,
+              projectId,
+              resourceId: position.resourceId,
+              ref: position.ref,
+              path: position.path,
+              kind: position.kind,
+              worktree: position.worktree,
+            }),
+          )
           setView(next)
           stampRef.current = next.stamp
           positionRef.current = positionFromView(next)
@@ -147,7 +170,7 @@ export function RepoBrowser({
             writeUrl(positionRef.current, options.line ?? null, options.url)
           }
         } catch (err) {
-          setError(err instanceof Error ? err.message : 'That could not be read.')
+          setError(toFailureLine(err))
         } finally {
           setBusyPath(null)
         }
@@ -187,11 +210,13 @@ export function RepoBrowser({
       timer = null
       if (cancelled || document.visibilityState !== 'visible') return schedule()
       try {
-        const stamp = await readRepoStampFor({
-          workspaceSlug,
-          projectId,
-          resourceId: positionRef.current.resourceId,
-        })
+        const stamp = unwrap(
+          await readRepoStampFor({
+            workspaceSlug,
+            projectId,
+            resourceId: positionRef.current.resourceId,
+          }),
+        )
         if (!cancelled && stampRef.current !== null && stamp !== stampRef.current) {
           stampRef.current = stamp
           load(positionRef.current, { url: 'none' })
@@ -351,10 +376,22 @@ export function RepoBrowser({
       </div>
 
       {error && (
-        <p className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-600 dark:text-red-400">
-          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          {error}
-        </p>
+        <div className="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-600 dark:text-red-400">
+          <p className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            {error.message}
+          </p>
+          {/* git's own stderr, and the single most useful string on this
+              screen: "not a git repository", "unknown revision" and "spawn
+              git ENOENT" are three different fixes and the sentence above
+              cannot say which. Secondary rather than hidden — it is what you
+              read second, and only if the first line was not enough. */}
+          {error.detail && (
+            <pre className="mt-1.5 max-h-32 overflow-auto whitespace-pre-wrap break-words pl-[1.375rem] font-mono text-[11px] leading-relaxed text-red-600/70 dark:text-red-400/70">
+              {error.detail}
+            </pre>
+          )}
+        </div>
       )}
 
       {view?.kind === 'directory' && (

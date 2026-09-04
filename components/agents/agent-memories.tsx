@@ -10,6 +10,7 @@ import {
   getAgentMemory,
   updateAgentMemory,
 } from '@/app/(app)/workspace/[workspaceSlug]/agents/actions'
+import { unwrap } from '@/lib/failures'
 import type { AgentMemory, AgentMemoryFile, MemoryTarget } from '@/lib/runtimes/hermes/agent-memory'
 import { formatCount } from '@/lib/relative-time'
 
@@ -58,8 +59,8 @@ export function AgentMemories({ agent }: { agent: Agent }) {
     setLoading(true)
     setError('')
     getAgentMemory(agentId)
-      .then((data) => {
-        if (!cancelled) setMemory(data)
+      .then((result) => {
+        if (!cancelled) setMemory(unwrap(result))
       })
       .catch((err: unknown) => {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Could not read this agent’s memory.')
@@ -195,7 +196,12 @@ function MemoryFileBlock({
               type="button"
               size="sm"
               disabled={busy || !draft.trim()}
-              onClick={() => run(() => addAgentMemory(agentId, meta.key, draft), () => setAdding(false))}
+              onClick={() =>
+                run(
+                  async () => unwrap(await addAgentMemory(agentId, meta.key, draft)),
+                  () => setAdding(false),
+                )
+              }
             >
               {busy ? <Loader2 size={12} className="animate-spin" /> : null}
               Save
@@ -235,7 +241,7 @@ function MemoryFileBlock({
                     disabled={busy || !editDraft.trim()}
                     onClick={() =>
                       run(
-                        () => updateAgentMemory(agentId, meta.key, entry.index, editDraft),
+                        async () => unwrap(await updateAgentMemory(agentId, meta.key, entry.index, editDraft)),
                         () => setEditingIndex(null),
                       )
                     }
@@ -267,7 +273,7 @@ function MemoryFileBlock({
                         disabled={busy}
                         onClick={() =>
                           run(
-                            () => deleteAgentMemory(agentId, meta.key, entry.index),
+                            async () => unwrap(await deleteAgentMemory(agentId, meta.key, entry.index)),
                             () => setPendingDelete(null),
                           )
                         }

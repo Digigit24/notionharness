@@ -53,7 +53,10 @@ import type { RunEvent } from '@/lib/run-events'
 import { redactError } from '@/lib/redact'
 import { resolvePluginsForRun } from '@/lib/plugins/resolve'
 import { TEAM_PLUGIN_NAME } from '@/lib/teams/registration'
-import type { Agent, Task } from '@/payload-types'
+import { classifyRunFailure, runDisposition, type RunDisposition } from '@/lib/dispatcher/classify-failure'
+import { bestEffort } from '@/lib/failures'
+import { logger } from '@/lib/logger'
+import type { Agent, RuntimeProfile, Task } from '@/payload-types'
 import type { ApprovalOption } from '@/collections/Approvals'
 import type { ApprovalOutcome } from '@/lib/run-events'
 
@@ -68,6 +71,15 @@ interface TeamPromptContext {
   role: 'leader' | 'member'
   members: Array<{ slotId: number; displayName: string; role: 'leader' | 'member' }>
 }
+
+/**
+ * How a run this process executed ended.
+ *
+ * 'cancelled' is a first-class ending rather than a flavour of failure: it is
+ * a terminal `runs.status` in its own right (`lib/broker/types.ts`), and the
+ * only one of the three that nobody needs to be told about as bad news.
+ */
+type RunEndState = 'completed' | 'failed' | 'cancelled'
 
 export interface DispatchOutcome {
   claimed: boolean
@@ -123,14 +135,21 @@ export async function requestRunCancel(runId: number): Promise<{ cancelled: bool
   // in-process map alone, and in Next the map reached from a server action is
   // not necessarily the map the dispatcher filled — so Stop found no control,
   // returned false, and did nothing at all with no explanation.
-  const accepted = await requestRunCancellation(runId).catch(() => false)
+  const accepted =
+    (await bestEffort(
+      requestRunCancellation(runId),
+      'Stop must still take the fast in-process path even if recording the request failed',
+      { runId },
+    )) ?? false
 
   // The in-process control remains as the fast path: when the turn happens to
   // be running right here, this cancels within milliseconds rather than
   // waiting for the watcher below to notice.
   const cancel = runCancelControls.get(runId)
   if (cancel) {
-    await cancel().catch(() => undefined)
+    await bestEffort(cancel(), 'a cancel that throws has already asked the agent to stop as loudly as it can', {
+      runId,
+    })
     return { cancelled: true }
   }
   return { cancelled: accepted }
@@ -143,6 +162,58 @@ const CANCEL_POLL_MS = 2_000
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * R12-P1.6 — the fields that make a dispatcher log line answerable.
+ *
+ * The question people actually ask is "what happened to run 214", and it used
+ * to be answered by grepping prose for the number. Ids go in the record, not
+ * in the sentence, so a log search is a field match rather than a substring
+ * hunt across a dozen different phrasings of the same event.
+ */
+function runFields(run: Run, extra?: Record<string, unknown>): Record<string, unknown> {
+  return {
+    runId: run.id,
+    ...(run.sessionId != null ? { sessionId: run.sessionId } : {}),
+    ...(run.agentId != null ? { agentId: run.agentId } : {}),
+    ...(run.taskId != null ? { taskId: run.taskId } : {}),
+    attempt: run.attempt,
+    ...extra,
+  }
+}
+
+/**
+ * The one place a run's non-success is written down.
+ *
+ * Every settle in this file used to decide `retryable` for itself, which is
+ * how a pool blip came to be recorded as a permanently broken agent (see
+ * `classify-failure.ts`). Here the taxonomy decides, and the log line says
+ * which row of it decided — so "why was run 214 not retried" is a question the
+ * log answers rather than one that requires reading this file.
+ */
+async function settleWithDisposition(
+  run: Run,
+  disposition: RunDisposition,
+  message: string,
+  extra?: Record<string, unknown>,
+): Promise<void> {
+  if (disposition.outcome === 'cancelled') {
+    // Not `failed`. Somebody asked for this to stop and it stopped; recording
+    // that as a failure both misreports it and — because a failed settle under
+    // the attempt cap enqueues a retry — used to restart the very turn they
+    // had just interrupted.
+    await settleRun(run.id, 'cancelled')
+    logger.info('run cancelled', runFields(run, extra))
+    return
+  }
+  await settleRun(run.id, 'failed', { error: message, retryable: disposition.retryable })
+  logger.error('run failed', undefined, {
+    ...runFields(run, extra),
+    code: disposition.code,
+    retryable: disposition.retryable,
+    reason: message,
+  })
 }
 
 function incrAgentInFlight(agentId: number): void {
@@ -175,12 +246,26 @@ export async function dispatchNextRun(workerId: string): Promise<DispatchOutcome
       // needs settling — never leave it stuck in 'dispatched'/'running'
       // for the lease sweeper to have to clean up later when it could
       // fail cleanly now.
-      const message = err instanceof Error ? err.message : String(err)
-      await settleRun(run.id, 'failed', { error: message, retryable: true }).catch(() => undefined)
-      void getPayloadClient()
-        .then((payload) => notifyRunSettled(payload, run, null, 'failed'))
-        .catch(() => undefined)
-      console.error(`[dispatcher] Run ${run.id} failed outside executeRun's own error handling.`, err)
+      // R3.8, same as the turn-level catch below: this text lands in
+      // `runs.error` and is rendered in a chat bubble, so it goes through the
+      // redactor rather than straight from the exception.
+      const message = redactError(err)
+      // Classified rather than blanket-retryable: this catch sees the causes
+      // furthest from any call site that understands them — a missing binary
+      // and an exhausted pool arrive here identically — and requeuing the
+      // missing binary four times only delays the person who has to install it.
+      const disposition = classifyRunFailure(err, { attempt: run.attempt })
+      await bestEffort(
+        settleWithDisposition(run, disposition, message, { origin: 'executeRun' }),
+        'a run already failing outside its own error handling must not fail again on the way to being recorded',
+        { runId: run.id },
+      )
+      if (disposition.outcome === 'failed') {
+        void getPayloadClient()
+          .then((payload) => notifyRunSettled(payload, run, null, 'failed'))
+          .catch((pushErr) => logger.warn('could not notify run settled', runFields(run, { error: String(pushErr) })))
+      }
+      logger.error("run failed outside executeRun's own error handling", err, runFields(run))
     })
     .finally(() => {
       inFlightRuns.delete(run.id)
@@ -193,7 +278,7 @@ export async function dispatchNextRun(workerId: string): Promise<DispatchOutcome
   // handler anyway rather than leaving a detached promise with nothing
   // observing it.
   execution.catch((err) => {
-    console.error(`[dispatcher] Unhandled rejection executing run ${run.id}.`, err)
+    logger.error('unhandled rejection executing run', err, runFields(run))
   })
 
   return { claimed: true, runId: run.id, status: 'started' }
@@ -208,13 +293,18 @@ export async function dispatchNextRun(workerId: string): Promise<DispatchOutcome
  * only there so the warning names what pointed at the missing path.
  */
 async function usableWorktree(worktreeId: number, describe: string) {
-  const worktree = await getWorktree(worktreeId).catch(() => null)
+  const worktree =
+    (await bestEffort(getWorktree(worktreeId), 'a worktree we cannot read falls back to a disposable checkout', {
+      worktreeId,
+    })) ?? null
   if (!worktree || worktree.status === 'removed') return null
   const { existsSync } = await import('node:fs')
   if (!existsSync(worktree.path)) {
-    console.warn(
-      `[dispatcher] ${describe} points at worktree ${worktree.path}, which is not on disk — using a disposable checkout instead.`,
-    )
+    logger.warn('bound worktree is not on disk — using a disposable checkout', {
+      worktreeId,
+      path: worktree.path,
+      boundBy: describe,
+    })
     return null
   }
   return worktree
@@ -246,7 +336,11 @@ async function resolveSessionWorktree(run: Run, team: TeamRunBinding | null) {
     if (teamTree) return teamTree
   }
   if (!run.sessionId) return null
-  const session = await getChatSession(run.sessionId).catch(() => null)
+  const session = await bestEffort(
+    getChatSession(run.sessionId),
+    'a session we cannot read runs in a disposable checkout rather than not at all',
+    { runId: run.id, sessionId: run.sessionId },
+  )
   if (!session?.worktreeId) return null
   return usableWorktree(session.worktreeId, `Session ${session.id}`)
 }
@@ -342,7 +436,7 @@ function buildPromptText(
 async function postMentionReply(
   run: Run,
   envelopes: Array<{ event: RunEvent }>,
-  status: 'completed' | 'failed',
+  status: RunEndState,
 ): Promise<void> {
   const messageId = run.channelMessageId
   if (!messageId) return
@@ -360,7 +454,12 @@ async function postMentionReply(
 
   // Did the agent already answer with its own tool? If so, leave it alone —
   // double-posting a good citizen is worse than not backstopping a bad one.
-  const thread = await listThread(threadRootId).catch(() => [])
+  const thread =
+    (await bestEffort(
+      listThread(threadRootId),
+      'a thread we cannot read is answered rather than left silent — a duplicate reply beats no reply',
+      { runId: run.id, threadRootId },
+    )) ?? []
   const alreadyReplied = thread.some(
     (message) => message.fromSlotId === binding.slotId && message.id > source.id,
   )
@@ -374,10 +473,15 @@ async function postMentionReply(
     .join('')
     .trim()
 
+  // A stopped run still owes the thread a line. It was stopped on purpose, so
+  // it does not say it failed — but leaving the mention hanging is the exact
+  // silence this backstop exists to remove, whatever the reason for it.
   const body =
     status === 'completed'
       ? answer || 'I finished, but produced no text to report.'
-      : `I could not finish that. ${answer || 'The run failed before producing an answer.'}`.trim()
+      : status === 'cancelled'
+        ? `I was stopped before I finished. ${answer || 'Nothing was produced before the stop.'}`.trim()
+        : `I could not finish that. ${answer || 'The run failed before producing an answer.'}`.trim()
 
   await postChannelMessage({
     teamId: binding.teamId,
@@ -395,7 +499,7 @@ function notifyRunSettled(
   payload: Awaited<ReturnType<typeof getPayloadClient>>,
   run: Run,
   task: Task | null,
-  status: 'completed' | 'failed',
+  status: RunEndState,
 ): void {
   const recipients = new Set<number>([run.accountableUser])
   if (run.originatorUser != null) recipients.add(run.originatorUser)
@@ -403,14 +507,18 @@ function notifyRunSettled(
   void hrefForEntity(payload, 'run', String(run.id))
     .then((url) => {
       const subject = task ? `"${task.title}"` : `run ${run.id}`
-      const message = {
-        title: status === 'completed' ? 'Run completed' : 'Run failed',
-        body: status === 'completed' ? `Your run for ${subject} finished.` : `Your run for ${subject} failed.`,
-        url,
-      }
+      // The person who pressed Stop knows what they did, but they are not
+      // necessarily the accountable user this notifies — and telling that
+      // person their run FAILED, which is what this said until 'cancelled'
+      // existed here, is both wrong and alarming.
+      const title = status === 'completed' ? 'Run completed' : status === 'cancelled' ? 'Run stopped' : 'Run failed'
+      const verb = status === 'completed' ? 'finished' : status === 'cancelled' ? 'was stopped' : 'failed'
+      const message = { title, body: `Your run for ${subject} ${verb}.`, url }
       return Promise.all([...recipients].map((userId) => sendPushToUser(userId, 'completion', message)))
     })
-    .catch((err) => console.error(`[dispatcher] Failed to push completion notification for run ${run.id}.`, err))
+    .catch((err) =>
+      logger.error('could not push the run-settled notification', err, runFields(run, { settledAs: status })),
+    )
 }
 
 /**
@@ -427,25 +535,29 @@ function notifyRunSettled(
  * is blocked.
  */
 async function announceApprovalInChannel(run: Run, title: string): Promise<void> {
-  if (!run.channelMessageId || !run.sessionId) return
-  try {
-    const { getChannelMessage, postChannelMessage } = await import('@/lib/broker/channels')
-    const { getTeamBindingForSession } = await import('@/lib/broker')
-    const [source, binding] = await Promise.all([
-      getChannelMessage(run.channelMessageId),
-      getTeamBindingForSession(run.sessionId),
-    ])
-    if (!source || !binding) return
-    await postChannelMessage({
-      teamId: binding.teamId,
-      fromSlotId: binding.slotId,
-      kind: 'status',
-      body: `Waiting for approval to ${title}. The channel shows the decision on this thread's row — answer it there, in this thread, or in the Inbox, and I will carry on.`,
-      threadRootId: source.threadRootId ?? source.id,
-    })
-  } catch {
-    // Announcing a block is never worth failing the blocked turn over.
-  }
+  const channelMessageId = run.channelMessageId
+  const sessionId = run.sessionId
+  if (!channelMessageId || !sessionId) return
+  await bestEffort(
+    async () => {
+      const { getChannelMessage, postChannelMessage } = await import('@/lib/broker/channels')
+      const { getTeamBindingForSession } = await import('@/lib/broker')
+      const [source, binding] = await Promise.all([
+        getChannelMessage(channelMessageId),
+        getTeamBindingForSession(sessionId),
+      ])
+      if (!source || !binding) return
+      await postChannelMessage({
+        teamId: binding.teamId,
+        fromSlotId: binding.slotId,
+        kind: 'status',
+        body: `Waiting for approval to ${title}. The channel shows the decision on this thread's row — answer it there, in this thread, or in the Inbox, and I will carry on.`,
+        threadRootId: source.threadRootId ?? source.id,
+      })
+    },
+    'announcing a block is never worth failing the blocked turn over',
+    { runId: run.id, sessionId },
+  )
 }
 
 function buildPermissionCallback(
@@ -491,7 +603,7 @@ function buildPermissionCallback(
           url,
         }),
       )
-      .catch((err) => console.error(`[dispatcher] Failed to push approval notification for run ${runId}.`, err))
+      .catch((err) => logger.error('could not push the approval notification', err, { runId, requestedUserId }))
     try {
       const outcome = await waitForApproval(params.id, permissionTimeoutMs)
       return outcome
@@ -511,7 +623,7 @@ const LEASE_RENEW_INTERVAL_MS = 15_000
 // for this to be a fairly relaxed poll.
 const AGENT_SLOT_POLL_MS = 5_000
 
-async function executeRun(run: Run): Promise<{ status: 'completed' | 'failed'; error?: string }> {
+async function executeRun(run: Run): Promise<{ status: RunEndState; error?: string }> {
   const payload = await getPayloadClient()
 
   // Started immediately: the run is already claimed (a lease exists) the
@@ -524,7 +636,7 @@ async function executeRun(run: Run): Promise<{ status: 'completed' | 'failed'; e
   // early, thrown error, or normal completion).
   const leaseInterval = setInterval(() => {
     void renewLease(run.id).catch((err) => {
-      console.error(`[dispatcher] Failed to renew lease for run ${run.id}.`, err)
+      logger.error('could not renew the run lease', err, runFields(run))
     })
   }, LEASE_RENEW_INTERVAL_MS)
   leaseInterval.unref()
@@ -539,10 +651,11 @@ async function executeRun(run: Run): Promise<{ status: 'completed' | 'failed'; e
 async function executeClaimedRun(
   payload: Awaited<ReturnType<typeof getPayloadClient>>,
   run: Run,
-): Promise<{ status: 'completed' | 'failed'; error?: string }> {
+): Promise<{ status: RunEndState; error?: string }> {
   if (run.agentId == null) {
-    await settleRun(run.id, 'failed', { error: 'Run has no agent assigned.', retryable: false })
-    return { status: 'failed', error: 'no agent assigned' }
+    const message = 'Run has no agent assigned.'
+    await settleWithDisposition(run, runDisposition('invalid_input'), message)
+    return { status: 'failed', error: message }
   }
   const agentId = run.agentId
 
@@ -567,26 +680,48 @@ async function executeClaimedRun(
     })) as Agent | null
   } catch (err) {
     const message = `Could not load agent ${agentId}: ${redactError(err)}`
-    console.error(`[dispatcher] ${message}`)
-    await settleRun(run.id, 'failed', { error: message, retryable: true })
+    await settleWithDisposition(run, classifyRunFailure(err, { attempt: run.attempt }), message)
     return { status: 'failed', error: message }
   }
   if (!agent || agent.enabled === false) {
-    await settleRun(run.id, 'failed', { error: 'Agent missing or disabled.', retryable: false })
-    return { status: 'failed', error: 'agent missing or disabled' }
+    const message = 'Agent missing or disabled.'
+    await settleWithDisposition(run, runDisposition('agent_unavailable'), message)
+    return { status: 'failed', error: message }
   }
 
   const runtimeProfileId = typeof agent.runtimeProfile === 'number' ? agent.runtimeProfile : agent.runtimeProfile.id
-  const runtimeProfile = await payload
-    .findByID({ collection: 'runtime-profiles', id: runtimeProfileId, overrideAccess: true, disableErrors: true })
-    .catch(() => null)
+  // Split the same way the agent lookup above is, and for the same reason: a
+  // `.catch(() => null)` here fed "Runtime profile missing or disabled." and
+  // settled the run NON-retryable, so one bad second on the database read as a
+  // configuration mistake that nobody had made. `disableErrors` already turns
+  // a genuine "no such row" into null, so anything thrown is infrastructure.
+  let runtimeProfile: RuntimeProfile | null
+  try {
+    runtimeProfile = await payload.findByID({
+      collection: 'runtime-profiles',
+      id: runtimeProfileId,
+      overrideAccess: true,
+      disableErrors: true,
+    })
+  } catch (err) {
+    const message = `Could not load runtime profile ${runtimeProfileId}: ${redactError(err)}`
+    await settleWithDisposition(run, classifyRunFailure(err, { attempt: run.attempt }), message, {
+      runtimeProfileId,
+    })
+    return { status: 'failed', error: message }
+  }
   if (!runtimeProfile || runtimeProfile.enabled === false) {
-    await settleRun(run.id, 'failed', { error: 'Runtime profile missing or disabled.', retryable: false })
-    return { status: 'failed', error: 'runtime profile missing or disabled' }
+    const message = 'Runtime profile missing or disabled.'
+    await settleWithDisposition(run, runDisposition('runtime_not_installed'), message, { runtimeProfileId })
+    return { status: 'failed', error: message }
   }
 
   const task = run.taskId
-    ? await payload.findByID({ collection: 'tasks', id: run.taskId, overrideAccess: true, disableErrors: true }).catch(() => null)
+    ? ((await bestEffort(
+        payload.findByID({ collection: 'tasks', id: run.taskId, overrideAccess: true, disableErrors: true }),
+        'a task we cannot read makes a thinner prompt, not a failed run',
+        { runId: run.id, taskId: run.taskId },
+      )) ?? null)
     : null
 
   // R4.1 — the tools this product gives this agent, resolved per run and
@@ -616,17 +751,19 @@ async function executeClaimedRun(
   // handing it one, and the mismatch itself (a slot whose agent was swapped
   // while its session kept running) is worth a line in the log.
   const rawTeamBinding = run.sessionId
-    ? await getTeamBindingForSession(run.sessionId).catch((err) => {
-        console.warn(`[dispatcher] Could not resolve the team slot for run ${run.id}.`, err)
-        return null
-      })
+    ? ((await bestEffort(
+        getTeamBindingForSession(run.sessionId),
+        'a team binding we cannot read dispatches the turn without team tools rather than not at all',
+        { runId: run.id, sessionId: run.sessionId },
+      )) ?? null)
     : null
   let teamBinding: TeamRunBinding | null = rawTeamBinding
   if (rawTeamBinding && rawTeamBinding.agentId !== agentId) {
-    console.warn(
-      `[dispatcher] Run ${run.id} (agent ${agentId}) shares a session with team slot ${rawTeamBinding.slotId}, ` +
-        `which is filled by agent ${rawTeamBinding.agentId} — dispatching it without team tools.`,
-    )
+    logger.warn('run shares a session with a team slot filled by a different agent — dispatching without team tools', {
+      ...runFields(run),
+      slotId: rawTeamBinding.slotId,
+      slotAgentId: rawTeamBinding.agentId,
+    })
     teamBinding = null
   } else if (rawTeamBinding && agentWorkspaceId && rawTeamBinding.workspaceId !== agentWorkspaceId) {
     // The slot's team and the agent must live in the same workspace, because
@@ -644,11 +781,13 @@ async function executeClaimedRun(
     // was filled would leave exactly this row behind. Dropping the team tools
     // is the conservative answer — the turn still runs, and the roster is a
     // human's to repair.
-    console.warn(
-      `[dispatcher] Run ${run.id} is in workspace ${agentWorkspaceId} but team slot ${rawTeamBinding.slotId} ` +
-        `belongs to team ${rawTeamBinding.teamId} in workspace ${rawTeamBinding.workspaceId} — ` +
-        `dispatching it without team tools.`,
-    )
+    logger.warn('run and its team slot are in different workspaces — dispatching without team tools', {
+      ...runFields(run),
+      workspaceId: agentWorkspaceId,
+      slotId: rawTeamBinding.slotId,
+      teamId: rawTeamBinding.teamId,
+      teamWorkspaceId: rawTeamBinding.workspaceId,
+    })
     teamBinding = null
   }
 
@@ -660,15 +799,11 @@ async function executeClaimedRun(
   // ALTERNATIVE — telling the user to create a second team, or to hand-write a
   // plugin row with three placeholder headers — is not a fix.
   if (teamBinding && agentWorkspaceId) {
-    await import('@/lib/teams/registration')
-      .then(({ ensureTeamMcpPlugin }) => ensureTeamMcpPlugin(agentWorkspaceId))
-      .catch((err) => {
-        console.warn(
-          `[dispatcher] Run ${run.id} is team ${teamBinding.teamId} slot ${teamBinding.slotId} but the team ` +
-            `plugin could not be registered for workspace ${agentWorkspaceId}; this turn has no team tools.`,
-          err,
-        )
-      })
+    await bestEffort(
+      import('@/lib/teams/registration').then(({ ensureTeamMcpPlugin }) => ensureTeamMcpPlugin(agentWorkspaceId)),
+      'a team plugin that cannot be registered costs this turn its team tools, not the turn itself',
+      { ...runFields(run), workspaceId: agentWorkspaceId, teamId: teamBinding.teamId, slotId: teamBinding.slotId },
+    )
   }
 
   const plugins = agentWorkspaceId
@@ -691,7 +826,7 @@ async function executeClaimedRun(
           ...(teamBinding ? { TEAM_SLOT_ID: String(teamBinding.slotId) } : {}),
         },
       }).catch((err) => {
-        console.warn(`[dispatcher] Could not resolve plugins for run ${run.id}.`, err)
+        logger.warn('could not resolve plugins for this run', { ...runFields(run), workspaceId: agentWorkspaceId, error: String(err) })
         return { servers: [], skipped: [] }
       })
     : { servers: [], skipped: [] }
@@ -702,7 +837,7 @@ async function executeClaimedRun(
     // Should be unreachable after this task's fix — `claimNextRun` always
     // mints one now — but surfaced loudly rather than silently sending the
     // agent a turn with no RUN_TOKEN at all if something upstream regresses.
-    console.warn(`[dispatcher] Run ${run.id} was claimed with no run_token — page-writes auth will fail for this run.`)
+    logger.warn('run was claimed with no run_token — page-writes auth will fail for this run', runFields(run))
   }
 
   // Where this turn actually runs.
@@ -726,14 +861,19 @@ async function executeClaimedRun(
   // on disk, which is runtime-specific and, for a runtime with no home at
   // all, nothing.
   const resumeSessionId = run.sessionId
-    ? await getChatSession(run.sessionId)
-        .then((s) => s?.hermesSessionId ?? null)
-        .catch(() => null)
+    ? ((await bestEffort(
+        getChatSession(run.sessionId).then((s) => s?.hermesSessionId ?? null),
+        'a session id we cannot read starts a fresh agent session rather than failing the turn',
+        { runId: run.id, sessionId: run.sessionId },
+      )) ?? null)
     : null
 
   if (sessionWorktree) {
     runCwd = sessionWorktree.path
-    await touchWorktree(sessionWorktree.id).catch(() => undefined)
+    await bestEffort(touchWorktree(sessionWorktree.id), 'last-used bookkeeping must not cost a turn', {
+      runId: run.id,
+      worktreeId: sessionWorktree.id,
+    })
   } else {
     const { source, rootDir, baseBranch } = resolveRunWorktreeConfig()
     const manager = new RunWorktreeManager({ rootDir })
@@ -764,7 +904,12 @@ async function executeClaimedRun(
   // turn, and `enqueueAskRun` has usually already written the user's own
   // message at seq 1, so every envelope's seq is offset above whatever is
   // already there.
-  const seqBase = await getRunSeqBase(run.id).catch(() => 0)
+  const seqBase =
+    (await bestEffort(
+      getRunSeqBase(run.id),
+      'a seq base we cannot read starts at 0 — a duplicated seq costs ordering, not the turn',
+      { runId: run.id },
+    )) ?? 0
   // Durable writes still go out in order, but they no longer sit between the
   // agent and the screen — `publishRunEvent` below has already delivered the
   // chunk by the time any of these resolve.
@@ -787,7 +932,7 @@ async function executeClaimedRun(
     // stay small and the pool stays free for everything else in the process.
     writeChain = writeChain.then(() =>
       appendRunEventsBatch(run.id, batch).catch((err) => {
-        console.error(`[dispatcher] Failed to persist ${batch.length} event(s) for run ${run.id}.`, err)
+        logger.error('could not persist run events', err, { ...runFields(run), events: batch.length })
       }),
     )
   }
@@ -811,7 +956,7 @@ async function executeClaimedRun(
       },
     })
     scheduleFlush()
-    console.warn(`[dispatcher] Run ${run.id} skipped ${plugins.skipped.length} plugin(s): ${detail}`)
+    logger.warn('plugins were not loaded for this turn', { ...runFields(run), skipped: detail })
   }
 
   // Resolved before the spawn so an unknown/typo'd profile fails the run with
@@ -835,7 +980,11 @@ async function executeClaimedRun(
       }
     } catch (err) {
       // A roster we cannot read is a worse prompt, not a failed run.
-      console.warn(`[dispatcher] Could not build team context for run ${run.id}.`, err)
+      logger.warn('could not build the team context for this run', {
+        ...runFields(run),
+        teamId: teamBinding.teamId,
+        error: String(err),
+      })
     }
   }
 
@@ -847,7 +996,9 @@ async function executeClaimedRun(
       await access(join(agentProfileHome, 'config.yaml'))
     } catch {
       const message = `Hermes profile "${configuredProfile}" was not found in this Hermes install.`
-      await settleRun(run.id, 'failed', { error: message, retryable: false })
+      await settleWithDisposition(run, runDisposition('runtime_not_installed'), message, {
+        hermesProfile: configuredProfile,
+      })
       return { status: 'failed', error: message }
     }
   }
@@ -922,12 +1073,24 @@ async function executeClaimedRun(
       // permission to read its own board and the turn wedged and died.
       autoAllowToolPrefixes: teamBinding ? [`mcp__${TEAM_PLUGIN_NAME}__`] : undefined,
       sessionConfig: (() => {
+        // R12-P4.1 - three layers, most specific last.
+        //
+        // The runtime's own defaults sit UNDERNEATH the agent's, so choosing a
+        // model once on the Claude Code runtime applies to every agent that
+        // has not overridden it, and a new agent inherits it without being
+        // told. The agent's map wins over that, and this turn's override wins
+        // over both: picking high effort for one message must not silently
+        // drop the model that agent is configured to use.
+        const runtimeDefaults =
+          runtimeProfile?.defaultSessionConfig && typeof runtimeProfile.defaultSessionConfig === 'object'
+            ? (runtimeProfile.defaultSessionConfig as Record<string, unknown>)
+            : {}
         const base =
           agent.runtimeConfig && typeof agent.runtimeConfig === 'object'
             ? (agent.runtimeConfig as Record<string, unknown>)
             : {}
         const override = run.runtimeConfig ?? {}
-        const merged = { ...base, ...override }
+        const merged = { ...runtimeDefaults, ...base, ...override }
         return Object.keys(merged).length > 0 ? merged : undefined
       })(),
       // P5.4: when permissionMode is 'ask', wire the callback that creates a
@@ -956,13 +1119,17 @@ async function executeClaimedRun(
         // the database, so watch for it. Cleared in the `finally` below along
         // with the control itself.
         const watcher = setInterval(() => {
-          void isRunCancellationRequested(run.id)
-            .then((requested) => {
+          void bestEffort(
+            isRunCancellationRequested(run.id).then((requested) => {
               if (!requested) return
               clearInterval(watcher)
-              void control.cancel().catch(() => undefined)
-            })
-            .catch(() => undefined)
+              void bestEffort(control.cancel(), 'a cancel that throws has still asked the agent to stop', {
+                runId: run.id,
+              })
+            }),
+            'a missed cancellation poll is retried on the next tick of this timer',
+            { runId: run.id },
+          )
         }, CANCEL_POLL_MS)
         watcher.unref?.()
         cancelWatchers.set(run.id, watcher)
@@ -1017,7 +1184,11 @@ async function executeClaimedRun(
             tokens: usage.tokens,
             costTicks: usage.costTicks,
           }).catch((err) => {
-            console.error(`[dispatcher] Failed to record usage for run ${run.id}.`, err)
+            logger.error('could not record usage for this run', err, {
+              ...runFields(run),
+              provider: usage.provider,
+              model: usage.model,
+            })
           })
         }
       },
@@ -1032,9 +1203,21 @@ async function executeClaimedRun(
     // R3.8 — this string is written to the `runs` table and rendered in a
     // chat bubble, so it must never carry a credential the agent echoed.
     const message = redactError(err)
-    await settleRun(run.id, 'failed', { error: message, retryable: true })
-    notifyRunSettled(payload, run, task, 'failed')
-    return { status: 'failed', error: message }
+    // A turn that was stopped usually ends HERE rather than with a `done`
+    // event: the cooperative cancel escalates to killing the process, and what
+    // reaches this catch is whatever the transport said as it closed. That
+    // text is about a broken pipe, not about the person who pressed Stop, so
+    // the database flag is what decides — never the message.
+    const cancellationRequested =
+      (await bestEffort(
+        isRunCancellationRequested(run.id),
+        'a stop flag we cannot read settles the run as failed, which is the safe answer of the two',
+        { runId: run.id },
+      )) ?? false
+    const disposition = classifyRunFailure(err, { attempt: run.attempt, cancellationRequested })
+    await settleWithDisposition(run, disposition, message)
+    if (disposition.outcome === 'failed') notifyRunSettled(payload, run, task, 'failed')
+    return { status: disposition.outcome === 'cancelled' ? 'cancelled' : 'failed', error: message }
   } finally {
     decrAgentInFlight(agentId)
     // The turn is over either way — nothing left to interrupt.
@@ -1059,30 +1242,58 @@ async function executeClaimedRun(
   // overwrites it — otherwise every future turn would keep retrying the same
   // doomed `session/load` and keep losing the conversation.
   if (run.sessionId && result.sessionId && !result.resumed) {
-    await setHermesSessionId(run.sessionId, result.sessionId).catch((err) => {
-      console.warn(`[dispatcher] Could not record the agent session id for session ${run.sessionId}.`, err)
-    })
-  }
-  if (resumeSessionId && result.resumeFailure) {
-    console.warn(
-      `[dispatcher] Run ${run.id} could not resume agent session ${resumeSessionId} (${result.resumeFailure}); started a new one.`,
+    await bestEffort(
+      setHermesSessionId(run.sessionId, result.sessionId),
+      'an unrecorded agent session id costs the next turn its history, not this turn its answer',
+      { runId: run.id, sessionId: run.sessionId },
     )
   }
+  if (resumeSessionId && result.resumeFailure) {
+    logger.warn('could not resume the agent session — started a new one', {
+      ...runFields(run),
+      hermesSessionId: resumeSessionId,
+      reason: result.resumeFailure,
+    })
+  }
   if (run.sessionId) {
-    await touchSession(run.sessionId).catch(() => undefined)
+    await bestEffort(touchSession(run.sessionId), 'last-activity bookkeeping must not cost a turn', {
+      runId: run.id,
+      sessionId: run.sessionId,
+    })
   }
 
   const doneEvent = result.envelopes.find((e) => e.event.type === 'done')?.event
   const succeeded = doneEvent?.type === 'done' && doneEvent.status === 'ok'
-  const finalStatus: 'completed' | 'failed' = succeeded ? 'completed' : 'failed'
   const failureReason = !succeeded ? (doneEvent?.type === 'done' ? doneEvent.reason : 'Turn did not produce a done event.') : undefined
 
-  await settleRun(run.id, finalStatus, { error: failureReason, retryable: !succeeded })
+  // A cooperative cancel ends the turn with a real `done` event, which is the
+  // whole point of asking rather than killing — everything already streamed is
+  // kept. `status: 'cancelled'` is that event saying so, and it is the one
+  // signal here that is not a guess about a message.
+  const disposition: RunDisposition | null = succeeded
+    ? null
+    : classifyRunFailure(failureReason, {
+        attempt: run.attempt,
+        cancellationRequested: doneEvent?.type === 'done' && doneEvent.status === 'cancelled',
+      })
+  const finalStatus: RunEndState =
+    disposition === null ? 'completed' : disposition.outcome === 'cancelled' ? 'cancelled' : 'failed'
+
+  if (disposition === null) {
+    await settleRun(run.id, 'completed')
+    logger.info('run completed', runFields(run))
+  } else {
+    // `retryable: !succeeded` — what this used to be — meant every unsuccessful
+    // turn came back, including the refusals that will refuse again and the
+    // cancellations somebody had just asked to stop.
+    await settleWithDisposition(run, disposition, failureReason ?? 'The turn did not succeed.')
+  }
   // Every event is durable by now (the allSettled above), so the in-memory
   // replay copy has nothing left to protect against — any late viewer reads
   // this run from the database like any other history.
   clearRunBacklog(run.id)
   notifyRunSettled(payload, run, task, finalStatus)
+
 
   // A run started by a channel mention owes that thread an answer.
   //
@@ -1096,9 +1307,11 @@ async function executeClaimedRun(
   // Skipped when the agent DID post in the thread itself, so a good citizen is
   // never double-posted.
   if (run.channelMessageId) {
-    await postMentionReply(run, result.envelopes, finalStatus).catch((err) => {
-      console.warn(`[dispatcher] Could not post the channel reply for run ${run.id}.`, err)
-    })
+    await bestEffort(
+      postMentionReply(run, result.envelopes, finalStatus),
+      'a backstop reply that fails must not also fail the run it is reporting on',
+      { ...runFields(run), channelMessageId: run.channelMessageId },
+    )
   }
 
   return { status: finalStatus, error: failureReason }

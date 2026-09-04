@@ -14,6 +14,7 @@ import { execFile } from 'node:child_process'
 import { access, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
+import { AppFailure, raise, type FailureCode } from '@/lib/failures'
 
 const exec = promisify(execFile)
 
@@ -21,15 +22,104 @@ const exec = promisify(execFile)
  * hung git never becomes a hung page. */
 const GIT_TIMEOUT_MS = 30_000
 
-export class GitError extends Error {
-  constructor(
-    message: string,
-    readonly args: string[],
-    readonly stderr: string,
-  ) {
-    super(message)
+/** git's stderr, capped before it becomes a failure's `detail`. It travels to
+ * a browser and onto a screen, and a bad `fetch` can produce a great deal of
+ * it; the first few thousand characters carry the diagnosis. */
+const MAX_DETAIL_CHARS = 4_000
+
+/**
+ * A git command that failed.
+ *
+ * Extends `AppFailure` rather than `Error` so the classification and git's
+ * own stderr survive the trip out of a server action — `guard()` turns this
+ * into an envelope whose `detail` is already the stderr. That is the whole
+ * reason the repository browser can now say "git is not installed" rather
+ * than repeating whichever sentence happened to arrive. `args` and `stderr`
+ * stay as fields because the callers that already read them (hunk staging
+ * matches on git's apply output) are still right to.
+ */
+export class GitError extends AppFailure {
+  readonly args: string[]
+  readonly stderr: string
+
+  constructor(info: { code: FailureCode; message: string; detail?: string; retryable?: boolean }, args: string[], stderr: string) {
+    super({
+      code: info.code,
+      message: info.message,
+      detail: info.detail,
+      retryable: info.retryable ?? false,
+    })
     this.name = 'GitError'
+    this.args = args
+    this.stderr = stderr
   }
+}
+
+/** What Node hands back when a spawned process fails. Written out because
+ * every field below is load-bearing for the classification. */
+interface ExecFailure {
+  code?: string | number
+  killed?: boolean
+  signal?: string | null
+  stderr?: string
+  message?: string
+}
+
+/**
+ * Which of git's failures this is.
+ *
+ * A missing binary, a moved repository and a deleted ref are three different
+ * problems with three different fixes, and until this existed the UI printed
+ * whichever string arrived. The patterns are git's own words in English —
+ * git localises its messages, so a machine with a translated git falls
+ * through to `unknown` and still shows the stderr, which is the honest
+ * outcome rather than a confidently wrong code.
+ */
+async function classifyGitFailure(cwd: string, args: string[], err: ExecFailure): Promise<GitError> {
+  const stderr = String(err.stderr ?? '').trim()
+  const detail = (stderr || String(err.message ?? '').trim()).slice(0, MAX_DETAIL_CHARS) || undefined
+  const text = `${stderr}\n${err.message ?? ''}`.toLowerCase()
+  const build = (code: FailureCode, message: string, retryable = false) =>
+    new GitError({ code, message, detail, retryable }, args, stderr)
+
+  if (err.code === 'ENOENT') {
+    // `spawn git ENOENT` means one of two entirely different things: no git
+    // on PATH, or no such working directory. One stat on the error path is
+    // the cheapest way to tell them apart, and telling them apart is the
+    // difference between "install git" and "that clone has moved".
+    if (!(await directoryExists(cwd))) {
+      return build('worktree_missing', 'That working copy is no longer on this machine.', true)
+    }
+    return build('git_missing', 'git is not installed on this machine, or is not on this server’s PATH.')
+  }
+  if (err.killed || err.code === 'ETIMEDOUT') {
+    return build('timeout', 'git took too long and was stopped.', true)
+  }
+  if (err.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' || /maxbuffer length exceeded/.test(text)) {
+    return build('repo_too_large', 'git produced more output than this can read at once.')
+  }
+  if (/not a git repository/.test(text)) {
+    return build('not_a_repository', 'That directory is not a git repository.')
+  }
+  if (/is not a working tree|worktree .* does not exist/.test(text)) {
+    return build('worktree_missing', 'That working copy is no longer on this machine.', true)
+  }
+  // git echoes the rev it could not resolve, and a rev containing a colon
+  // (`<commit>:lib/git/nope`) names a path inside a tree rather than a
+  // revision — so this is a missing path, not a missing branch.
+  if (/not a tree object|does not exist in|exists on disk, but not in|not a valid object name \S*:/.test(text)) {
+    return build('not_found', 'That path does not exist at this revision.')
+  }
+  // `Needed a single revision` is what `rev-parse --verify` says for anything
+  // it could not resolve, and it is by far the most common of these — it is
+  // the exact wording git uses for a branch that has been deleted. Verified
+  // against git 2.x on this machine rather than assumed.
+  if (/needed a single revision|unknown revision|bad revision|not a valid object name|ambiguous argument|invalid object name/.test(text)) {
+    return build('bad_ref', 'That branch, tag or commit does not exist in this repository.')
+  }
+  // Nothing recognised: git's own first line is still the best sentence
+  // available, and it is a real sentence rather than an invented code.
+  return build('unknown', stderr.split('\n')[0] || String(err.message ?? '').split('\n')[0] || 'git failed.')
 }
 
 export async function git(cwd: string, args: string[], timeoutMs = GIT_TIMEOUT_MS): Promise<string> {
@@ -49,13 +139,15 @@ export async function git(cwd: string, args: string[], timeoutMs = GIT_TIMEOUT_M
     })
     return stdout
   } catch (err) {
-    const e = err as { stderr?: string; message?: string }
-    throw new GitError(
-      (e.stderr || e.message || 'git failed').trim().split('\n')[0],
-      args,
-      (e.stderr ?? '').trim(),
-    )
+    throw await classifyGitFailure(cwd, args, err as ExecFailure)
   }
+}
+
+/** The same classification for a git process spawned elsewhere in `lib/git`
+ * — `tree.ts` reads blobs as raw buffers and cannot go through `git()`, but
+ * its failures are the same failures and must arrive with the same codes. */
+export async function gitFailureFor(cwd: string, args: string[], err: unknown): Promise<GitError> {
+  return classifyGitFailure(cwd, args, err as ExecFailure)
 }
 
 export async function isGitRepo(dir: string): Promise<boolean> {
@@ -64,6 +156,21 @@ export async function isGitRepo(dir: string): Promise<boolean> {
     return out.trim() === 'true'
   } catch {
     return false
+  }
+}
+
+/**
+ * Raises unless `dir` is a git working tree.
+ *
+ * `isGitRepo` collapses three different failures into `false` — no git on
+ * PATH, no such directory, not a repository — and a caller that has to
+ * explain itself to a person needs them apart. This lets the classified
+ * failure through instead of flattening it into a boolean.
+ */
+export async function assertGitRepo(dir: string): Promise<void> {
+  const out = (await git(dir, ['rev-parse', '--is-inside-work-tree'], 10_000)).trim()
+  if (out !== 'true') {
+    raise('not_a_repository', `${dir} is not a git working tree.`, { detail: out || undefined })
   }
 }
 
@@ -348,7 +455,7 @@ export async function unstagePaths(dir: string, paths: string[]): Promise<void> 
 }
 
 export async function commit(dir: string, message: string): Promise<GitCommit | null> {
-  if (!message.trim()) throw new Error('A commit needs a message.')
+  if (!message.trim()) raise('invalid_input', 'A commit needs a message.')
   await git(dir, ['commit', '-m', message], 60_000)
   const [head] = await readCommits(dir, 1)
   return head ?? null
@@ -446,7 +553,9 @@ export async function pathIsInside(parent: string, child: string): Promise<boole
 export async function ensureAccessible(dir: string): Promise<void> {
   try {
     await access(join(dir, '.'))
-  } catch {
-    throw new Error(`This machine cannot read ${dir}.`)
+  } catch (err) {
+    raise('worktree_missing', `This machine cannot read ${dir}.`, {
+      detail: err instanceof Error ? err.message : undefined,
+    })
   }
 }

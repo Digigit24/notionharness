@@ -13,6 +13,7 @@ import { AgentMemories } from '@/components/agents/agent-memories'
 import { AgentSettingsForm, type AgentProfile } from '@/components/agents/agent-settings-form'
 import { RuntimePingButton } from '@/components/agents/runtime-ping-button'
 import { saveAgent } from '@/app/(app)/workspace/[workspaceSlug]/agents/actions'
+import { unwrap } from '@/lib/failures'
 import type { Agent } from '@/components/agents/agent-editor'
 import type { ActiveModelConfig } from '@/lib/runtimes/hermes/providers'
 import { formatTimestamp } from '@/lib/relative-time'
@@ -76,18 +77,27 @@ export function AgentDetailView({
   const router = useRouter()
   const [agent, setAgent] = useState(initialAgent)
   const [toggleBusy, setToggleBusy] = useState(false)
+  const [toggleError, setToggleError] = useState<string | null>(null)
 
   async function toggleEnabled() {
     setToggleBusy(true)
+    setToggleError(null)
     try {
-      const updated = (await saveAgent({
-        workspaceId,
-        workspaceSlug,
-        id: agent.id,
-        data: { enabled: !agent.enabled },
-      })) as Agent
+      const updated = unwrap(
+        await saveAgent({
+          workspaceId,
+          workspaceSlug,
+          id: agent.id,
+          data: { enabled: !agent.enabled },
+        }),
+      ) as Agent
       setAgent(updated)
       router.refresh()
+    } catch (error) {
+      // Previously a bare try/finally: a refused enable/disable left the badge
+      // showing the old state with nothing said about why, which reads as the
+      // button having done nothing at all.
+      setToggleError(error instanceof Error ? error.message : 'Could not change this agent.')
     } finally {
       setToggleBusy(false)
     }
@@ -102,9 +112,12 @@ export function AgentDetailView({
   )
 
   const primaryAction = (
-    <Button type="button" size="sm" variant="outline" disabled={toggleBusy} onClick={() => void toggleEnabled()}>
-      {toggleBusy ? 'Saving…' : agent.enabled ? 'Disable agent' : 'Enable agent'}
-    </Button>
+    <div className="flex flex-col items-end gap-1">
+      <Button type="button" size="sm" variant="outline" disabled={toggleBusy} onClick={() => void toggleEnabled()}>
+        {toggleBusy ? 'Saving…' : agent.enabled ? 'Disable agent' : 'Enable agent'}
+      </Button>
+      {toggleError && <p className="max-w-64 text-right text-[11px] text-destructive">{toggleError}</p>}
+    </div>
   )
 
   const skillsCount = Array.isArray(agent.skills) ? agent.skills.length : 0

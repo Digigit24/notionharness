@@ -4,6 +4,7 @@ import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { switchActiveHermesProfile } from '@/app/(app)/workspace/[workspaceSlug]/settings/personality/actions'
 import { Button } from '@/components/ui/button'
+import { unwrap } from '@/lib/failures'
 import { toast } from '@/hooks/use-toast'
 
 // Two-click confirm, matching this codebase's established pattern (e.g.
@@ -31,7 +32,7 @@ export function SwitchActiveProfileButton({
   async function confirmSwitch() {
     setBusy(true)
     try {
-      await switchActiveHermesProfile({ workspaceSlug, profileName })
+      unwrap(await switchActiveHermesProfile({ workspaceSlug, profileName }))
       toast({ title: `Switched active Hermes profile to "${profileName}"` })
       setConfirming(false)
       startTransition(() => router.refresh())

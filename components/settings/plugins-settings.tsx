@@ -14,6 +14,7 @@ import {
   type PluginConfigOption,
   type PluginSummary,
 } from '@/app/(app)/workspace/[workspaceSlug]/settings/plugins/actions'
+import { unwrap } from '@/lib/failures'
 
 /**
  * Plugins — the tools this workspace gives its agents.
@@ -90,7 +91,7 @@ export function PluginsSettings({
     setError(null)
     startTransition(async () => {
       try {
-        await setPluginEnabled(workspaceSlug, id, enabled)
+        unwrap(await setPluginEnabled(workspaceSlug, id, enabled))
       } catch (err) {
         refresh((current) => current.map((p) => (p.id === id ? { ...p, enabled: !enabled } : p)))
         setError(err instanceof Error ? err.message : 'Could not change that plugin.')
@@ -102,7 +103,7 @@ export function PluginsSettings({
     setError(null)
     startTransition(async () => {
       try {
-        await deletePlugin(workspaceSlug, id)
+        unwrap(await deletePlugin(workspaceSlug, id))
         refresh((current) => current.filter((p) => p.id !== id))
       } catch (err) {
         setError(err instanceof Error ? err.message : `Could not delete ${name}.`)
@@ -115,19 +116,21 @@ export function PluginsSettings({
     setError(null)
     startTransition(async () => {
       try {
-        await savePlugin(workspaceSlug, {
-          id: draft.id,
-          name: draft.name,
-          description: draft.description,
-          transport: draft.transport,
-          url: draft.url,
-          command: draft.command,
-          headers: draft.headers,
-          enabled: draft.enabled,
-          scope: draft.scope,
-          agentIds: draft.agentIds,
-          configOptions: draft.configOptions,
-        })
+        unwrap(
+          await savePlugin(workspaceSlug, {
+            id: draft.id,
+            name: draft.name,
+            description: draft.description,
+            transport: draft.transport,
+            url: draft.url,
+            command: draft.command,
+            headers: draft.headers,
+            enabled: draft.enabled,
+            scope: draft.scope,
+            agentIds: draft.agentIds,
+            configOptions: draft.configOptions,
+          }),
+        )
         // Reloaded rather than patched in place: the server decides the
         // problem string and which header values survived, and guessing at
         // either here would let this list drift from what a run will see.

@@ -5,6 +5,7 @@ import { revalidatePath } from 'next/cache'
 import { fileArtifact } from '@/lib/artifacts'
 import { getPayloadClient } from '@/lib/payload'
 import { getWorkspaceBySlug } from '@/lib/pages-cache'
+import { guard, raise, type WithFailure } from '@/lib/failures'
 
 /**
  * R8.4's primary action, and R8.3's move.
@@ -27,43 +28,45 @@ export async function fileArtifacts({
   workspaceSlug: string
   artifactIds: number[]
   projectId: number | null
-}): Promise<{ filed: number }> {
-  if (artifactIds.length === 0) return { filed: 0 }
+}): Promise<WithFailure<{ filed: number }>> {
+  return guard(async () => {
+    if (artifactIds.length === 0) return { filed: 0 }
 
-  const workspace = await getWorkspaceBySlug(workspaceSlug)
-  if (!workspace) throw new Error('Workspace not found.')
+    const workspace = await getWorkspaceBySlug(workspaceSlug)
+    if (!workspace) raise('not_found', 'Workspace not found.')
 
-  const payload = await getPayloadClient()
+    const payload = await getPayloadClient()
 
-  // Ownership is checked here, per artifact, before anything moves. The
-  // client sends ids and the ids are not trustworthy; `fileArtifact` only
-  // checks that the destination project matches the artifact's workspace,
-  // which would happily move an artifact from another workspace into a
-  // project of this one if this loop did not exist.
-  //
-  // ONE query for the whole selection, not one per id: this runs on a human's
-  // click and a per-id `findByID` would put a bulk file behind N round trips
-  // to a remote database before the first row moved.
-  const found = await payload.find({
-    collection: 'artifacts',
-    where: { id: { in: artifactIds }, workspace: { equals: workspace.id } },
-    limit: artifactIds.length,
-    depth: 0,
-    select: {},
-    overrideAccess: true,
+    // Ownership is checked here, per artifact, before anything moves. The
+    // client sends ids and the ids are not trustworthy; `fileArtifact` only
+    // checks that the destination project matches the artifact's workspace,
+    // which would happily move an artifact from another workspace into a
+    // project of this one if this loop did not exist.
+    //
+    // ONE query for the whole selection, not one per id: this runs on a human's
+    // click and a per-id `findByID` would put a bulk file behind N round trips
+    // to a remote database before the first row moved.
+    const found = await payload.find({
+      collection: 'artifacts',
+      where: { id: { in: artifactIds }, workspace: { equals: workspace.id } },
+      limit: artifactIds.length,
+      depth: 0,
+      select: {},
+      overrideAccess: true,
+    })
+    const owned = found.docs.map((doc) => doc.id)
+    if (owned.length === 0) raise('not_found', 'None of those artifacts are in this workspace.')
+
+    // Sequential, not `Promise.all`: each call writes the artifact and then its
+    // page, and a bulk file is a handful of rows a human selected by hand, not
+    // a batch job. Concurrency here would buy a few milliseconds and cost the
+    // ability to say which one failed.
+    for (const id of owned) {
+      await fileArtifact(payload, id, projectId)
+    }
+
+    revalidatePath(`/workspace/${workspaceSlug}/artifacts`)
+    if (projectId != null) revalidatePath(`/workspace/${workspaceSlug}/projects/${projectId}`)
+    return { filed: owned.length }
   })
-  const owned = found.docs.map((doc) => doc.id)
-  if (owned.length === 0) throw new Error('None of those artifacts are in this workspace.')
-
-  // Sequential, not `Promise.all`: each call writes the artifact and then its
-  // page, and a bulk file is a handful of rows a human selected by hand, not
-  // a batch job. Concurrency here would buy a few milliseconds and cost the
-  // ability to say which one failed.
-  for (const id of owned) {
-    await fileArtifact(payload, id, projectId)
-  }
-
-  revalidatePath(`/workspace/${workspaceSlug}/artifacts`)
-  if (projectId != null) revalidatePath(`/workspace/${workspaceSlug}/projects/${projectId}`)
-  return { filed: owned.length }
 }

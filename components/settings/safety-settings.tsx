@@ -10,6 +10,7 @@ import {
   type SafetyPath,
   type SafetySettings,
 } from '@/app/(app)/workspace/[workspaceSlug]/settings/safety/actions'
+import { unwrap } from '@/lib/failures'
 
 function asBool(value: unknown, fallback = true): boolean {
   return typeof value === 'boolean' ? value : fallback
@@ -41,7 +42,7 @@ export function SafetySettingsView({
     setError(null)
     startTransition(async () => {
       try {
-        await saveSafetySettings({ workspaceSlug, profile: settings.profile, values })
+        unwrap(await saveSafetySettings({ workspaceSlug, profile: settings.profile, values }))
         setSaved(true)
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Could not save.')

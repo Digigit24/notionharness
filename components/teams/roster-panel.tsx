@@ -8,6 +8,7 @@ import type { TeamRoomMessage, TeamSlotHealth } from '@/lib/teams/reliability'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { unwrap } from '@/lib/failures'
 import { toast } from '@/hooks/use-toast'
 import { cn } from '@/lib/utils'
 import {
@@ -295,7 +296,7 @@ export function RosterPanel({
                   onClick={() =>
                     void run(async () => {
                       const next = slot.role === 'leader' ? null : slot.id
-                      await setLeaderAction({ workspaceId, workspaceSlug, teamId, slotId: next })
+                      unwrap(await setLeaderAction({ workspaceId, workspaceSlug, teamId, slotId: next }))
                       // Applied locally as well as revalidated, because at
                       // most one row can be leader: recomputing the whole
                       // roster keeps the crown from briefly appearing twice.
@@ -313,7 +314,9 @@ export function RosterPanel({
                   disabled={busy}
                   onClick={() =>
                     void run(async () => {
-                      onSlotsChanged(await removeSlotAction({ workspaceId, workspaceSlug, teamId, slotId: slot.id }))
+                      onSlotsChanged(
+                        unwrap(await removeSlotAction({ workspaceId, workspaceSlug, teamId, slotId: slot.id })),
+                      )
                     }, 'Could not remove the member')
                   }
                 >
@@ -373,14 +376,16 @@ export function RosterPanel({
                 onClick={() =>
                   void run(async () => {
                     onSlotsChanged(
-                      await addSlotAction({
-                        workspaceId,
-                        workspaceSlug,
-                        teamId,
-                        agentId: addKind === 'agent' ? addingId : null,
-                        userId: addKind === 'user' ? addingId : null,
-                        displayName,
-                      }),
+                      unwrap(
+                        await addSlotAction({
+                          workspaceId,
+                          workspaceSlug,
+                          teamId,
+                          agentId: addKind === 'agent' ? addingId : null,
+                          userId: addKind === 'user' ? addingId : null,
+                          displayName,
+                        }),
+                      ),
                     )
                     setAddingId(null)
                     setDisplayName('')
@@ -422,7 +427,7 @@ export function RosterPanel({
             disabled={busy}
             onClick={() =>
               void run(async () => {
-                setDeadLetters(await listTeamDeadLettersAction({ workspaceId, teamId }))
+                setDeadLetters(unwrap(await listTeamDeadLettersAction({ workspaceId, teamId })))
               }, 'Could not read the dead-letter queue')
             }
           >
@@ -471,7 +476,7 @@ export function RosterPanel({
           disabled={busy}
           onClick={() =>
             void run(async () => {
-              await deleteTeamAction({ workspaceId, workspaceSlug, teamId })
+              unwrap(await deleteTeamAction({ workspaceId, workspaceSlug, teamId }))
               router.push(`/workspace/${workspaceSlug}/teams`)
             }, 'Could not delete the channel')
           }

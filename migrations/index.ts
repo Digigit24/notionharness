@@ -1,3 +1,4 @@
+import * as migration_20260904_190000_runtime_default_session_config from './20260904_190000_runtime_default_session_config';
 import * as migration_20260831_181832_initial from './20260831_181832_initial';
 import * as migration_20260901_034500_teable_databases_base_id from './20260901_034500_teable_databases_base_id';
 import * as migration_20260902_000000_user_databases from './20260902_000000_user_databases';
@@ -125,5 +126,10 @@ export const migrations = [
     up: migration_20260904_120000_runtime_profile_handshake.up,
     down: migration_20260904_120000_runtime_profile_handshake.down,
     name: '20260904_120000_runtime_profile_handshake'
+  },
+  {
+    up: migration_20260904_190000_runtime_default_session_config.up,
+    down: migration_20260904_190000_runtime_default_session_config.down,
+    name: '20260904_190000_runtime_default_session_config'
   },
 ];

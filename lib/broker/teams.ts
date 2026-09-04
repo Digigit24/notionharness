@@ -12,6 +12,8 @@
 // leader degrades the team to self-service rather than stopping it, and the UI
 // says so plainly instead of looking busy.
 import { getBrokerPool } from './db'
+import { bestEffort } from '@/lib/failures'
+import { logger } from '@/lib/logger'
 
 export type TeamWorkspaceMode = 'shared' | 'per_member'
 export type TeamRole = 'leader' | 'member'
@@ -171,11 +173,11 @@ export async function createTeam(input: {
     const { ensureTeamMcpPlugin } = await import('@/lib/teams/registration')
     await ensureTeamMcpPlugin(team.workspaceId)
   } catch (err) {
-    console.warn(
-      `[teams] Could not register the team MCP plugin for workspace ${team.workspaceId}; ` +
-        `dispatched members of team ${team.id} will have no team tools until it exists.`,
-      err,
-    )
+    logger.warn('could not register the team MCP plugin — dispatched members have no team tools until it exists', {
+      workspaceId: team.workspaceId,
+      teamId: team.id,
+      error: String(err),
+    })
   }
 
   return team
@@ -301,7 +303,10 @@ export async function setTeamLeader(teamId: number, slotId: number | null): Prom
     }
     await client.query('COMMIT')
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => undefined)
+    await bestEffort(
+      client.query('ROLLBACK'),
+      'the original error is what the caller needs; a rollback that also fails must not replace it',
+    )
     throw err
   } finally {
     client.release()
@@ -526,7 +531,10 @@ export async function createTeamTask(input: {
     if (!created) throw new Error('Task vanished immediately after creation.')
     return created
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => undefined)
+    await bestEffort(
+      client.query('ROLLBACK'),
+      'the original error is what the caller needs; a rollback that also fails must not replace it',
+    )
     throw err
   } finally {
     client.release()
@@ -696,7 +704,10 @@ export async function reportTeamTaskDone(input: {
     const [task, released] = await Promise.all([getTeamTask(input.taskId), claimableTasks(teamId)])
     return { task, released }
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => undefined)
+    await bestEffort(
+      client.query('ROLLBACK'),
+      'the original error is what the caller needs; a rollback that also fails must not replace it',
+    )
     throw err
   } finally {
     client.release()

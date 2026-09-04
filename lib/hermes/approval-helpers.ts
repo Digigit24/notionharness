@@ -1,4 +1,5 @@
 import { getPayloadClient } from '@/lib/payload'
+import { bestEffort } from '@/lib/failures'
 import type { ApprovalOption, ApprovalStatus } from '@/collections/Approvals'
 import type { ApprovalOutcome } from '@/lib/run-events'
 
@@ -86,18 +87,20 @@ export async function waitForApproval(
  * moved on, and a bookkeeping failure must not become a run failure.
  */
 async function markApprovalTimedOut(externalId: string): Promise<void> {
-  try {
-    const payload = await getPayloadClient()
-    const timedOut: ApprovalStatus = 'timeout'
-    await payload.update({
-      collection: 'approvals',
-      where: { externalId: { equals: externalId }, status: { equals: 'pending' } },
-      data: { status: timedOut },
-      overrideAccess: true,
-    })
-  } catch (err) {
-    console.warn(`[approvals] Could not mark approval ${externalId} as timed out.`, err)
-  }
+  await bestEffort(
+    async () => {
+      const payload = await getPayloadClient()
+      const timedOut: ApprovalStatus = 'timeout'
+      await payload.update({
+        collection: 'approvals',
+        where: { externalId: { equals: externalId }, status: { equals: 'pending' } },
+        data: { status: timedOut },
+        overrideAccess: true,
+      })
+    },
+    'the waiter has already been answered with a denial; a stale row must not also fail the turn',
+    { externalId },
+  )
 }
 
 export async function resolveApproval(

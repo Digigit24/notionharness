@@ -5,6 +5,7 @@ import { ArrowDown, AtSign, Hash, UserPlus } from 'lucide-react'
 import type { ChannelApproval, TeamMessageKind, TeamTask } from '@/lib/broker'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { unwrap } from '@/lib/failures'
 import { toast } from '@/hooks/use-toast'
 import { useKeyboardShortcut } from '@/lib/keyboard/use-keyboard-shortcut'
 import {
@@ -343,7 +344,9 @@ export function ChannelView({
     async (messageId: number, emoji: string) => {
       if (mySlotId == null) return
       try {
-        const { added, actorSlotId } = await toggleReactionAction({ workspaceId, teamId, messageId, emoji })
+        const { added, actorSlotId } = unwrap(
+          await toggleReactionAction({ workspaceId, teamId, messageId, emoji }),
+        )
         const message = feed.find((m) => m.id === messageId)
         if (!message) return
         onPatchMessage(messageId, {
@@ -478,14 +481,16 @@ export function ChannelView({
   const send = useCallback(
     async (input: { body: string; kind: TeamMessageKind; toSlotId: number | null }) => {
       try {
-        const result = await postChannelMessageAction({
-          workspaceId,
-          teamId,
-          body: input.body,
-          kind: input.kind,
-          toSlotId: input.toSlotId,
-          threadRootId: null,
-        })
+        const result = unwrap(
+          await postChannelMessageAction({
+            workspaceId,
+            teamId,
+            body: input.body,
+            kind: input.kind,
+            toSlotId: input.toSlotId,
+            threadRootId: null,
+          }),
+        )
         // Appended from the returned row rather than refetching the channel:
         // the insert already told us exactly what landed, and re-reading the
         // room to show a message we are holding is the round trip D0 forbids.

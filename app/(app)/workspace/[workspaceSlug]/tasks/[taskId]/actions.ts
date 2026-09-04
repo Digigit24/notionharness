@@ -12,6 +12,7 @@ import { recordActivity } from '@/lib/activity'
 import { ensureTaskPage } from '@/lib/task-pages'
 import { enqueueRun, type Run } from '@/lib/broker'
 import { createTask } from '@/app/(app)/workspace/[workspaceSlug]/tasks/actions'
+import { bestEffort, guard, raise, type WithFailure } from '@/lib/failures'
 import type { Comment, Task } from '@/payload-types'
 
 function taskDetailPath(workspaceSlug: string, taskId: number) {
@@ -22,17 +23,19 @@ function taskDetailPath(workspaceSlug: string, taskId: number) {
 // Work tab — comments (the "Enter" verb of the composer).
 // ---------------------------------------------------------------------------
 
-export async function listTaskComments(taskId: number): Promise<Comment[]> {
-  const payload = await getPayloadClient()
-  const result = await payload.find({
-    collection: 'comments',
-    where: { task: { equals: taskId } },
-    sort: 'createdAt',
-    limit: 200,
-    depth: 1,
-    overrideAccess: true,
+export async function listTaskComments(taskId: number): Promise<WithFailure<Comment[]>> {
+  return guard(async () => {
+    const payload = await getPayloadClient()
+    const result = await payload.find({
+      collection: 'comments',
+      where: { task: { equals: taskId } },
+      sort: 'createdAt',
+      limit: 200,
+      depth: 1,
+      overrideAccess: true,
+    })
+    return result.docs
   })
-  return result.docs
 }
 
 export async function createTaskComment({
@@ -43,35 +46,37 @@ export async function createTaskComment({
   taskId: number
   workspaceSlug: string
   body: string
-}): Promise<Comment> {
-  const text = body.trim()
-  if (!text) throw new Error('Comment cannot be empty.')
-  const payload = await getPayloadClient()
-  const user = await getCurrentPayloadUser()
-  if (!user) throw new Error('You must be logged in to comment.')
+}): Promise<WithFailure<Comment>> {
+  return guard(async () => {
+    const text = body.trim()
+    if (!text) raise('invalid_input', 'Comment cannot be empty.')
+    const payload = await getPayloadClient()
+    const user = await getCurrentPayloadUser()
+    if (!user) raise('unauthenticated', 'You must be logged in to comment.')
 
-  const comment = await payload.create({
-    collection: 'comments',
-    data: { task: taskId, author: user.id, body: text },
-    depth: 1,
-    overrideAccess: true,
-  })
-
-  try {
-    await recordActivity({
-      payload,
-      entityType: 'task',
-      entityId: String(taskId),
-      actor: user.id,
-      action: 'commented',
-      details: { commentId: comment.id },
+    const comment = await payload.create({
+      collection: 'comments',
+      data: { task: taskId, author: user.id, body: text },
+      depth: 1,
+      overrideAccess: true,
     })
-  } catch (err) {
-    console.error('[task-detail] Failed to record comment activity.', err)
-  }
 
-  revalidatePath(taskDetailPath(workspaceSlug, taskId))
-  return comment
+    await bestEffort(
+      recordActivity({
+        payload,
+        entityType: 'task',
+        entityId: String(taskId),
+        actor: user.id,
+        action: 'commented',
+        details: { commentId: comment.id },
+      }),
+      'the comment is already written; a missing activity row must not tell the author their comment failed',
+      { taskId, commentId: comment.id },
+    )
+
+    revalidatePath(taskDetailPath(workspaceSlug, taskId))
+    return comment
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -91,34 +96,38 @@ export async function startTaskRun({
   workspaceSlug: string
   agentId: number
   prompt?: string
-}): Promise<Run> {
-  const user = await getCurrentPayloadUser()
-  if (!user) throw new Error('You must be logged in to start a run.')
+}): Promise<WithFailure<Run>> {
+  return guard(async () => {
+    const user = await getCurrentPayloadUser()
+    if (!user) raise('unauthenticated', 'You must be logged in to start a run.')
 
-  const run = await enqueueRun({
-    taskId,
-    agentId,
-    originatorUser: user.id,
-    accountableUser: user.id,
-    prompt: prompt?.trim() ? prompt.trim() : null,
-  })
-
-  try {
-    const payload = await getPayloadClient()
-    await recordActivity({
-      payload,
-      entityType: 'task',
-      entityId: String(taskId),
-      actor: user.id,
-      action: 'run_started',
-      details: { runId: run.id, agentId },
+    const run = await enqueueRun({
+      taskId,
+      agentId,
+      originatorUser: user.id,
+      accountableUser: user.id,
+      prompt: prompt?.trim() ? prompt.trim() : null,
     })
-  } catch (err) {
-    console.error('[task-detail] Failed to record run-started activity.', err)
-  }
 
-  revalidatePath(taskDetailPath(workspaceSlug, taskId))
-  return run
+    await bestEffort(
+      async () => {
+        const payload = await getPayloadClient()
+        await recordActivity({
+          payload,
+          entityType: 'task',
+          entityId: String(taskId),
+          actor: user.id,
+          action: 'run_started',
+          details: { runId: run.id, agentId },
+        })
+      },
+      'the run is already queued; a missing activity row must not report the run as failed to start',
+      { taskId, runId: run.id },
+    )
+
+    revalidatePath(taskDetailPath(workspaceSlug, taskId))
+    return run
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -127,11 +136,13 @@ export async function startTaskRun({
 // wraps it with this page's revalidation.
 // ---------------------------------------------------------------------------
 
-export async function ensureTaskDocument(taskId: number, workspaceSlug: string): Promise<number> {
-  const payload = await getPayloadClient()
-  const pageId = await ensureTaskPage(payload, taskId)
-  revalidatePath(taskDetailPath(workspaceSlug, taskId))
-  return pageId
+export async function ensureTaskDocument(taskId: number, workspaceSlug: string): Promise<WithFailure<number>> {
+  return guard(async () => {
+    const payload = await getPayloadClient()
+    const pageId = await ensureTaskPage(payload, taskId)
+    revalidatePath(taskDetailPath(workspaceSlug, taskId))
+    return pageId
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -142,18 +153,20 @@ export async function ensureTaskDocument(taskId: number, workspaceSlug: string):
 // activity, auto-follow all already handled there) and adds one link row.
 // ---------------------------------------------------------------------------
 
-export async function listSubtasks(taskId: number): Promise<Task[]> {
-  const payload = await getPayloadClient()
-  const links = await payload.find({
-    collection: 'task-links',
-    where: { fromTask: { equals: taskId }, linkType: { equals: 'parentOf' } },
-    limit: 200,
-    depth: 1,
-    overrideAccess: true,
+export async function listSubtasks(taskId: number): Promise<WithFailure<Task[]>> {
+  return guard(async () => {
+    const payload = await getPayloadClient()
+    const links = await payload.find({
+      collection: 'task-links',
+      where: { fromTask: { equals: taskId }, linkType: { equals: 'parentOf' } },
+      limit: 200,
+      depth: 1,
+      overrideAccess: true,
+    })
+    return links.docs
+      .map((link) => (typeof link.toTask === 'object' ? link.toTask : null))
+      .filter((t): t is Task => t !== null)
   })
-  return links.docs
-    .map((link) => (typeof link.toTask === 'object' ? link.toTask : null))
-    .filter((t): t is Task => t !== null)
 }
 
 export async function createSubtask({
@@ -168,25 +181,31 @@ export async function createSubtask({
   workspaceSlug: string
   statusId: number
   title: string
-}): Promise<Task> {
-  const user = await getCurrentPayloadUser()
-  if (!user) throw new Error('You must be logged in to create a sub-task.')
+}): Promise<WithFailure<Task>> {
+  return guard(async () => {
+    const user = await getCurrentPayloadUser()
+    if (!user) raise('unauthenticated', 'You must be logged in to create a sub-task.')
 
-  const task = await createTask({
-    workspaceId,
-    workspaceSlug,
-    statusId,
-    title,
-    createdById: user.id,
+    // `createTask` still throws rather than returning a failure (it is shared
+    // with the command bar and the editor's task block — see that file's
+    // header). Called from inside `guard`, its throw is enveloped here just
+    // the same, so this call site needs no adapter when it is converted.
+    const task = await createTask({
+      workspaceId,
+      workspaceSlug,
+      statusId,
+      title,
+      createdById: user.id,
+    })
+
+    const payload = await getPayloadClient()
+    await payload.create({
+      collection: 'task-links',
+      data: { fromTask: parentTaskId, toTask: task.id, linkType: 'parentOf' },
+      overrideAccess: true,
+    })
+
+    revalidatePath(taskDetailPath(workspaceSlug, parentTaskId))
+    return task
   })
-
-  const payload = await getPayloadClient()
-  await payload.create({
-    collection: 'task-links',
-    data: { fromTask: parentTaskId, toTask: task.id, linkType: 'parentOf' },
-    overrideAccess: true,
-  })
-
-  revalidatePath(taskDetailPath(workspaceSlug, parentTaskId))
-  return task
 }

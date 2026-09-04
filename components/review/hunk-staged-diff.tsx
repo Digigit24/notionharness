@@ -39,6 +39,16 @@ import {
   type SessionFileHunks,
 } from '@/app/(app)/workspace/[workspaceSlug]/work/git-actions'
 import { SideBySideDiff, type StageableHunk } from './side-by-side-diff'
+import { ClientFailure, unwrap, type FailureInfo } from '@/lib/failures'
+
+/** The server's own sentence and underlying text, which only survive because
+ * `unwrap` re-throws in the browser. */
+function toFailureInfo(err: unknown, fallback: string): FailureInfo {
+  if (err instanceof ClientFailure) {
+    return { code: err.code, message: err.message, detail: err.detail, retryable: err.retryable }
+  }
+  return { code: 'unknown', message: err instanceof Error ? err.message : fallback, retryable: false }
+}
 
 export function HunkStagedDiff({
   sessionId,
@@ -67,7 +77,10 @@ export function HunkStagedDiff({
 }) {
   const [data, setData] = useState<SessionFileHunks | null>(null)
   const [loading, setLoading] = useState(!untracked)
-  const [error, setError] = useState<string | null>(null)
+  // The whole failure: a hunk that will not apply is explained by git's own
+  // `error: patch failed: …` line, and the sentence above it cannot name the
+  // line that moved.
+  const [error, setError] = useState<FailureInfo | null>(null)
   const [pending, setPending] = useState<string | null>(null)
 
   // Which (path, staged) the newest request was for. A person clicking down a
@@ -85,12 +98,15 @@ export function HunkStagedDiff({
     setLoading(true)
     setError(null)
     try {
-      const result = await getSessionFileHunks(sessionId, path, { staged })
+      // `unwrap` whether or not this action has been migrated to return its
+      // failures: it passes a plain value straight through, and turns an
+      // envelope into an Error the browser itself created.
+      const result = unwrap(await getSessionFileHunks(sessionId, path, { staged }))
       if (requestRef.current !== token) return
       setData(result)
     } catch (err) {
       if (requestRef.current !== token) return
-      setError(err instanceof Error ? err.message : 'Could not read this diff.')
+      setError(toFailureInfo(err, 'Could not read this diff.'))
     } finally {
       if (requestRef.current === token) setLoading(false)
     }
@@ -106,20 +122,20 @@ export function HunkStagedDiff({
     const token = requestRef.current
     try {
       const input = { path, hunkIndex: hunk.index, fingerprint: hunk.fingerprint }
-      const result = staged
-        ? await unstageSessionHunk(sessionId, input)
-        : await stageSessionHunk(sessionId, input)
+      const result = unwrap(
+        staged ? await unstageSessionHunk(sessionId, input) : await stageSessionHunk(sessionId, input),
+      )
       // Ignore a result that arrived after the user moved to another file.
       if (requestRef.current !== token) return
       // The action already re-read this side of the diff, so the new state is
       // in hand — no second fetch, and no window where the buttons still refer
       // to hunks that have moved.
       if (result.next) setData(result.next)
-      if (!result.ok) setError(result.message ?? 'That hunk could not be applied.')
+      if (!result.ok) setError({ code: 'conflict', message: result.message ?? 'That hunk could not be applied.', retryable: false })
       else onChanged?.()
     } catch (err) {
       if (requestRef.current !== token) return
-      setError(err instanceof Error ? err.message : 'That hunk could not be applied.')
+      setError(toFailureInfo(err, 'That hunk could not be applied.'))
     } finally {
       setPending((current) => (current === hunk.fingerprint ? null : current))
     }
@@ -136,9 +152,14 @@ export function HunkStagedDiff({
   return (
     <div className="min-w-0">
       {error && (
-        <p className="border-b border-black/10 px-3 py-1.5 text-xs text-red-600 dark:border-white/10 dark:text-red-400">
-          {error}
-        </p>
+        <div className="border-b border-black/10 px-3 py-1.5 dark:border-white/10">
+          <p className="text-xs text-red-600 dark:text-red-400">{error.message}</p>
+          {error.detail && (
+            <pre className="mt-1 max-h-28 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-red-600/70 dark:text-red-400/70">
+              {error.detail}
+            </pre>
+          )}
+        </div>
       )}
       {loading && !data && (
         <p className="flex items-center gap-1.5 p-3 text-xs text-black/40 dark:text-white/40">

@@ -32,6 +32,7 @@
 // Anything the slot did leaves at least one of these, and none of them can be
 // produced by a slot that is not there.
 import { createHash } from 'node:crypto'
+import { bestEffort } from '@/lib/failures'
 import { getBrokerPool, releaseTeamTask, type TeamMember, type TeamMessage, type TeamRole } from '@/lib/broker'
 
 /**
@@ -797,14 +798,16 @@ export async function runTeamToolOnce(key: TeamToolCallKey, effect: () => Promis
     )
     return result
   } catch (err) {
-    await pool
-      .query(
+    await bestEffort(
+      pool.query(
         `DELETE FROM team_tool_calls
           WHERE slot_id = $1 AND tool = $2 AND COALESCE(task_id, -1) = COALESCE($3::bigint, -1)
             AND fingerprint = $4 AND status = 'in_progress'`,
         [key.slotId, key.tool, taskId, fingerprint],
-      )
-      .catch(() => undefined)
+      ),
+      'the tool call already failed; leaving its in-progress row behind is better than replacing that failure with this one',
+      { slotId: key.slotId, tool: key.tool, taskId },
+    )
     throw err
   }
 }

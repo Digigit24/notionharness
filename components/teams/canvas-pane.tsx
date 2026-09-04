@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { ExternalLink, Loader2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { PaneBoundary } from '@/components/ui/pane-boundary'
+import { ClientFailure, unwrap } from '@/lib/failures'
 import { BlockSuiteEditor } from '@/components/editor/BlockSuiteEditor'
 import {
   ensureChannelCanvasAction,
@@ -48,7 +50,7 @@ export function CanvasPane({
   onClose: () => void
 }) {
   const [canvas, setCanvas] = useState<ChannelCanvas | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<{ message: string; detail?: string } | null>(null)
 
   // Created and loaded on first OPEN, not on room mount. Most channels never
   // grow a canvas, and creating one per channel up front would fill the
@@ -58,10 +60,17 @@ export function CanvasPane({
     setError(null)
     ensureChannelCanvasAction({ workspaceId, teamId })
       .then((result) => {
-        if (!cancelled) setCanvas(result)
+        if (!cancelled) setCanvas(unwrap(result))
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Could not open the canvas.')
+        if (cancelled) return
+        setError({
+          message: err instanceof Error ? err.message : 'Could not open the canvas.',
+          // The underlying text, when the failure carried one. This is the
+          // pane that diagnoses a missing migration (see the action), and the
+          // driver's own sentence is the only thing on screen that says which.
+          detail: err instanceof ClientFailure ? err.detail : undefined,
+        })
       })
     return () => {
       cancelled = true
@@ -70,49 +79,59 @@ export function CanvasPane({
 
   return (
     <aside className="flex min-h-0 w-[26rem] shrink-0 flex-col rounded-xl border border-black/10 dark:border-white/10">
-      <header className="flex shrink-0 items-center gap-2 border-b border-black/10 px-3 py-2 dark:border-white/10">
-        <span className="min-w-0 flex-1">
-          <span className="block text-sm font-semibold">Canvas</span>
-          <span className="block truncate text-[11px] text-black/45 dark:text-white/45">
-            The channel&apos;s document — #{channelName}
+      {/* R12-P1.2 — same reason as the thread beside it: this pane is a
+          BlockSuite document inside the channel route, not a route of its own,
+          so without a boundary here a bad doc state takes the room's feed with
+          it. The failed state above only covers the action that FETCHES the
+          canvas; this covers the editor that renders it. */}
+      <PaneBoundary label="The canvas">
+        <header className="flex shrink-0 items-center gap-2 border-b border-black/10 px-3 py-2 dark:border-white/10">
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-semibold">Canvas</span>
+            <span className="block truncate text-[11px] text-black/45 dark:text-white/45">
+              The channel&apos;s document — #{channelName}
+            </span>
           </span>
-        </span>
-        {canvas && (
-          <Link
-            href={`/workspace/${workspaceSlug}/p/${canvas.pageId}`}
-            title="Open the canvas as a full page"
-            className="rounded p-1 text-black/45 hover:bg-black/[.06] dark:text-white/45 dark:hover:bg-white/[.10]"
-          >
-            <ExternalLink size={13} />
-          </Link>
-        )}
-        <Button type="button" size="icon-xs" variant="ghost" onClick={onClose} title="Close canvas">
-          <X size={13} />
-        </Button>
-      </header>
+          {canvas && (
+            <Link
+              href={`/workspace/${workspaceSlug}/p/${canvas.pageId}`}
+              title="Open the canvas as a full page"
+              className="rounded p-1 text-black/45 hover:bg-black/[.06] dark:text-white/45 dark:hover:bg-white/[.10]"
+            >
+              <ExternalLink size={13} />
+            </Link>
+          )}
+          <Button type="button" size="icon-xs" variant="ghost" onClick={onClose} title="Close canvas">
+            <X size={13} />
+          </Button>
+        </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {error ? (
-          // Said out loud rather than left as an empty pane. A canvas that
-          // silently fails to appear is indistinguishable from one that is
-          // simply blank, and the difference matters to whoever has to fix it.
-          <p className="px-3 py-6 text-xs text-red-600 dark:text-red-400">{error}</p>
-        ) : canvas == null ? (
-          <p className="flex items-center justify-center gap-2 py-10 text-xs text-black/40 dark:text-white/40">
-            <Loader2 size={13} className="animate-spin" />
-            Opening the canvas…
-          </p>
-        ) : (
-          <BlockSuiteEditor
-            pageId={canvas.pageId}
-            workspaceId={workspaceId}
-            workspaceSlug={workspaceSlug}
-            initialTitle={canvas.title}
-            initialDocState={canvas.docState}
-            locked={canvas.isLocked}
-          />
-        )}
-      </div>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {error ? (
+            // Said out loud rather than left as an empty pane. A canvas that
+            // silently fails to appear is indistinguishable from one that is
+            // simply blank, and the difference matters to whoever has to fix it.
+            <div className="px-3 py-6 text-xs text-red-600 dark:text-red-400">
+              <p>{error.message}</p>
+              {error.detail && <p className="mt-1 break-words opacity-70">{error.detail}</p>}
+            </div>
+          ) : canvas == null ? (
+            <p className="flex items-center justify-center gap-2 py-10 text-xs text-black/40 dark:text-white/40">
+              <Loader2 size={13} className="animate-spin" />
+              Opening the canvas…
+            </p>
+          ) : (
+            <BlockSuiteEditor
+              pageId={canvas.pageId}
+              workspaceId={workspaceId}
+              workspaceSlug={workspaceSlug}
+              initialTitle={canvas.title}
+              initialDocState={canvas.docState}
+              locked={canvas.isLocked}
+            />
+          )}
+        </div>
+      </PaneBoundary>
     </aside>
   )
 }

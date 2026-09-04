@@ -5,6 +5,7 @@ import { CheckCircle2, Loader2, Plug, XCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ProfilePills } from './profile-pills'
 import { setMcpEnabled, testMcp, type McpSettings, type McpTestResult } from '@/app/(app)/workspace/[workspaceSlug]/settings/mcp/actions'
+import { unwrap } from '@/lib/failures'
 import { formatCount } from '@/lib/relative-time'
 
 /** Connected MCP tool servers for one Hermes profile. */
@@ -26,7 +27,7 @@ export function McpSettingsView({
     setError(null)
     startTransition(async () => {
       try {
-        await setMcpEnabled({ workspaceSlug, profile: settings.profile, name, enabled })
+        unwrap(await setMcpEnabled({ workspaceSlug, profile: settings.profile, name, enabled }))
       } catch (err) {
         setServers((current) => current.map((s) => (s.name === name ? { ...s, enabled: !enabled } : s)))
         setError(err instanceof Error ? err.message : 'Could not change that server.')
@@ -39,8 +40,13 @@ export function McpSettingsView({
     setError(null)
     startTransition(async () => {
       try {
-        const result = await testMcp(settings.profile, name)
+        const result = unwrap(await testMcp(settings.profile, name))
         setResults((current) => ({ ...current, [name]: result }))
+      } catch (err) {
+        // Previously a bare try/finally: a test that could not even be
+        // started rejected the transition and the row simply stayed blank,
+        // so the button looked broken rather than saying what was wrong.
+        setError(err instanceof Error ? err.message : 'Could not test that server.')
       } finally {
         setTesting(null)
       }

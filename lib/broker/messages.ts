@@ -1,5 +1,6 @@
 import { getBrokerPool } from './db'
 import { RUN_EVENTS_CHANNEL } from './notify'
+import { bestEffort } from '@/lib/failures'
 import type { RunEvent, RunMessageRow } from './types'
 
 /** Appends one RunEvent to a run's transcript, assigning it a fresh monotonic
@@ -115,7 +116,10 @@ export async function appendRunEventsBatch(
     await client.query(`SELECT pg_notify($1, $2)`, [RUN_EVENTS_CHANNEL, JSON.stringify({ runId })])
     await client.query('COMMIT')
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {})
+    await bestEffort(
+      client.query('ROLLBACK'),
+      'the original error is what the caller needs; a rollback that also fails must not replace it',
+    )
     throw err
   } finally {
     client.release()

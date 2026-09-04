@@ -9,6 +9,7 @@ import {
   TERMINAL_STATUSES,
 } from '@/lib/broker'
 import type { Run, RunMessageRow } from '@/lib/broker/types'
+import { logger } from '@/lib/logger'
 
 // SSE needs a long-lived, uncached, Node-runtime connection — never the
 // Edge runtime (the `pg` pool in lib/broker/db.ts is Node-only) and never
@@ -244,7 +245,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
           // Transient DB hiccup: keep the connection open. The NOTIFY
           // subscription and the fallback timer both still fire again
           // regardless, so this isn't the last chance to catch up.
-          console.error(`[runs/${runId}/events/stream] poll failed`, err)
+          logger.error('run event poll failed', err, { runId })
         } finally {
           polling = false
           if (!closed && pollAgain) {
@@ -272,7 +273,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
           }
           unsubscribe = unsub
         })
-        .catch((err) => console.error(`[runs/${runId}/events/stream] notify subscribe failed`, err))
+        .catch((err) => logger.error('run event notify subscribe failed', err, { runId }))
 
       fallbackTimer = setInterval(() => void poll({ checkStatus: true }), FALLBACK_POLL_INTERVAL_MS)
 

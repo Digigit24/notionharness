@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Lock, LockOpen, Maximize2, Minimize2, MoreHorizontal, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { PopoverMenu } from '@/components/ui/popover-menu'
+import { PaneBoundary } from '@/components/ui/pane-boundary'
 import { Breadcrumbs } from '@/components/nav/breadcrumbs'
 import { PageOriginHeader } from '@/components/canvas/page-origin-header'
 import type { PageOrigin } from '@/lib/page-origin'
@@ -247,18 +248,27 @@ export function PageCanvas({
             onTimeFilterChange={setTimeFilter}
           />
 
+          {/* R12-P1.2 — only the editor is inside the boundary. BlockSuite
+              mounts a CRDT document and a pile of extensions against a doc
+              state we did not write and cannot validate up front, so it is the
+              part of this screen most likely to throw at render; the title,
+              the breadcrumbs, the cover and the lock/archive menu are plain
+              React over a row we already have. Scoped this way, a document
+              that will not open still lets you rename it, lock it or leave. */}
           <div className="mt-8">
-            <BlockSuiteEditor
-              key={page.id}
-              pageId={page.id}
-              workspaceId={workspace.id}
-              workspaceSlug={workspace.slug}
-              initialTitle={page.title || 'Untitled'}
-              provenance={provenance}
-              staleBeforeMs={staleBeforeMs}
-              initialDocState={page.docState}
-              locked={locked}
-            />
+            <PaneBoundary label="The editor">
+              <BlockSuiteEditor
+                key={page.id}
+                pageId={page.id}
+                workspaceId={workspace.id}
+                workspaceSlug={workspace.slug}
+                initialTitle={page.title || 'Untitled'}
+                provenance={provenance}
+                staleBeforeMs={staleBeforeMs}
+                initialDocState={page.docState}
+                locked={locked}
+              />
+            </PaneBoundary>
           </div>
         </div>
 

@@ -32,6 +32,15 @@ export const RuntimeProfiles: CollectionConfig = {
       ],
     },
     { name: 'handshake', type: 'json' },
+    // R12-P4.1 - what this runtime does unless an agent says otherwise.
+    //
+    // Same flat `{ [configId]: value }` shape as `agents.runtimeConfig`,
+    // because the dispatcher merges the two and a second shape would mean a
+    // translation step between them. The ids come from the runtime's own
+    // handshake (`sessionConfigOptions`), so nothing here names a specific CLI
+    // or a specific model - a runtime that ships a new option gets it for free
+    // at the next probe.
+    { name: 'defaultSessionConfig', type: 'json', defaultValue: {} },
     // Machine-readable probe outcome, not a translated sentence: 'ok',
     // 'command_not_found', 'acp_init_failed', 'acp_init_timeout',
     // 'spawn_failed'. A UI maps these to words; a log can be grepped for them.

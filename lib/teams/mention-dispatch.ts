@@ -11,6 +11,7 @@
 // belong somewhere a person can find them.
 import { channelMessageHasRun, enqueueRun } from '@/lib/broker/runs'
 import { getSession } from '@/lib/broker/sessions'
+import { bestEffort } from '@/lib/failures'
 import type { ChannelMessage } from '@/lib/broker/channels'
 
 /**
@@ -104,7 +105,12 @@ export async function dispatchMentions(input: {
 
   // One check for the whole message, not one per slot: the guard is "has this
   // message been dispatched", and two mentions in one message are one dispatch.
-  if (await channelMessageHasRun(input.message.id).catch(() => false)) {
+  const alreadyDispatched = await bestEffort(
+    channelMessageHasRun(input.message.id),
+    'a duplicate-guard we cannot read must not stop the mention from being answered at all',
+    { channelMessageId: input.message.id },
+  )
+  if (alreadyDispatched) {
     for (const slotId of mentionedSlotIds) {
       const slot = input.roster.find((m) => m.id === slotId)
       result.skipped.push({
@@ -137,7 +143,11 @@ export async function dispatchMentions(input: {
 
     // A slot whose session has since been deleted would enqueue a run that can
     // never resolve its team binding.
-    const session = await getSession(slot.sessionId).catch(() => null)
+    const session = await bestEffort(
+      getSession(slot.sessionId),
+      'a session we cannot read is treated as gone, which is said out loud below rather than dispatched blind',
+      { slotId, sessionId: slot.sessionId },
+    )
     if (!session) {
       result.skipped.push({ slotId, displayName: label, reason: 'its conversation no longer exists' })
       continue

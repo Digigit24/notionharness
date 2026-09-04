@@ -4,6 +4,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import Link from 'next/link'
 import { listAgentHermesProfiles, saveAgent } from '@/app/(app)/workspace/[workspaceSlug]/agents/actions'
 import { Button } from '@/components/ui/button'
+import { unwrap } from '@/lib/failures'
 import type { Agent } from '@/components/agents/agent-editor'
 import type { ActiveModelConfig } from '@/lib/runtimes/hermes/providers'
 import type { HermesProfileSummary } from '@/lib/runtimes/hermes/profiles'
@@ -114,8 +115,8 @@ export function AgentSettingsForm({
     if (!usesHermesHome) return
     let cancelled = false
     void listAgentHermesProfiles()
-      .then((list) => {
-        if (!cancelled) setHermesProfiles(list)
+      .then((result) => {
+        if (!cancelled) setHermesProfiles(unwrap(result))
       })
       // A failure here must not block editing everything else on the form —
       // the picker simply stays on whatever the agent already had.
@@ -159,18 +160,20 @@ export function AgentSettingsForm({
     }
 
     try {
-      const result = (await saveAgent({
-        workspaceId,
-        workspaceSlug,
-        id: agent?.id,
-        data: {
-          ...draft,
-          ...advanced,
-          name: draft.name.trim(),
-          instructions: draft.instructions || undefined,
-          maxConcurrentRuns: Number(draft.maxConcurrentRuns),
-        },
-      })) as Agent
+      const result = unwrap(
+        await saveAgent({
+          workspaceId,
+          workspaceSlug,
+          id: agent?.id,
+          data: {
+            ...draft,
+            ...advanced,
+            name: draft.name.trim(),
+            instructions: draft.instructions || undefined,
+            maxConcurrentRuns: Number(draft.maxConcurrentRuns),
+          },
+        }),
+      ) as Agent
 
       onSaved(result)
       setDraft(buildDraft(result, profiles))

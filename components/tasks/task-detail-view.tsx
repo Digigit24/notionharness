@@ -22,6 +22,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { statusColorClasses } from '@/lib/status-colors'
 import { updateTaskFields } from '@/app/(app)/workspace/[workspaceSlug]/tasks/actions'
 import { createSubtask } from '@/app/(app)/workspace/[workspaceSlug]/tasks/[taskId]/actions'
+import { unwrap } from '@/lib/failures'
 import { TaskWorkTab } from './task-work-tab'
 import type { Run, RunStatus, TaskUsageTotals } from '@/lib/broker'
 import type { Activity, Agent, Comment, Page, Project, Task, TaskStatus, User, Workspace } from '@/payload-types'
@@ -384,13 +385,15 @@ function SubtasksTab({
     setBusy(true)
     setError(null)
     try {
-      const created = await createSubtask({
-        parentTaskId,
-        workspaceId: workspace.id,
-        workspaceSlug: workspace.slug,
-        statusId: statusChoice,
-        title: text,
-      })
+      const created = unwrap(
+        await createSubtask({
+          parentTaskId,
+          workspaceId: workspace.id,
+          workspaceSlug: workspace.slug,
+          statusId: statusChoice,
+          title: text,
+        }),
+      )
       onCreated(created)
       setTitle('')
     } catch (err) {

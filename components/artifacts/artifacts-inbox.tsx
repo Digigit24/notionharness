@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from '@/hooks/use-toast'
+import { unwrap } from '@/lib/failures'
 import { formatRelativeTime } from '@/lib/relative-time'
 
 const ALL = '__all__'
@@ -100,7 +101,7 @@ export function ArtifactsInbox({
   async function file(ids: number[], projectId: number) {
     setBusy(true)
     try {
-      const { filed } = await fileArtifacts({ workspaceSlug, artifactIds: ids, projectId })
+      const { filed } = unwrap(await fileArtifacts({ workspaceSlug, artifactIds: ids, projectId }))
       const project = projects.find((p) => p.id === projectId)
       toast({
         title: filed === 1 ? `Filed into ${project?.name ?? 'the project'}` : `Filed ${filed} artifacts into ${project?.name ?? 'the project'}`,

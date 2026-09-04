@@ -51,6 +51,7 @@ import {
   taskViewFiltersToTaskFilters,
   type TaskViewConfig,
 } from '@/lib/task-views/types'
+import { unwrap } from '@/lib/failures'
 import type { SavedViewScope } from '@/collections/SavedViews'
 import { TaskDrawer } from './task-drawer'
 import { TaskViewBar } from './task-view-bar'
@@ -176,6 +177,7 @@ function TaskBoardWithUrlState({
   useEffect(() => {
     let active = true
     listSavedViews({ workspaceId: workspace.id, projectId: defaultProjectId })
+      .then(unwrap)
       .then((views) => {
         if (active) setSavedViews(views)
       })
@@ -228,7 +230,9 @@ function TaskBoardWithUrlState({
     setSavedViewsBusy(true)
     setSavedViewsError(null)
     try {
-      const created = await createSavedView({ workspaceId: workspace.id, projectId: defaultProjectId, name, scope, config: viewConfig })
+      const created = unwrap(
+        await createSavedView({ workspaceId: workspace.id, projectId: defaultProjectId, name, scope, config: viewConfig }),
+      )
       setSavedViews((prev) => [...prev, created])
       setSelectedSavedViewId(created.id)
     } catch (err) {
@@ -243,7 +247,7 @@ function TaskBoardWithUrlState({
     setSavedViewsBusy(true)
     setSavedViewsError(null)
     try {
-      const updated = await updateSavedView({ id: selectedSavedViewId, config: viewConfig })
+      const updated = unwrap(await updateSavedView({ id: selectedSavedViewId, config: viewConfig }))
       setSavedViews((prev) => prev.map((v) => (v.id === updated.id ? updated : v)))
     } catch (err) {
       setSavedViewsError(err instanceof Error ? err.message : 'Failed to update view.')
@@ -261,7 +265,7 @@ function TaskBoardWithUrlState({
     setSavedViewsBusy(true)
     setSavedViewsError(null)
     try {
-      await deleteSavedView(selectedSavedViewId)
+      unwrap(await deleteSavedView(selectedSavedViewId))
       setSavedViews((prev) => prev.filter((v) => v.id !== selectedSavedViewId))
       setSelectedSavedViewId(null)
     } catch (err) {
@@ -289,7 +293,9 @@ function TaskBoardWithUrlState({
     setBulkBusy(true)
     data.setError(null)
     try {
-      const updated = await bulkUpdateTaskFields({ taskIds: Array.from(selectedIds), workspaceSlug: workspace.slug, data: patch })
+      const updated = unwrap(
+        await bulkUpdateTaskFields({ taskIds: Array.from(selectedIds), workspaceSlug: workspace.slug, data: patch }),
+      )
       for (const task of updated) data.handleTaskUpdated(task)
       setSelectedIds(new Set())
     } catch (err) {
@@ -299,8 +305,29 @@ function TaskBoardWithUrlState({
     }
   }
 
+  // R12-P1.1 — ONE poll for the whole board's live decoration: run metrics,
+  // agent presence, and the agent columns (Runs / Last run outcome / Spend).
+  // These used to be three separate `setInterval`s on the same 4s cadence,
+  // which is three timers and three sets of round trips for exactly the
+  // freshness one timer buys. The cadence is unchanged, and the three fetches
+  // still run concurrently within a tick — the point was to stop paying three
+  // times for one heartbeat, not to serialise them.
+  //
+  // Each fetch keeps its own catch, deliberately: presence failing must not
+  // blank the metrics that just loaded. And each stays silent, also
+  // deliberately — this is decoration on cards that remain fully usable
+  // without it, and a poll that toasted every 4s while the broker was down
+  // would be worse than the missing badge.
+  //
+  // One consequence of merging: presence used to depend on `workspace.id`
+  // alone and now restarts with `allTasks` too, so it refetches once when the
+  // visible task set changes. That is one extra call it was about to make
+  // within four seconds anyway, and the alternative — a second timer purely
+  // to keep a narrower dependency list — is the cost this change exists to
+  // remove.
   useEffect(() => {
     let active = true
+
     async function refreshMetrics() {
       const items = await Promise.all(allTasks.map(async (task) => {
       if (!task.agent) return null
@@ -314,40 +341,32 @@ function TaskBoardWithUrlState({
       if (!active) return
       setRunMetrics(Object.fromEntries(items.filter((item): item is NonNullable<typeof item> => item !== null).map((item) => [item.taskId, item.metrics])))
     }
-    void refreshMetrics().catch(() => { /* Metrics are non-critical; cards remain usable if broker data is unavailable. */ })
-    const timer = window.setInterval(() => { void refreshMetrics().catch(() => undefined) }, 4000)
-    return () => { active = false; window.clearInterval(timer) }
-  }, [allTasks])
 
-  useEffect(() => {
-    let active = true
     async function refreshPresence() {
       const runs = await getActiveRunsForWorkspace(workspace.id)
       if (active) setActiveTaskIds(new Set(runs.flatMap((run) => run.taskId === null ? [] : [run.taskId])))
     }
-    void refreshPresence().catch(() => undefined)
-    const timer = window.setInterval(() => { void refreshPresence().catch(() => undefined) }, 4000)
-    return () => { active = false; window.clearInterval(timer) }
-  }, [workspace.id])
 
-  // ROADMAP B-4 "Work" (agent columns: Runs / Last run outcome / Spend) — one
-  // batched server-action round trip for the whole board, polled on the same
-  // 4s cadence as refreshMetrics/refreshPresence above.
-  useEffect(() => {
-    let active = true
     async function refreshAgentColumns() {
       const ids = allTasks.map((t) => t.id)
       if (ids.length === 0) {
         if (active) setAgentColumnsData({})
         return
       }
-      const columnsData = await getTaskAgentColumnsData(ids)
+      const columnsData = unwrap(await getTaskAgentColumnsData(ids))
       if (active) setAgentColumnsData(columnsData)
     }
-    void refreshAgentColumns().catch(() => undefined)
-    const timer = window.setInterval(() => { void refreshAgentColumns().catch(() => undefined) }, 4000)
+
+    function refreshAll() {
+      void refreshMetrics().catch(() => undefined)
+      void refreshPresence().catch(() => undefined)
+      void refreshAgentColumns().catch(() => undefined)
+    }
+
+    refreshAll()
+    const timer = window.setInterval(refreshAll, 4000)
     return () => { active = false; window.clearInterval(timer) }
-  }, [allTasks])
+  }, [allTasks, workspace.id])
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
