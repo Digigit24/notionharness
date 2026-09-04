@@ -31,7 +31,20 @@ export const authPool =
     // Kept small deliberately: the shared dev Postgres instance has a low
     // session-mode connection cap, and Payload's own pool already competes
     // for it — no reason for auth's low-traffic queries to claim more.
-    max: 3,
+    // 2 (down from 3, alongside trims to the sibling pools in
+    // lib/broker/db.ts and payload.config.ts) — confirmed live that the
+    // three pools' previous combined max (15) exactly equalled the
+    // instance's real cap, leaving zero headroom for anything else.
+    max: 2,
+    // Without this, a query that can't get a connection because this pool
+    // (or a sibling one — lib/broker/db.ts, payload.config.ts) is at `max`
+    // waits forever with node-postgres's default (no timeout) — silently,
+    // no thrown error, no console output, just a hung request. That's a
+    // real, confirmed failure mode on this shared, connection-capped
+    // instance (see this file's own EMAXCONNSESSION history above), not a
+    // hypothetical one. Failing loud after 8s turns "blank white screen,
+    // nothing in the console" into an actual visible error to debug.
+    connectionTimeoutMillis: 8_000,
   }))
 
 export const auth =

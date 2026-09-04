@@ -12,7 +12,7 @@ import { Card, CardContent } from '@/components/ui/card'
 export default function WorkspaceSegmentLoading() {
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-6 py-8">
+      <div className="flex w-full flex-col gap-8 px-5 py-8">
         <Skeleton className="h-7 w-48" />
         {[0, 1, 2].map((i) => (
           <div key={i} className="flex flex-col gap-2">

@@ -88,6 +88,7 @@ export interface Config {
     'saved-views': SavedView;
     'push-subscriptions': PushSubscription;
     'notification-preferences': NotificationPreference;
+    'project-resources': ProjectResource;
     'payload-kv': PayloadKv;
     'payload-locked-documents': PayloadLockedDocument;
     'payload-preferences': PayloadPreference;
@@ -116,6 +117,7 @@ export interface Config {
     'saved-views': SavedViewsSelect<false> | SavedViewsSelect<true>;
     'push-subscriptions': PushSubscriptionsSelect<false> | PushSubscriptionsSelect<true>;
     'notification-preferences': NotificationPreferencesSelect<false> | NotificationPreferencesSelect<true>;
+    'project-resources': ProjectResourcesSelect<false> | ProjectResourcesSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
     'payload-locked-documents': PayloadLockedDocumentsSelect<false> | PayloadLockedDocumentsSelect<true>;
     'payload-preferences': PayloadPreferencesSelect<false> | PayloadPreferencesSelect<true>;
@@ -125,8 +127,12 @@ export interface Config {
     defaultIDType: number;
   };
   fallbackLocale: null;
-  globals: {};
-  globalsSelect: {};
+  globals: {
+    'hermes-config': HermesConfig;
+  };
+  globalsSelect: {
+    'hermes-config': HermesConfigSelect<false> | HermesConfigSelect<true>;
+  };
   locale: null;
   widgets: {
     collections: CollectionsWidget;
@@ -417,6 +423,7 @@ export interface Agent {
   workspace: number | Workspace;
   runtimeProfile: number | RuntimeProfile;
   model?: string | null;
+  hermesProfile?: string | null;
   thinkingLevel?: ('low' | 'medium' | 'high') | null;
   instructions?: string | null;
   customEnv?:
@@ -481,6 +488,18 @@ export interface RuntimeProfile {
     | boolean
     | null;
   enabled?: boolean | null;
+  handshake?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  lastProbeCode?: string | null;
+  lastProbeDetail?: string | null;
+  lastProbedAt?: string | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -736,6 +755,43 @@ export interface NotificationPreference {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "project-resources".
+ */
+export interface ProjectResource {
+  id: number;
+  project: number | Project;
+  kind: 'git_repo' | 'local_dir';
+  /**
+   * Absolute path on the runtime's filesystem — not the browser's. Empty for a git_repo not yet materialized (app-managed clones live under the runtime's workspace root, see AGENTS.md's Phase C notes).
+   */
+  path?: string | null;
+  /**
+   * git_repo only.
+   */
+  repoUrl?: string | null;
+  /**
+   * git_repo only.
+   */
+  defaultBranch?: string | null;
+  /**
+   * Exactly one primary per project — enforced by a DB constraint, not just this field.
+   */
+  role: 'primary' | 'reference' | 'output' | 'scratch';
+  writable?: boolean | null;
+  /**
+   * Display order among a project's resources.
+   */
+  position?: number | null;
+  lastVerifiedAt?: string | null;
+  /**
+   * Set by the runtime's last verification pass, not asserted by the browser.
+   */
+  exists?: boolean | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "payload-kv".
  */
 export interface PayloadKv {
@@ -841,6 +897,10 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'notification-preferences';
         value: number | NotificationPreference;
+      } | null)
+    | ({
+        relationTo: 'project-resources';
+        value: number | ProjectResource;
       } | null);
   globalSlug?: string | null;
   user: {
@@ -1098,6 +1158,10 @@ export interface RuntimeProfilesSelect<T extends boolean = true> {
   commandName?: T;
   fixedArgs?: T;
   enabled?: T;
+  handshake?: T;
+  lastProbeCode?: T;
+  lastProbeDetail?: T;
+  lastProbedAt?: T;
   updatedAt?: T;
   createdAt?: T;
 }
@@ -1125,6 +1189,7 @@ export interface AgentsSelect<T extends boolean = true> {
   workspace?: T;
   runtimeProfile?: T;
   model?: T;
+  hermesProfile?: T;
   thinkingLevel?: T;
   instructions?: T;
   customEnv?: T;
@@ -1196,6 +1261,24 @@ export interface NotificationPreferencesSelect<T extends boolean = true> {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "project-resources_select".
+ */
+export interface ProjectResourcesSelect<T extends boolean = true> {
+  project?: T;
+  kind?: T;
+  path?: T;
+  repoUrl?: T;
+  defaultBranch?: T;
+  role?: T;
+  writable?: T;
+  position?: T;
+  lastVerifiedAt?: T;
+  exists?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "payload-kv_select".
  */
 export interface PayloadKvSelect<T extends boolean = true> {
@@ -1233,6 +1316,43 @@ export interface PayloadMigrationsSelect<T extends boolean = true> {
   batch?: T;
   updatedAt?: T;
   createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "hermes-config".
+ */
+export interface HermesConfig {
+  id: number;
+  /**
+   * e.g. https://your-hermes-host/v1
+   */
+  baseUrl?: string | null;
+  /**
+   * Bearer token for Hermes requests, if your Hermes install requires one.
+   */
+  apiKey?: string | null;
+  verified?: boolean | null;
+  lastVerifiedAt?: string | null;
+  /**
+   * Set by the last failed Test Connection attempt.
+   */
+  lastError?: string | null;
+  updatedAt?: string | null;
+  createdAt?: string | null;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "hermes-config_select".
+ */
+export interface HermesConfigSelect<T extends boolean = true> {
+  baseUrl?: T;
+  apiKey?: T;
+  verified?: T;
+  lastVerifiedAt?: T;
+  lastError?: T;
+  updatedAt?: T;
+  createdAt?: T;
+  globalType?: T;
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema

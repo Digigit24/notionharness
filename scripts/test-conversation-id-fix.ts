@@ -20,7 +20,7 @@
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { buildHermesHomeOverlay } from '../lib/hermes/home-overlay'
+import { buildHermesHomeOverlay } from '../lib/runtimes/hermes/home-overlay'
 
 let failures = 0
 function check(label: string, condition: boolean) {

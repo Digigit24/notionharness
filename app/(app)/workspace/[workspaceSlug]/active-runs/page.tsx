@@ -1,5 +1,5 @@
 import { Activity } from 'lucide-react'
-import { ThreadLaneView } from '@/components/hermes'
+import { ThreadLaneView } from '@/components/thread'
 import { getRunMessages, getTaskRuns, getActiveRunsForWorkspace } from '@/app/(app)/workspace/[workspaceSlug]/tasks/actions'
 import { getPayloadClient } from '@/lib/payload'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -39,9 +39,14 @@ export default async function ActiveRunsPage({ params }: PageProps) {
   const activeRuns = await getActiveRunsForWorkspace(workspace.id)
   const taskRuns = activeRuns.filter((run) => run.taskId !== null)
 
-  // Fetch agents
+  // Fetch agents.
+  //
+  // Scoped to this workspace: `overrideAccess: true` bypasses Payload's
+  // access control, so an unscoped query returned every agent on the
+  // instance and leaked other workspaces' agent names into this picker.
   const agentsResult = await payload.find({
     collection: 'agents',
+    where: { workspace: { equals: workspace.id } },
     limit: 100,
     overrideAccess: true,
   })

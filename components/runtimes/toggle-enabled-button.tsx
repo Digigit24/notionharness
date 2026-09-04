@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
-import { toggleRuntimeProfileEnabled } from '@/app/(app)/workspace/[workspaceSlug]/runtimes/actions'
+import { toggleRuntimeProfileEnabled } from '@/app/(app)/workspace/[workspaceSlug]/settings/runtimes/actions'
 import { toast } from '@/hooks/use-toast'
 
 export function ToggleRuntimeProfileEnabledButton({

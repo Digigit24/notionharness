@@ -22,6 +22,13 @@ export interface RunUsageTotals {
   totalCostTicks: number
 }
 
+/** A workspace rollup, plus how many distinct runs produced it. Cost alone
+ * answers "how much" but never "how much per run", which is the question
+ * anyone reading a spend figure asks next. */
+export interface WorkspaceUsageRollup extends RunUsageTotals {
+  runCount: number
+}
+
 /** ROADMAP 6.3 — the run-card block's cost chip needs a total, not the raw
  * per-event rows `recordUsage` writes; summed on read rather than kept as a
  * running total on `runs` itself, matching this file's own "rollups are a
@@ -176,15 +183,31 @@ export async function getAgentUsageRollupForAgents(
  * are counted too; a rollup that only walked `tasks` would silently miss
  * every dollar an Ask thread spent. A run is task-scoped xor page-scoped in
  * practice, so exactly one of the two joins matches per row. */
-export async function getWorkspaceUsageRollup(workspaceId: number, sinceDays = 7): Promise<RunUsageTotals> {
+export async function getWorkspaceUsageRollup(
+  workspaceId: number,
+  sinceDays = 7,
+): Promise<WorkspaceUsageRollup> {
   const pool = getBrokerPool()
-  const res = await pool.query<{ total_tokens: string | null; total_cost_ticks: string | null }>(
-    `SELECT COALESCE(SUM(ru.tokens), 0) AS total_tokens, COALESCE(SUM(ru.cost_ticks), 0) AS total_cost_ticks
+  const res = await pool.query<{
+    total_tokens: string | null
+    total_cost_ticks: string | null
+    run_count: string | null
+  }>(
+    // COUNT(DISTINCT) rather than COUNT: `run_usage` holds several rows per
+    // run, so a plain count would report usage events, not runs.
+    `SELECT COALESCE(SUM(ru.tokens), 0) AS total_tokens,
+            COALESCE(SUM(ru.cost_ticks), 0) AS total_cost_ticks,
+            COUNT(DISTINCT ru.run_id) AS run_count
      FROM run_usage ru
      INNER JOIN runs r ON r.id = ru.run_id
      LEFT JOIN tasks t ON t.id = r.task_id
      LEFT JOIN pages p ON p.id = r.page_id
-     WHERE (t.workspace_id = $1 OR p.workspace_id = $1)
+     -- Standalone "Ask" runs have neither a task nor a page, so they reach a
+     -- workspace only through their agent. Without this join their tokens and
+     -- cost were silently dropped from every workspace rollup — the shell's
+     -- spend readout stayed at $0.00 no matter how much an Ask thread spent.
+     LEFT JOIN agents a ON a.id = r.agent_id
+     WHERE (t.workspace_id = $1 OR p.workspace_id = $1 OR a.workspace_id = $1)
        AND ru.created_at >= now() - ($2::text || ' days')::interval`,
     [workspaceId, sinceDays],
   )
@@ -192,5 +215,6 @@ export async function getWorkspaceUsageRollup(workspaceId: number, sinceDays = 7
   return {
     totalTokens: Number(row?.total_tokens ?? 0),
     totalCostTicks: Number(row?.total_cost_ticks ?? 0),
+    runCount: Number(row?.run_count ?? 0),
   }
 }

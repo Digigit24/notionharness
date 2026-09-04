@@ -30,6 +30,9 @@ export interface Run {
   workerId: string | null
   externalSessionId: string | null
   pageId: number | null
+  /** The chat session this run belongs to (`chat_sessions.id`), when it was
+   * started from a session thread rather than a task or page. */
+  sessionId: number | null
   pageSubtreeBlockId: string | null
   suggestionStatus: SuggestionStatus
   /** Serialized prompt for page-scoped runs (taskId is null). */

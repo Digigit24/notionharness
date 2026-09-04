@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { Bell } from 'lucide-react'
 import { PopoverMenu } from '@/components/ui/popover-menu'
 import { getNotifications, markNotificationsRead, type NotificationView } from '@/app/(app)/notifications/actions'
+import { formatTimestamp } from '@/lib/relative-time'
 
 export function NotificationsBell({ initialUnreadCount }: { initialUnreadCount: number }) {
   const [items, setItems] = useState<NotificationView[] | null>(null)
@@ -72,7 +73,7 @@ function NotificationRow({ item, onClick }: { item: NotificationView; onClick: (
           <span className="font-medium">{item.actorName || 'Someone'}</span>{' '}
           <span className="text-black/60 dark:text-white/60">{humanizeAction(item.action)}</span>
         </p>
-        <p className="text-xs text-black/30 dark:text-white/30">{new Date(item.createdAt).toLocaleString()}</p>
+        <p className="text-xs text-black/30 dark:text-white/30">{formatTimestamp(item.createdAt)}</p>
       </div>
     </div>
   )

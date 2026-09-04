@@ -1,4 +1,4 @@
-import { hermesGet } from '@/lib/hermes-api'
+import { hermesGet } from '@/lib/runtimes/hermes/api-proxy'
 
 export async function GET() {
   return hermesGet('/api/skills/usage')

@@ -7,6 +7,7 @@ import { Bot } from 'lucide-react'
 import { AgentSettingsForm, type AgentProfile } from '@/components/agents/agent-settings-form'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
+import type { ActiveModelConfig } from '@/lib/runtimes/hermes/providers'
 
 // ROADMAP B-1 (Detail) — this used to be a list + full inline editor (an
 // Overview/Capabilities toggle built entirely as client-side state on this
@@ -23,6 +24,9 @@ export type Agent = {
   name: string
   runtimeProfile: number | { id: number }
   model?: string | null
+  /** Which Hermes profile this agent runs as — the real per-agent model
+   * selector. Empty/absent = the install default. */
+  hermesProfile?: string | null
   thinkingLevel?: string | null
   instructions?: string | null
   customEnv?: unknown
@@ -40,6 +44,7 @@ export function AgentEditor({
   profiles,
   initialAgents,
   weeklySpendByAgentId,
+  activeModel,
 }: {
   workspaceId: number
   workspaceSlug: string
@@ -49,6 +54,8 @@ export function AgentEditor({
    * (string, since it arrives via Object.fromEntries from the server
    * component). Agents with no runs in the window are simply absent. */
   weeklySpendByAgentId?: Record<string, number>
+  /** Hermes's one, install-wide active model — not per-agent. See providers.ts. */
+  activeModel: ActiveModelConfig | null
 }) {
   const router = useRouter()
   const [agents, setAgents] = useState(initialAgents)
@@ -82,7 +89,8 @@ export function AgentEditor({
                 <span>
                   <span className="block font-medium">{agent.name}</span>
                   <span className="text-xs text-black/50 dark:text-white/50">
-                    {agent.model || 'Default model'} · {agent.permissionMode || 'ask'}
+                    {activeModel ? `${activeModel.provider} / ${activeModel.model}` : 'Unknown model'} ·{' '}
+                    {agent.permissionMode || 'ask'}
                     {agent.enabled === false ? ' · disabled' : ''}
                   </span>
                 </span>
@@ -106,6 +114,7 @@ export function AgentEditor({
             workspaceSlug={workspaceSlug}
             profiles={profiles}
             agent={null}
+            activeModel={activeModel}
             onSaved={(result) => {
               setAgents((current) => [...current, result])
               setCreating(false)

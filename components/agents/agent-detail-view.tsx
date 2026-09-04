@@ -8,8 +8,11 @@ import { Button } from '@/components/ui/button'
 import { AgentCapabilities } from '@/components/agents/agent-capabilities'
 import { AgentMemories } from '@/components/agents/agent-memories'
 import { AgentSettingsForm, type AgentProfile } from '@/components/agents/agent-settings-form'
+import { RuntimePingButton } from '@/components/agents/runtime-ping-button'
 import { saveAgent } from '@/app/(app)/workspace/[workspaceSlug]/agents/actions'
 import type { Agent } from '@/components/agents/agent-editor'
+import type { ActiveModelConfig } from '@/lib/runtimes/hermes/providers'
+import { formatTimestamp } from '@/lib/relative-time'
 
 // ROADMAP B-1 (Detail) — the real, linkable home for one agent, conformed to
 // the shared <DetailLayout> primitive (components/layout/detail-layout.tsx)
@@ -38,6 +41,8 @@ export function AgentDetailView({
   activeRunId,
   ownerName,
   weeklySpendTicks,
+  activeModel,
+  agentModel,
 }: {
   workspaceId: number
   workspaceSlug: string
@@ -48,6 +53,11 @@ export function AgentDetailView({
   ownerName: string | null
   /** ROADMAP B7.2 — cost ticks for this agent, trailing 7 days. */
   weeklySpendTicks?: number
+  /** Hermes's one, install-wide active model — not per-agent. See providers.ts. */
+  activeModel: ActiveModelConfig | null
+  /** The model pinned by THIS agent's own Hermes profile. Null when the agent
+   * runs on the install default, in which case `activeModel` is the answer. */
+  agentModel?: ActiveModelConfig | null
 }) {
   const router = useRouter()
   const [agent, setAgent] = useState(initialAgent)
@@ -88,7 +98,18 @@ export function AgentDetailView({
   const overviewContent = (
     <div className="max-w-2xl space-y-5 p-6 text-sm">
       <div className="grid grid-cols-2 gap-4">
-        <OverviewField label="Model" value={agent.model || 'Default'} />
+        <OverviewField
+          label="Model"
+          value={
+            agentModel
+              ? `${agentModel.provider} / ${agentModel.model}`
+              : activeModel
+                ? `${activeModel.provider} / ${activeModel.model}`
+                : 'Unknown'
+          }
+        />
+        {/* The profile IS the model selector — see collections/Agents.ts. */}
+        <OverviewField label="Hermes profile" value={agent.hermesProfile || 'Install default'} />
         <OverviewField label="Thinking level" value={agent.thinkingLevel || 'medium'} />
         <OverviewField
           label="Runtime profile"
@@ -134,6 +155,7 @@ export function AgentDetailView({
         workspaceSlug={workspaceSlug}
         profiles={profiles}
         agent={agent}
+        activeModel={activeModel}
         onSaved={(next) => setAgent(next)}
       />
     </div>
@@ -161,6 +183,7 @@ export function AgentDetailView({
             <p className="text-xs text-black/50 dark:text-white/50">
               {runtimeProfile.protocolFamily.toUpperCase()} · {runtimeProfile.commandName}
             </p>
+            <RuntimePingButton agentId={agent.id} />
           </>
         ) : (
           <p className="mt-1 text-black/50 dark:text-white/50">Unknown</p>
@@ -213,12 +236,12 @@ function TimestampRow({ agent }: { agent: Agent }) {
     <>
       {withTimestamps.createdAt && (
         <p className="mt-1 text-xs text-black/60 dark:text-white/60">
-          created {new Date(withTimestamps.createdAt).toLocaleString()}
+          created {formatTimestamp(withTimestamps.createdAt)}
         </p>
       )}
       {withTimestamps.updatedAt && (
         <p className="text-xs text-black/60 dark:text-white/60">
-          updated {new Date(withTimestamps.updatedAt).toLocaleString()}
+          updated {formatTimestamp(withTimestamps.updatedAt)}
         </p>
       )}
     </>

@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation'
 import { getPayloadClient } from '@/lib/payload'
 import { getWorkspaceBySlug } from '@/lib/pages-cache'
 import { getActiveRunForAgent, getAgentUsageRollup } from '@/lib/broker'
+import { getActiveModelConfig } from '@/lib/runtimes/hermes/providers'
 import { AgentDetailView } from '@/components/agents/agent-detail-view'
 
 // ROADMAP B-1 (Detail) — the real, linkable home for one agent. Conforms to
@@ -27,7 +28,7 @@ export default async function AgentDetailPage({
   // depth: 1 so `agent.runtimeProfile` comes back populated (name/commandName/
   // protocolFamily) without a second round-trip — the Overview tab and right
   // rail both need it.
-  const [agent, profiles, activeRun] = await Promise.all([
+  const [agent, profiles, activeRun, activeModel] = await Promise.all([
     payload.findByID({ collection: 'agents', id: agentId, depth: 1, overrideAccess: true, disableErrors: true }),
     payload.find({
       collection: 'runtime-profiles',
@@ -38,6 +39,11 @@ export default async function AgentDetailPage({
       overrideAccess: true,
     }),
     getActiveRunForAgent(agentId),
+    // The install root's model — the fallback shown when this agent runs on
+    // no profile. Per-agent models come from the agent's Hermes profile,
+    // loaded separately below (a profile directory is its own HERMES_HOME
+    // with its own config.yaml, so selecting a profile selects a model).
+    getActiveModelConfig(),
   ])
 
   // ROADMAP B7.2 — the Overview tab's per-agent spend, same 7-day window as
@@ -58,6 +64,14 @@ export default async function AgentDetailPage({
 
   const ownerName = workspace.owner && typeof workspace.owner !== 'number' ? workspace.owner.name || null : null
 
+  // Resolved after the agent loads, because it depends on the agent's own
+  // `hermesProfile`. Failure is non-fatal: the page falls back to showing the
+  // install-wide model rather than refusing to render.
+  const agentProfileName = typeof agent?.hermesProfile === 'string' ? agent.hermesProfile.trim() : ''
+  const agentModel = agentProfileName
+    ? await getActiveModelConfig(agentProfileName).catch(() => null)
+    : null
+
   return (
     <AgentDetailView
       workspaceId={workspace.id}
@@ -68,6 +82,8 @@ export default async function AgentDetailPage({
       activeRunId={activeRun?.id ?? null}
       ownerName={ownerName}
       weeklySpendTicks={weeklySpend.totalCostTicks}
+      activeModel={activeModel}
+      agentModel={agentModel}
     />
   )
 }

@@ -63,18 +63,18 @@ import * as pty from 'node-pty'
 // `lib/run-events.ts` (merged from a reconciliation task). The local
 // worktree is behind main so the file isn't visible here — the lead wires
 // it up at merge time, same as for the daemon-ws and broker consumers.
-import type { RunEvent, RunEventEnvelope } from '@/lib/run-events'
+import type { ApprovalOutcome, PermissionOption, RunEvent, RunEventEnvelope } from '@/lib/run-events'
 import { TerminalBuffer } from './terminal-buffer'
 import { buildSpawnEnv } from './spawn-env'
+import { unifiedDiff } from './unified-diff'
 
 // ---------------------------------------------------------------------------
 // Public options.
 // ---------------------------------------------------------------------------
 
-/** ACP `outcome` union for permission callbacks — matches protocol schema. */
-export type ApprovalOutcome =
-  | { outcome: 'selected'; optionId: string }
-  | { outcome: 'cancelled'; reason?: string }
+/** Defined in the shared contract (`lib/run-events.ts`) and re-exported here
+ * so long-standing imports keep resolving. One definition, two names. */
+export type { ApprovalOutcome } from '@/lib/run-events'
 
 export interface SendTurnOptions {
   /** Absolute path to the `hermes-acp` binary (or `hermes-acp.exe` on Windows). */
@@ -122,6 +122,11 @@ export interface SendTurnOptions {
   mcpServers?: unknown[]
   /** Wall-clock cap for the whole turn in ms — defaults to 60s. */
   turnTimeoutMs?: number
+  /** Kill the turn after this long with NO activity of any kind (no session
+   * update, no client request). Defaults to 2 minutes, capped by
+   * `turnTimeoutMs`. See the watchdog in `sendTurn` for why silence is a
+   * better wedge signal than elapsed time. */
+  inactivityTimeoutMs?: number
   /**
    * Called synchronously for every envelope the instant it's produced, in
    * the same `seq` order as the final `envelopes` array — additive, doesn't
@@ -131,6 +136,10 @@ export interface SendTurnOptions {
    * whole transcript after the turn already ended.
    */
   onEvent?: (envelope: RunEventEnvelope) => void
+  /** Called once, as soon as the session exists, with handles for steering
+   * the turn while it runs. Lets a caller (the dispatcher) register a stop
+   * control that a user can hit mid-answer. */
+  onControl?: (control: { cancel: () => Promise<void> }) => void
 }
 
 export interface SendTurnResult {
@@ -282,9 +291,24 @@ function killTerminalProcess(term: pty.IPty, signal: NodeJS.Signals = 'SIGKILL')
   }
 }
 
-function settleTerminalExit(session: TerminalSessionState, status: TerminalExitStatus): void {
+function settleTerminalExit(
+  session: TerminalSessionState,
+  status: TerminalExitStatus,
+  emit?: { id: string; pushEvent: (event: RunEvent) => void },
+): void {
   if (session.exitStatus) return // already settled (e.g. create-time failure)
   session.exitStatus = status
+  // Emitted from here rather than from each `onExit` because this is the one
+  // place every exit path converges — a normal exit, a spawn failure, and a
+  // kill all settle through it, so no route can leave the block looking live.
+  if (emit) {
+    emit.pushEvent({
+      type: 'terminal_exit',
+      id: emit.id,
+      exitCode: status.exitCode ?? null,
+      signal: status.signal ?? null,
+    })
+  }
   const waiters = session.exitWaiters.splice(0)
   for (const resolve of waiters) resolve(status)
 }
@@ -296,6 +320,18 @@ function settleTerminalExit(session: TerminalSessionState, status: TerminalExitS
  * ends — otherwise a misbehaving/killed agent would leak child processes and
  * `onData`/`onExit` listeners across the life of the harness.
  */
+/** How long a single agent shell command may run before the harness kills it.
+ * Generous — a build or a test suite legitimately takes minutes — but finite,
+ * because an unbounded wait wedges the entire turn (see `onWaitForExit`). */
+const TERMINAL_EXIT_TIMEOUT_MS = 5 * 60_000
+
+/** Grace between a cooperative `session/cancel` and killing the process. */
+const CANCEL_ESCALATION_MS = 5_000
+
+/** How often the inactivity watchdog checks. Coarse on purpose — it is
+ * measuring minutes of silence, so a fine-grained timer would buy nothing. */
+const INACTIVITY_POLL_MS = 10_000
+
 function createTerminalRegistry(options: {
   defaultCwd: string
   defaultEnv?: Record<string, string | undefined>
@@ -328,6 +364,13 @@ function createTerminalRegistry(options: {
       }
       sessions.set(id, session)
 
+      // Logged because this is the one ACP call whose failure mode is a
+      // silent hang rather than an error, and knowing exactly what the agent
+      // asked to run is the difference between diagnosing it in one run and
+      // guessing at it across several.
+      console.log(
+        `[acp] terminal/create ${id}: ${params.command} ${JSON.stringify(params.args ?? [])} (cwd=${params.cwd ?? options.defaultCwd})`,
+      )
       try {
         const env = buildSpawnEnv({
           ...options.defaultEnv,
@@ -352,10 +395,11 @@ function createTerminalRegistry(options: {
           options.pushEvent({ type: 'terminal', id, chunk })
         })
         session.disposeOnExit = term.onExit(({ exitCode, signal }) => {
-          settleTerminalExit(session, {
-            exitCode: exitCode ?? null,
-            signal: signalNumberToName(signal),
-          })
+          settleTerminalExit(
+            session,
+            { exitCode: exitCode ?? null, signal: signalNumberToName(signal) },
+            { id, pushEvent: options.pushEvent },
+          )
         })
       } catch (err) {
         // `pty.spawn` can throw synchronously (bad cwd, spawn failure).
@@ -367,7 +411,7 @@ function createTerminalRegistry(options: {
         const message = err instanceof Error ? err.message : String(err)
         buffer.append(`${message}\n`)
         options.pushEvent({ type: 'terminal', id, chunk: `${message}\n` })
-        settleTerminalExit(session, { exitCode: 127, signal: null })
+        settleTerminalExit(session, { exitCode: 127, signal: null }, { id, pushEvent: options.pushEvent })
       }
 
       return { terminalId: id }
@@ -389,8 +433,43 @@ function createTerminalRegistry(options: {
       if (session.exitStatus) {
         return { exitCode: session.exitStatus.exitCode ?? null, signal: session.exitStatus.signal ?? null }
       }
+      // Bounded, because an unbounded wait here is a hang for the WHOLE
+      // system, not just for one command: the agent blocks on this JSON-RPC
+      // request, so it stops reading its own input, so `session/cancel` is
+      // never processed either — the turn cannot be stopped, and the run
+      // sits at "running" until the wall-clock turn cap kills the process
+      // (observed live: a shell command with no result after 14 minutes,
+      // then `ACP connection closed`). Killing the command and reporting a
+      // real non-zero exit gives the agent something it can reason about
+      // and recover from, which an infinite wait never does.
       return new Promise((resolve) => {
-        session.exitWaiters.push((status) => resolve({ exitCode: status.exitCode ?? null, signal: status.signal ?? null }))
+        const timer = setTimeout(() => {
+          console.error(
+            `[acp] terminal ${session.id} did not exit within ${TERMINAL_EXIT_TIMEOUT_MS}ms — killing it.`,
+          )
+          session.buffer.append(
+            `
+[harness] Command killed after ${Math.round(TERMINAL_EXIT_TIMEOUT_MS / 1000)}s with no exit.
+`,
+          )
+          options.pushEvent({
+            type: 'terminal',
+            id: session.id,
+            chunk: `
+[harness] Command killed after ${Math.round(TERMINAL_EXIT_TIMEOUT_MS / 1000)}s with no exit.
+`,
+          })
+          if (session.term) killTerminalProcess(session.term, 'SIGKILL')
+          // Settle explicitly: on Windows in particular, `onExit` is not
+          // guaranteed to fire for a pty killed this way, and a kill that
+          // produced no exit event would leave this waiting again.
+          settleTerminalExit(session, { exitCode: 124, signal: null }, { id: session.id, pushEvent: options.pushEvent })
+        }, TERMINAL_EXIT_TIMEOUT_MS)
+        timer.unref?.()
+        session.exitWaiters.push((status) => {
+          clearTimeout(timer)
+          resolve({ exitCode: status.exitCode ?? null, signal: status.signal ?? null })
+        })
       })
     },
 
@@ -434,7 +513,9 @@ function buildClientApp(
   permissionTimeoutMs: number,
   permissionMode: 'ask' | 'auto' | 'deny',
   permissionCallback: SendTurnOptions['permissionCallback'],
-  terminals: TerminalRegistry
+  terminals: TerminalRegistry,
+  pushEvent: (event: RunEvent) => void,
+  touch: () => void,
 ) {
   return (
     client({ name: 'notionforge-harness' })
@@ -443,44 +524,79 @@ function buildClientApp(
       // Cancel turn-stop outcome) so the agent sees a denial it can work
       // around, not a hard turn-kill.
       .onRequest('session/request_permission', async (ctx) => {
+        // Proof of life for the inactivity watchdog in `sendTurn`.
+        touch()
+        const params = ctx.params as {
+          id?: string
+          title?: string
+          detail?: string
+          options?: Array<{ optionId?: string; kind?: string; label?: string }>
+        }
+        // ACP does not guarantee an `id` on every request, but the transcript
+        // needs a stable key to match the "settled" event back to the card it
+        // resolves, so synthesize one when the agent omits it.
+        const requestId = params.id || `perm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        const options: PermissionOption[] = (params.options ?? []).map((option) => ({
+          optionId: option.optionId ?? '',
+          kind: option.kind ?? '',
+          label: option.label,
+        }))
+        const title = params.title ?? 'Permission requested'
+        const detail = params.detail ?? ''
+
+        // Every permission request enters the transcript, in all three modes.
+        // Under `auto` and `deny` it is a record of what the agent was
+        // allowed or refused (previously invisible — a run could touch
+        // anything and the transcript said nothing); under `ask` it is the
+        // live card the human actually answers.
+        pushEvent({ type: 'permission', id: requestId, title, detail, options })
+
+        /** Records the decision in the same stream, so a card can never stay
+         * interactive after the turn has moved past it. */
+        const settle = (outcome: ApprovalOutcome) => {
+          pushEvent({
+            type: 'permission',
+            id: requestId,
+            title,
+            detail,
+            options,
+            outcome: outcome.outcome,
+            selectedOptionId: outcome.outcome === 'selected' ? outcome.optionId : undefined,
+            reason: outcome.outcome === 'cancelled' ? outcome.reason : undefined,
+          })
+          return { outcome }
+        }
+
         if (permissionMode === 'auto') {
-          const params = ctx.params as { options?: Array<{ optionId?: string; kind?: string }> }
-          const allow = params.options?.find((option) => option.kind === 'allow_once') ??
-            params.options?.find((option) => option.kind === 'allow_always')
-          if (allow?.optionId) return { outcome: { outcome: 'selected' as const, optionId: allow.optionId } }
+          const allow =
+            options.find((option) => option.kind === 'allow_once') ??
+            options.find((option) => option.kind === 'allow_always')
+          if (allow?.optionId) return settle({ outcome: 'selected', optionId: allow.optionId })
         }
 
         if (permissionMode === 'ask' && permissionCallback) {
-          const params = ctx.params as {
-            id?: string
-            title?: string
-            detail?: string
-            options?: Array<{ optionId?: string; kind?: string; label?: string }>
-          }
           try {
             const result = await Promise.race([
-              permissionCallback({
-                id: params.id ?? '',
-                title: params.title ?? '',
-                detail: params.detail ?? '',
-                options: (params.options ?? []).map((o) => ({
-                  optionId: o.optionId ?? '',
-                  kind: o.kind ?? '',
-                  label: o.label,
-                })),
-              }),
+              permissionCallback({ id: requestId, title, detail, options }),
               delay(permissionTimeoutMs).then(() => ({ outcome: 'cancelled' as const, reason: 'timeout' })),
             ])
-            return { outcome: result }
+            return settle(result)
           } catch {
-            return { outcome: { outcome: 'cancelled' as const, reason: 'callback error' } }
+            return settle({ outcome: 'cancelled', reason: 'callback error' })
           }
         }
 
+        // `deny` (and `ask` with no callback wired) refuses rather than
+        // stalling the turn: waiting out a timeout nobody is watching only
+        // burns the turn budget before reaching the same answer.
+        if (permissionMode === 'deny') return settle({ outcome: 'cancelled', reason: 'denied by policy' })
+
         await delay(permissionTimeoutMs)
-        return { outcome: { outcome: 'cancelled' as const } }
+        return settle({ outcome: 'cancelled', reason: 'timeout' })
       })
       .onRequest('fs/read_text_file', async (ctx) => {
+        // Proof of life for the inactivity watchdog in `sendTurn`.
+        touch()
         const { readFile } = await import('node:fs/promises')
         const path = (ctx.params as { path?: string }).path
         if (!path) return { content: '' }
@@ -491,16 +607,58 @@ function buildClientApp(
         }
       })
       .onRequest('fs/write_text_file', async (ctx) => {
-        const { writeFile } = await import('node:fs/promises')
+        // Proof of life for the inactivity watchdog in `sendTurn`.
+        touch()
+        const { readFile, writeFile } = await import('node:fs/promises')
         const params = ctx.params as { path?: string; content?: string }
-        if (params.path) await writeFile(params.path, params.content ?? '', 'utf8')
+        if (!params.path) return {}
+        const next = params.content ?? ''
+        // Read the current contents first so the change can be recorded as a
+        // real diff. `file_change` was already consumed in three places
+        // (listReviewReadyRuns's "a diff ready to review", lanes.ts's
+        // filesChanged/linesAdded stats, and now the transcript's diff view)
+        // but nothing had ever emitted one, so all three were permanently
+        // empty. A new file simply diffs against "".
+        let previous = ''
+        try {
+          previous = await readFile(params.path, 'utf8')
+        } catch {
+          previous = ''
+        }
+        await writeFile(params.path, next, 'utf8')
+        try {
+          const diff = unifiedDiff(previous, next, params.path)
+          // `null` means the write changed nothing — agents rewrite files
+          // with identical content routinely, and a diff with no lines in it
+          // is noise in the transcript and a false positive for
+          // "review-ready".
+          if (diff) pushEvent({ type: 'file_change', path: params.path, diff })
+        } catch {
+          // Recording the change must never be able to fail the write that
+          // already succeeded.
+        }
         return {}
       })
-      .onRequest('terminal/create', async (ctx) => terminals.onCreate(ctx.params))
-      .onRequest('terminal/output', async (ctx) => terminals.onOutput(ctx.params))
-      .onRequest('terminal/release', async (ctx) => terminals.onRelease(ctx.params))
-      .onRequest('terminal/kill', async (ctx) => terminals.onKill(ctx.params))
-      .onRequest('terminal/wait_for_exit', async (ctx) => terminals.onWaitForExit(ctx.params))
+      .onRequest('terminal/create', async (ctx) => {
+        touch()
+        return terminals.onCreate(ctx.params)
+      })
+      .onRequest('terminal/output', async (ctx) => {
+        touch()
+        return terminals.onOutput(ctx.params)
+      })
+      .onRequest('terminal/release', async (ctx) => {
+        touch()
+        return terminals.onRelease(ctx.params)
+      })
+      .onRequest('terminal/kill', async (ctx) => {
+        touch()
+        return terminals.onKill(ctx.params)
+      })
+      .onRequest('terminal/wait_for_exit', async (ctx) => {
+        touch()
+        return terminals.onWaitForExit(ctx.params)
+      })
   )
 }
 
@@ -536,6 +694,28 @@ function extractToolInput(u: { [k: string]: unknown }): Record<string, unknown> 
   return raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
 }
 
+/** ACP `ToolCall.locations` is `[{ path, line? }]`. Flattened to plain paths
+ * because that is all the transcript shows, and kept defensively loose since
+ * agents vary in whether they send objects or bare strings. */
+function extractToolLocations(u: { [k: string]: unknown }): string[] | undefined {
+  const raw = u.locations
+  if (!Array.isArray(raw)) return undefined
+  const paths: string[] = []
+  for (const entry of raw) {
+    if (typeof entry === 'string' && entry.trim()) paths.push(entry)
+    else if (entry && typeof entry === 'object') {
+      const path = (entry as { path?: unknown }).path
+      if (typeof path === 'string' && path.trim()) paths.push(path)
+    }
+  }
+  return paths.length > 0 ? paths : undefined
+}
+
+function extractToolKind(u: { [k: string]: unknown }): string | undefined {
+  const kind = u.kind
+  return typeof kind === 'string' && kind.trim() ? kind : undefined
+}
+
 function normaliseToolStatus(
   s: unknown,
 ): 'pending' | 'in_progress' | 'completed' | 'failed' | null {
@@ -554,6 +734,9 @@ function isToolErrorContent(c: unknown): boolean {
   if (!c || typeof c !== 'object') return false
   return (c as { type?: string }).type === 'error'
 }
+
+/** One-shot guard so the diagnostic below can't become a log flood. */
+let usageShapeLogged = false
 
 function normaliseSessionUpdate(update: unknown): RunEvent | null {
   if (!update || typeof update !== 'object') return null
@@ -584,6 +767,8 @@ function normaliseSessionUpdate(update: unknown): RunEvent | null {
         name,
         input: extractToolInput(u),
         status: 'pending',
+        locations: extractToolLocations(u),
+        kind: extractToolKind(u),
       }
     }
     case 'tool_call_update': {
@@ -604,6 +789,8 @@ function normaliseSessionUpdate(update: unknown): RunEvent | null {
           type: 'tool_call',
           id,
           name: String((u.title as string | undefined) ?? ''),
+          locations: extractToolLocations(u),
+          kind: extractToolKind(u),
           input: extractToolInput(u),
           status,
         }
@@ -611,26 +798,63 @@ function normaliseSessionUpdate(update: unknown): RunEvent | null {
       return null
     }
     case 'usage_update': {
-      const usage = u.usage as
-        | {
-            provider?: string
-            model?: string
-            inputTokens?: number
-            outputTokens?: number
-            totalTokens?: number
-            cost?: { ticks?: number }
-          }
-        | undefined
+      // Read both the nested (`update.usage.*`) and flat (`update.*`) shapes,
+      // and both camelCase and snake_case names. The original read exactly one
+      // of those and defaulted everything else, which is why 102 stored usage
+      // rows were `unknown/unknown` at 0 tokens while the agent was
+      // demonstrably spending: the notification was arriving and every single
+      // field was missing its expected key. Being permissive here costs
+      // nothing and is the difference between a real cost readout and a
+      // permanent $0.00.
+      const nested = (u.usage ?? {}) as Record<string, unknown>
+      const pick = (...keys: string[]): unknown => {
+        for (const key of keys) {
+          if (nested[key] != null) return nested[key]
+          if (u[key] != null) return u[key]
+        }
+        return undefined
+      }
+      const num = (value: unknown): number => {
+        const n = typeof value === 'string' ? Number(value) : typeof value === 'number' ? value : NaN
+        return Number.isFinite(n) ? n : 0
+      }
+      const str = (value: unknown): string | undefined =>
+        typeof value === 'string' && value.trim() ? value : undefined
+
+      const inputTokens = num(pick('inputTokens', 'input_tokens', 'promptTokens', 'prompt_tokens'))
+      const outputTokens = num(pick('outputTokens', 'output_tokens', 'completionTokens', 'completion_tokens'))
+      const totalRaw = pick('totalTokens', 'total_tokens', 'tokens')
+      const tokens = totalRaw != null ? num(totalRaw) : inputTokens + outputTokens
+
+      // `cost` may be `{ ticks }`, a bare tick count, or a dollar amount.
+      const costRaw = pick('cost', 'costTicks', 'cost_ticks', 'totalCost', 'total_cost')
+      let costTicks = 0
+      if (costRaw != null && typeof costRaw === 'object') {
+        const obj = costRaw as Record<string, unknown>
+        costTicks = obj.ticks != null ? num(obj.ticks) : Math.round(num(obj.amount ?? obj.usd ?? 0) * 100)
+      } else if (costRaw != null) {
+        const n = num(costRaw)
+        // Ticks are integer hundredths. A fractional value is dollars.
+        costTicks = Number.isInteger(n) ? n : Math.round(n * 100)
+      }
+
+      if (tokens === 0 && costTicks === 0 && !usageShapeLogged) {
+        usageShapeLogged = true
+        // One line, once per process: if this still yields nothing, the raw
+        // payload is the only thing that can say why.
+        console.log(`[acp] usage_update produced no numbers; raw payload: ${JSON.stringify(u).slice(0, 600)}`)
+      }
+
       // Canonical `usage` RunEvent carries one total `tokens` count, not an
       // input/output breakdown — the breakdown isn't lost, ACP's own
       // `usage_update` notification is still available to anything that
       // subscribes to the raw stream directly.
       return {
         type: 'usage',
-        provider: usage?.provider ?? 'unknown',
-        model: usage?.model ?? 'unknown',
-        tokens: usage?.totalTokens ?? (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0),
-        costTicks: usage?.cost?.ticks ?? 0,
+        provider: str(pick('provider', 'providerName', 'provider_name')) ?? 'unknown',
+        model: str(pick('model', 'modelName', 'model_name', 'modelId', 'model_id')) ?? 'unknown',
+        tokens,
+        costTicks,
       }
     }
     case 'plan': {
@@ -666,6 +890,24 @@ function normaliseSessionUpdate(update: unknown): RunEvent | null {
  */
 export async function sendTurn(opts: SendTurnOptions): Promise<SendTurnResult> {
   const turnTimeoutMs = opts.turnTimeoutMs ?? 60_000
+  // Comfortably longer than the slowest thing that legitimately produces no
+  // output — a cold model call, a big file read — and far shorter than the
+  // wall-clock cap it sits inside.
+  const inactivityTimeoutMs = opts.inactivityTimeoutMs ?? Math.min(120_000, turnTimeoutMs)
+  // Set the moment the turn produces a terminal `done`, so the cancel
+  // escalation below can tell "it stopped when asked" from "it ignored us".
+  let turnSettled = false
+  // Inactivity, not just total elapsed time. A wall-clock cap alone answers
+  // the wrong question: a legitimately long run (a build, a big refactor) is
+  // constantly emitting chunks, tool calls and client requests, while a
+  // WEDGED one emits nothing at all — and only the wall clock could tell them
+  // apart, so a wedge cost the full cap (10 minutes of a UI saying "Running…"
+  // over a process that was never going to answer; observed live, twice).
+  // Silence is the signal that actually distinguishes them.
+  let lastActivityAt = Date.now()
+  const touch = () => {
+    lastActivityAt = Date.now()
+  }
   const { child, readable, writable } = spawnBinary(opts)
   const envelopes: RunEventEnvelope[] = []
   let seq = 0
@@ -674,6 +916,8 @@ export async function sendTurn(opts: SendTurnOptions): Promise<SendTurnResult> {
     return seq
   }
   const pushEvent = (event: RunEvent): void => {
+    lastActivityAt = Date.now()
+    if (event.type === 'done') turnSettled = true
     const envelope = { runId: opts.runId, seq: allocSeq(), event }
     envelopes.push(envelope)
     opts.onEvent?.(envelope)
@@ -685,7 +929,14 @@ export async function sendTurn(opts: SendTurnOptions): Promise<SendTurnResult> {
 
   try {
     const stream = ndJsonStream(writable, readable)
-    const app = buildClientApp(opts.permissionTimeoutMs ?? 50, opts.permissionMode ?? 'ask', opts.permissionCallback, terminals)
+    const app = buildClientApp(
+    opts.permissionTimeoutMs ?? 50,
+    opts.permissionMode ?? 'ask',
+    opts.permissionCallback,
+    terminals,
+    pushEvent,
+    touch,
+  )
 
     const turnPromise = new Promise<void>((resolve, reject) => {
       // `connectWith` returns its own promise, independent of our
@@ -721,7 +972,57 @@ export async function sendTurn(opts: SendTurnOptions): Promise<SendTurnResult> {
           pinnedSessionId = active.sessionId
           pushEvent({ type: 'session', externalId: active.sessionId })
 
-          await active.prompt(opts.text)
+          // Start the turn but DON'T await it before draining updates.
+          // `prompt()` only settles once the whole turn is over, so awaiting
+          // it first meant every `session/update` notification piled up
+          // inside the SDK and the loop below drained the entire backlog at
+          // once the moment the agent finished. Measured, not theorised:
+          // instrumenting the dispatcher showed all ~90 chunks of a reply
+          // arriving in the same millisecond, which is why the UI could only
+          // ever reveal a response after it was already complete — Hermes
+          // itself streams at real model speed the whole time (the CLI shows
+          // exactly that), we simply weren't reading until it had finished.
+          // Consuming updates concurrently with the in-flight prompt is what
+          // makes token-speed streaming actually reach the browser.
+          // Hand the caller a way to interrupt this turn while it's still
+          // running. `session/cancel` is ACP's own cooperative stop: the
+          // agent finishes what it's mid-way through, may emit a few final
+          // updates, and then ends the turn with a `cancelled` stop reason
+          // (which the loop below turns into a `done` event) — as opposed to
+          // killing the process, which would strand the worktree and lose
+          // whatever the agent had already produced.
+          opts.onControl?.({
+            cancel: async () => {
+              try {
+                await ctx.notify('session/cancel', { sessionId: active.sessionId })
+              } catch {
+                // The pipe is already gone — nothing cooperative is possible,
+                // so fall straight through to the escalation below.
+              }
+              // Cooperative cancel assumes the agent is in a position to read
+              // the notification. An agent blocked inside a client request
+              // that never returns (a wedged `terminal/wait_for_exit`, live
+              // case) is not: it never processes the cancel, the turn never
+              // ends, and Stop appears to do nothing at all. So the stop is
+              // guaranteed rather than requested — ask nicely, then take the
+              // process down if the turn has not ended shortly after.
+              setTimeout(() => {
+                if (turnSettled) return
+                try {
+                  child.kill()
+                } catch {
+                  // Already gone; the `finally` block reaps either way.
+                }
+              }, CANCEL_ESCALATION_MS).unref?.()
+            },
+          })
+
+          const promptPromise = active.prompt(opts.text)
+          // A rejection here is surfaced by the await after the loop; attach
+          // a no-op catch now so it can never be an unhandled rejection in
+          // the window before that await is reached.
+          promptPromise.catch(() => {})
+
           for (;;) {
             const msg = await active.nextUpdate()
             if (msg.kind === 'stop') {
@@ -735,6 +1036,11 @@ export async function sendTurn(opts: SendTurnOptions): Promise<SendTurnResult> {
             const ev = normaliseSessionUpdate(msg.update)
             if (ev) pushEvent(ev)
           }
+
+          // The loop exits on the stop notification, which the agent only
+          // sends as the turn ends — so this is already settled or about to
+          // be. Awaited so a prompt-level failure still propagates.
+          await promptPromise
           resolve()
         } catch (err) {
           pushEvent({ type: 'done', status: 'error', reason: String(err) })
@@ -748,21 +1054,41 @@ export async function sendTurn(opts: SendTurnOptions): Promise<SendTurnResult> {
       })
     })
 
-    // Wall-clock cap so a misbehaving agent can't hang the harness forever.
+    // Two independent caps. The wall clock bounds the worst case; the
+    // inactivity check catches a wedge far sooner, which is what actually
+    // matters to someone watching the screen.
     let timedOut = false
+    let timeoutReason = ''
     const timeout = new Promise<void>((resolve) => {
       const t = setTimeout(() => {
         timedOut = true
+        timeoutReason = `turn exceeded ${turnTimeoutMs}ms wall-clock cap`
         resolve()
       }, turnTimeoutMs)
       void t
     })
-    await Promise.race([turnPromise, timeout])
+    const inactivity = new Promise<void>((resolve) => {
+      const interval = setInterval(() => {
+        if (turnSettled) {
+          clearInterval(interval)
+          return
+        }
+        const silentFor = Date.now() - lastActivityAt
+        if (silentFor >= inactivityTimeoutMs) {
+          clearInterval(interval)
+          timedOut = true
+          timeoutReason = `agent produced nothing for ${Math.round(silentFor / 1000)}s — treating the turn as wedged`
+          resolve()
+        }
+      }, INACTIVITY_POLL_MS)
+      interval.unref?.()
+    })
+    await Promise.race([turnPromise, timeout, inactivity])
     if (timedOut) {
       pushEvent({
         type: 'done',
         status: 'error',
-        reason: `turn exceeded ${turnTimeoutMs}ms wall-clock cap`,
+        reason: timeoutReason,
       })
       // Do NOT await turnPromise here — it lost the race, which means
       // whatever it's doing (most often `active.nextUpdate()` blocked on a

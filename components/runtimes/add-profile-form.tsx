@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
-import { createRuntimeProfile } from '@/app/(app)/workspace/[workspaceSlug]/runtimes/actions'
+import { createRuntimeProfile } from '@/app/(app)/workspace/[workspaceSlug]/settings/runtimes/actions'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/hooks/use-toast'

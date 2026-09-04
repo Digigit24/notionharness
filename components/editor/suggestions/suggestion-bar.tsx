@@ -107,7 +107,7 @@ export function SuggestionBar({ pageId }: { pageId: number }) {
   if (suggestions.length === 0) return null
 
   return (
-    <div className="sticky bottom-4 z-20 mx-auto w-full max-w-2xl px-4">
+    <div className="sticky bottom-4 z-20 w-full px-4">
       <Card className="gap-2 border-primary/30 bg-popover/95 py-3 shadow-lg backdrop-blur">
         <div className="flex flex-wrap items-center justify-between gap-2 px-4">
           <span className="text-sm font-medium">

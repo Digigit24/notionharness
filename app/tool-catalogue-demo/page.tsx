@@ -32,5 +32,5 @@ const examples: Array<{ label: string; pair: ToolPair }> = [
 ]
 
 export default function ToolCatalogueDemoPage() {
-  return <main className="min-h-screen bg-background px-6 py-12 text-foreground"><div className="mx-auto max-w-3xl space-y-8"><header><h1 className="text-2xl font-semibold tracking-tight">Tool UI catalogue</h1><p className="mt-2 text-sm text-muted-foreground">Standalone previews for paired RunEvent tool calls and results. Unknown tools fall back to structured JSON.</p></header><div className="grid gap-6">{examples.map((example) => <DemoToolPair key={example.label} {...example} />)}</div></div></main>
+  return <main className="min-h-screen bg-background px-6 py-12 text-foreground"><div className="space-y-8"><header><h1 className="text-2xl font-semibold tracking-tight">Tool UI catalogue</h1><p className="mt-2 text-sm text-muted-foreground">Standalone previews for paired RunEvent tool calls and results. Unknown tools fall back to structured JSON.</p></header><div className="grid gap-6">{examples.map((example) => <DemoToolPair key={example.label} {...example} />)}</div></div></main>
 }

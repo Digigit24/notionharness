@@ -28,6 +28,7 @@ import { statusColorClasses } from '@/lib/status-colors'
 import type { TaskSort, TaskSortField } from '@/lib/task-views/data-layer'
 import { AgentPresence, RunMetrics, type TaskRunMetrics } from './run-metrics'
 import type { Task, TaskStatus } from '@/payload-types'
+import { formatTimestamp } from '@/lib/relative-time'
 
 const ROW_HEIGHT = 40
 
@@ -102,7 +103,7 @@ export function TaskTableView({
       },
       {
         id: 'updatedAt',
-        accessorFn: (task) => (task.updatedAt ? new Date(task.updatedAt).toLocaleString() : ''),
+        accessorFn: (task) => (task.updatedAt ? formatTimestamp(task.updatedAt) : ''),
         header: 'Updated',
         size: 160,
       },
@@ -395,7 +396,7 @@ function TaskCardList({
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-black/50 dark:text-white/50">
               {assignee && <span className="truncate">{assignee}</span>}
               {project && <span className="truncate">{project}</span>}
-              {task.updatedAt && <span className="shrink-0">{new Date(task.updatedAt).toLocaleString()}</span>}
+              {task.updatedAt && <span className="shrink-0">{formatTimestamp(task.updatedAt)}</span>}
             </div>
             <div className="flex items-center gap-2">
               <AgentPresence active={activeTaskIds.has(task.id)} />

@@ -4,17 +4,38 @@ import { html } from 'lit'
 import { getMenusWithMentions } from './menu'
 import { MentionAttributeSchema } from './schema'
 
-const MentionInlineSpecExtension = InlineSpecExtension({
+// `MentionAttributeSchema` (schema.ts) is built from `zod-v3`, an aliased pin
+// of the exact zod version every `@blocksuite/*` package bundles — matches
+// this repo's own established rule (see lib/blocksuite-affine-components.ts's
+// header comment) that anything touching BlockSuite internals must not pull
+// in a second, incompatible copy of a dependency BlockSuite itself relies on.
+export const MentionInlineSpecExtension = InlineSpecExtension({
   name: 'mention',
-  // This app depends on zod v4 directly, but BlockSuite's own nested zod dep
-  // is v3 (its `InlineSpecs.schema` type is v3's `ZodTypeAny`) — the runtime
-  // `.parse()`/`.catch()` API used here is stable across both major versions,
-  // so this is a type-only cast, not a behavior workaround.
   schema: MentionAttributeSchema as unknown as never,
   match: (delta) => !!delta.attributes?.mention,
   renderer: ({ delta }) => html`<affine-mention .delta=${delta}></affine-mention>`,
   embed: true,
 })
+
+// `MentionInlineSpecExtension` alone only makes a "mention" inline spec
+// DISCOVERABLE by id — registering it here does NOT, by itself, make any
+// paragraph/list block's actual attribute validator accept a `mention` key.
+// That validator comes from `DefaultInlineManagerExtension` (@blocksuite/
+// affine-components/rich-text/all-extensions.ts), whose own `specs: [...]`
+// array is a closed, hardcoded list of BlockSuite's built-in specs (bold,
+// italic, ..., reference, link) that has no way to know about ours. Every
+// paragraph/list block reads `inlineManager.getSchema()`, which merges
+// exactly that closed list — so inserting a mention there always failed
+// zod validation with "expected never, received object" for the `mention`
+// key (confirmed live via a scripted repro), even though the popover menu
+// itself worked fine end to end. `./inline-manager-override.ts` (imported
+// directly by BlockSuiteEditor.tsx, not re-exported here, to avoid a
+// circular import — that module imports `MentionInlineSpecExtension` from
+// this file) fixes the actual defect by re-registering
+// `DefaultInlineManagerExtension`'s own identifier (via `di.override`, not
+// `di.addImpl`, since re-`addImpl`-ing an existing identifier throws
+// `DuplicateServiceDefinitionError`) with the same built-in spec list plus
+// this one.
 
 export const MentionSpec: ExtensionType[] = [MentionInlineSpecExtension]
 

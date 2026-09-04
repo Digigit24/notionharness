@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { refreshAllRuntimes } from '@/lib/hermes/runtime-health'
+import { refreshAllRuntimes } from '@/lib/runtimes/hermes/runtime-health'
 
 /**
  * Internal-only trigger for `refreshAllRuntimes`, meant to be polled by

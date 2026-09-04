@@ -15,7 +15,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { ChevronDown, ChevronRight, FileText } from 'lucide-react'
 import { BlockSuiteEditor } from '@/components/editor/BlockSuiteEditor'
-import { Thread } from '@/components/hermes'
+import { Thread } from '@/components/thread'
 import { adaptRunEventsToThread, type ChatThread } from '@/lib/hermes/runEvent-adapter'
 import type { RunEventEnvelope } from '@/lib/run-events'
 import { getRunMessages, getTaskRuns } from '@/app/(app)/workspace/[workspaceSlug]/tasks/actions'
@@ -30,6 +30,7 @@ import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import type { Run, RunStatus } from '@/lib/broker'
 import type { Agent, Comment, Page } from '@/payload-types'
+import { formatTimestamp } from '@/lib/relative-time'
 
 const POLL_MS = 4000
 
@@ -258,7 +259,7 @@ function CommentRow({ comment }: { comment: Comment }) {
     <li className="rounded-md border border-black/10 p-3 text-sm dark:border-white/10">
       <div className="flex items-center justify-between gap-2">
         <span className="font-medium">{author?.name || author?.email || 'Someone'}</span>
-        <span className="text-xs text-black/30 dark:text-white/30">{new Date(comment.createdAt).toLocaleString()}</span>
+        <span className="text-xs text-black/30 dark:text-white/30">{formatTimestamp(comment.createdAt)}</span>
       </div>
       <p className="mt-1 whitespace-pre-wrap text-black/80 dark:text-white/80">{comment.body}</p>
     </li>
@@ -289,7 +290,7 @@ function RunRow({
           <span className="truncate">Run #{run.id}{agentName ? ` · ${agentName}` : ''}</span>
         </span>
         <span className="shrink-0 text-xs text-black/30 dark:text-white/30">
-          {new Date(run.startedAt ?? run.createdAt).toLocaleString()}
+          {formatTimestamp(run.startedAt ?? run.createdAt)}
         </span>
       </button>
       {expanded && (

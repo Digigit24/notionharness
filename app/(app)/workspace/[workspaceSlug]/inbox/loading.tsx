@@ -6,7 +6,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 export default function InboxLoading() {
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-      <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-6 py-8">
+      <div className="flex w-full flex-col gap-4 px-5 py-8">
         <div className="flex flex-col gap-1">
           <Skeleton className="h-7 w-24" />
           <Skeleton className="h-4 w-64" />

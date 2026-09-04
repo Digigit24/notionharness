@@ -1,6 +1,6 @@
 import { getPayloadClient } from '@/lib/payload'
 import type { ApprovalOption, ApprovalStatus } from '@/collections/Approvals'
-import type { ApprovalOutcome } from './acp-client'
+import type { ApprovalOutcome } from '@/lib/run-events'
 
 const pendingApprovalWaiters = new Map<
   string,
@@ -115,6 +115,7 @@ export async function listPendingApprovalsForUser(userId: number) {
       status: { equals: 'pending' },
     },
     limit: 100,
+    depth: 0,
     overrideAccess: true,
   })
   return result.docs as ApprovalDoc[]
@@ -134,12 +135,36 @@ export interface ApprovalDoc {
   updatedAt: string
 }
 
+/** Looks a pending approval up by the ACP request id carried in the RunEvent
+ * stream, which is the only handle the in-chat approval card has. Scoped to
+ * `pending` so a re-submitted decision can't reopen a settled request. */
+export async function getApprovalByExternalId(externalId: string) {
+  const payload = await getPayloadClient()
+  const result = await payload.find({
+    collection: 'approvals',
+    where: { externalId: { equals: externalId }, status: { equals: 'pending' } },
+    limit: 1,
+    // `requestedUser` is a relationship. At Payload's default depth it comes
+    // back as a populated user OBJECT, and every caller compares it to a
+    // numeric user id (`approval.requestedUser !== user.id`) — which never
+    // matched, so every Approve click in the chat card and the inbox answered
+    // "You do not have access to this approval." depth 0 keeps it the id
+    // `ApprovalDoc` already promises.
+    depth: 0,
+    overrideAccess: true,
+  })
+  return (result.docs[0] as ApprovalDoc | undefined) ?? null
+}
+
 export async function getApproval(id: number) {
   const payload = await getPayloadClient()
   try {
     const doc = await payload.findByID({
       collection: 'approvals',
       id,
+      // Same reason as getApprovalByExternalId: callers compare
+      // `requestedUser` to a numeric id.
+      depth: 0,
       overrideAccess: true,
     })
     return doc as ApprovalDoc | null

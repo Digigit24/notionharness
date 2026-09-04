@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { getPayloadClient } from '@/lib/payload'
 import { listRunsForProject, getRunUsageTotalsForRuns, type RunUsageTotals, type Run } from '@/lib/broker'
-import type { Project } from '@/payload-types'
+import type { Project, ProjectResource } from '@/payload-types'
 
 // ROADMAP B-1 (project detail) — the project's own fields are deliberately
 // minimal today (collections/Projects.ts: name/workspace/icon/description
@@ -30,6 +30,73 @@ export async function updateProject({
   revalidatePath(`/workspace/${workspaceSlug}/projects/${projectId}`)
   revalidatePath(`/workspace/${workspaceSlug}/projects`)
   return project
+}
+
+/** Resources — a project's bound git repos / local directories
+ * (collections/ProjectResources.ts). Closes the gap that tab's own "Files"
+ * empty state already names ("Projects have no repo/directory binding field
+ * at all") now that the schema is actually migrated and registered
+ * (Phase C, C1.1 — see AGENTS.md). Deliberately list/create/delete only for
+ * this pass, no inline edit — matches the size of every other CRUD form
+ * added this session (runtime profiles, projects themselves). */
+export async function listProjectResources(projectId: number): Promise<ProjectResource[]> {
+  const payload = await getPayloadClient()
+  const result = await payload.find({
+    collection: 'project-resources',
+    where: { project: { equals: projectId } },
+    sort: 'position',
+    limit: 100,
+    depth: 0,
+    overrideAccess: true,
+  })
+  return result.docs
+}
+
+export async function createProjectResource({
+  projectId,
+  workspaceSlug,
+  data,
+}: {
+  projectId: number
+  workspaceSlug: string
+  data: Pick<ProjectResource, 'kind' | 'role' | 'path' | 'repoUrl' | 'defaultBranch' | 'writable'>
+}): Promise<ProjectResource> {
+  if (data.role === 'primary') {
+    const existingPrimary = await getPayloadClient().then((payload) =>
+      payload.find({
+        collection: 'project-resources',
+        where: { project: { equals: projectId }, role: { equals: 'primary' } },
+        limit: 1,
+        depth: 0,
+        overrideAccess: true,
+      }),
+    )
+    if (existingPrimary.docs.length > 0) {
+      throw new Error('This project already has a primary resource — only one is allowed. Delete or change the existing one first.')
+    }
+  }
+  const payload = await getPayloadClient()
+  const resource = await payload.create({
+    collection: 'project-resources',
+    data: { ...data, project: projectId },
+    overrideAccess: true,
+  })
+  revalidatePath(`/workspace/${workspaceSlug}/projects/${projectId}`)
+  return resource
+}
+
+export async function deleteProjectResource({
+  resourceId,
+  projectId,
+  workspaceSlug,
+}: {
+  resourceId: number
+  projectId: number
+  workspaceSlug: string
+}): Promise<void> {
+  const payload = await getPayloadClient()
+  await payload.delete({ collection: 'project-resources', id: resourceId, overrideAccess: true })
+  revalidatePath(`/workspace/${workspaceSlug}/projects/${projectId}`)
 }
 
 export interface ProjectRunRow {

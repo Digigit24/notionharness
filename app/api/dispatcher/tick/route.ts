@@ -2,7 +2,14 @@ import { NextResponse } from 'next/server'
 import { dispatchNextRun } from '@/lib/dispatcher/worker'
 import { sweepExpiredLeases } from '@/lib/broker/runs'
 
-const SWEEP_EVERY_TICKS = 10
+// Every tick, not every tenth. `sweepExpiredLeases` is one indexed UPDATE
+// that normally matches nothing, so the cost is negligible — while the
+// delay it used to add was very visible: a run orphaned by a server restart
+// keeps its `running` status until something reclaims it, and the chat
+// composer stays locked on "Agent is answering…" that whole time. Waiting
+// out the lease is unavoidable (a real turn can legitimately run for
+// minutes), but adding up to another 30s on top of it isn't.
+const SWEEP_EVERY_TICKS = 1
 let ticksSinceSweep = 0
 
 /**

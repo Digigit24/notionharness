@@ -16,13 +16,14 @@ import {
   hasAnyRunForWorkspace,
 } from '@/lib/broker'
 import type { Run } from '@/lib/broker'
-import { formatRelativeTime } from '@/lib/relative-time'
+import { formatCount, formatRelativeTime } from '@/lib/relative-time'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
 import { NewPageButton } from '@/components/canvas/new-page-button'
 import { RecentPagesSection } from '@/components/home/recent-pages-section'
 import { FirstRunChecklist } from '@/components/home/first-run-checklist'
+import { SeedStarterWorkspaceButton } from '@/components/home/seed-starter-workspace-button'
 
 // ROADMAP B5.1 — "not a board. The workspace root should answer, in order:
 // what needs me, what is happening right now, what I was doing, and what it
@@ -164,7 +165,7 @@ export default async function WorkspaceHome({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-6 py-8">
+      <div className="flex w-full flex-col gap-8 px-5 py-8">
         <header>
           <h1 className="text-2xl font-semibold">{workspace.name}</h1>
         </header>
@@ -174,14 +175,17 @@ export default async function WorkspaceHome({
             with real content doesn't need to be told how to get started,
             even on a day nothing happens to need this user's attention. */}
         {isGenuinelyEmpty && (
-          <FirstRunChecklist
-            workspaceSlug={workspace.slug}
-            status={{
-              hasEnabledRuntimeProfile: enabledRuntimeProfileCount > 0,
-              hasEnabledAgent: enabledAgentCount > 0,
-              hasAnyRun,
-            }}
-          />
+          <div className="flex flex-col gap-2">
+            <FirstRunChecklist
+              workspaceSlug={workspace.slug}
+              status={{
+                hasEnabledRuntimeProfile: enabledRuntimeProfileCount > 0,
+                hasEnabledAgent: enabledAgentCount > 0,
+                hasAnyRun,
+              }}
+            />
+            <SeedStarterWorkspaceButton workspaceId={workspace.id} workspaceSlug={workspace.slug} />
+          </div>
         )}
 
         {/* What needs me */}
@@ -244,7 +248,7 @@ export default async function WorkspaceHome({
                         </span>
                       </span>
                       <span className="shrink-0 text-xs tabular-nums text-black/40 dark:text-white/40">
-                        {elapsedSince(run.startedAt || run.createdAt)}
+                        {formatRelativeTime(run.startedAt || run.createdAt)}
                       </span>
                     </Link>
                   </li>
@@ -326,13 +330,24 @@ export default async function WorkspaceHome({
 
         {/* What it is costing */}
         <section id="what-it-is-costing" className="flex flex-col gap-2 scroll-mt-8">
-          <h2 className="text-sm font-medium text-black/60 dark:text-white/60">What it is costing</h2>
+          <h2 className="text-sm font-medium text-black/60 dark:text-white/60">
+            <Link href={`/workspace/${workspace.slug}/settings/health`} className="hover:underline">
+              What it is costing
+            </Link>
+          </h2>
           <Card>
             <CardContent className="flex items-center gap-3 py-2">
               <CircleDollarSign size={18} className="shrink-0 text-black/40 dark:text-white/40" />
               <div>
                 <p className="text-lg font-semibold tabular-nums">${(usage7d.totalCostTicks / 100).toFixed(2)}</p>
-                <p className="text-xs text-black/40 dark:text-white/40">Last 7 days across every run in this workspace</p>
+                {/* `runCount` and `totalTokens` were already fetched and
+                    thrown away. A cost with no denominator answers "how
+                    much" but never "how much per run", which is the
+                    question anyone actually asks next. */}
+                <p className="text-xs text-black/40 dark:text-white/40">
+                  {formatCount(usage7d.runCount)} run{usage7d.runCount === 1 ? '' : 's'} ·{' '}
+                  {formatCount(usage7d.totalTokens)} tokens · last 7 days
+                </p>
               </div>
             </CardContent>
           </Card>
@@ -397,11 +412,4 @@ function describeRunTarget(
   return null
 }
 
-function elapsedSince(iso: string | null): string {
-  if (!iso) return ''
-  const ms = Math.max(0, Date.now() - new Date(iso).getTime())
-  const minutes = Math.round(ms / 60_000)
-  if (minutes < 60) return `${minutes}m`
-  const hours = Math.floor(minutes / 60)
-  return `${hours}h ${minutes % 60}m`
-}
+

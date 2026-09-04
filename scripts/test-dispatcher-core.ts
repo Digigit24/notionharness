@@ -22,7 +22,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { randomUUID } from 'node:crypto'
 import { RunWorktreeManager } from '../lib/run-worktrees/manager'
-import { sendTurnWithIdentity } from '../lib/hermes/run-with-identity'
+import { sendTurnWithIdentity } from '../lib/runtimes/hermes/run-with-identity'
 import type { RunEventEnvelope } from '../lib/run-events'
 
 const exec = promisify(execFile)

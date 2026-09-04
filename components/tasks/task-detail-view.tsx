@@ -25,6 +25,7 @@ import { createSubtask } from '@/app/(app)/workspace/[workspaceSlug]/tasks/[task
 import { TaskWorkTab } from './task-work-tab'
 import type { Run, RunStatus, TaskUsageTotals } from '@/lib/broker'
 import type { Activity, Agent, Comment, Page, Project, Task, TaskStatus, User, Workspace } from '@/payload-types'
+import { formatTimestamp, formatCount } from '@/lib/relative-time'
 
 const RUN_BADGE_VARIANT: Record<RunStatus, 'default' | 'secondary' | 'destructive' | 'outline'> = {
   completed: 'default',
@@ -218,7 +219,7 @@ export function TaskDetailView({
           </div>
           <div className="flex items-center justify-between">
             <dt className="text-black/50 dark:text-white/50">Tokens</dt>
-            <dd className="font-medium">{usageTotals.totalTokens.toLocaleString()}</dd>
+            <dd className="font-medium">{formatCount(usageTotals.totalTokens)}</dd>
           </div>
           <div className="flex items-center justify-between">
             <dt className="text-black/50 dark:text-white/50">Cost</dt>
@@ -478,7 +479,7 @@ function ActivityTab({ activity }: { activity: Activity[] }) {
                 <span className="font-medium">{actor?.name || actor?.email || 'System'}</span>{' '}
                 <span className="text-black/60 dark:text-white/60">{item.action}</span>
               </span>
-              <span className="shrink-0 text-xs text-black/30 dark:text-white/30">{new Date(item.createdAt).toLocaleString()}</span>
+              <span className="shrink-0 text-xs text-black/30 dark:text-white/30">{formatTimestamp(item.createdAt)}</span>
             </div>
             {details && Object.keys(details).length > 0 && (
               <pre className="mt-1 overflow-x-auto rounded bg-black/[.03] px-2 py-1 text-xs text-black/50 dark:bg-white/[.05] dark:text-white/50">

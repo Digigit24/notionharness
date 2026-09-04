@@ -17,6 +17,7 @@ interface RunRow {
   accountable_user: number
   worker_id: string | null
   external_session_id: string | null
+  session_id?: string | number | null
   page_id: string | number | null
   page_subtree_block_id: string | null
   suggestion_status: SuggestionStatus
@@ -44,7 +45,9 @@ function toISOStringOrNull(value: Date | null): string | null {
   return value === null ? null : value.toISOString()
 }
 
-function rowToRun(row: RunRow): Run {
+/** Exported so `sessions.ts` can map its own `SELECT * FROM runs` without
+ * duplicating the column mapping — one mapper, one place to keep correct. */
+export function rowToRun(row: RunRow): Run {
   return {
     id: Number(row.id),
     taskId: row.task_id === null ? null : Number(row.task_id),
@@ -59,6 +62,7 @@ function rowToRun(row: RunRow): Run {
     workerId: row.worker_id,
     externalSessionId: row.external_session_id,
     pageId: row.page_id === null ? null : Number(row.page_id),
+    sessionId: row.session_id === null || row.session_id === undefined ? null : Number(row.session_id),
     pageSubtreeBlockId: row.page_subtree_block_id,
     suggestionStatus: row.suggestion_status,
     prompt: row.prompt,
@@ -91,11 +95,14 @@ export async function enqueueRun(input: {
   prompt?: string | null
   /** Page owning a page-scoped run; independent of task_id. */
   pageId?: number | null
+  /** Chat session owning this run (`chat_sessions.id`). Set for every run
+   * started from the Work view; null for task- and page-scoped runs. */
+  sessionId?: number | null
 }): Promise<Run> {
   const pool = getBrokerPool()
   const res = await pool.query<RunRow>(
-    `INSERT INTO runs (task_id, agent_id, status, originator_user, accountable_user, priority, max_attempts, prompt, page_id)
-     VALUES ($1, $2, 'queued', $3, $4, $5, $6, $7, $8)
+    `INSERT INTO runs (task_id, agent_id, status, originator_user, accountable_user, priority, max_attempts, prompt, page_id, session_id)
+     VALUES ($1, $2, 'queued', $3, $4, $5, $6, $7, $8, $9)
      RETURNING *`,
     [
       input.taskId ?? null,
@@ -106,6 +113,7 @@ export async function enqueueRun(input: {
       input.maxAttempts ?? 3,
       input.prompt ?? null,
       input.pageId ?? null,
+      input.sessionId ?? null,
     ],
   )
   return rowToRun(res.rows[0])
@@ -254,9 +262,18 @@ export async function listRunsForTask(taskId: number): Promise<Run[]> {
 export async function listActiveRunsForWorkspace(workspaceId: number): Promise<Run[]> {
   const pool = getBrokerPool()
   const res = await pool.query<RunRow>(
+    // Three LEFT JOINs, not one INNER JOIN on tasks. A run reaches a
+    // workspace by any of three routes — its task, its page, or (for the
+    // standalone "Ask" runs, which carry NEITHER a task_id nor a page_id)
+    // its agent. Joining only through `tasks` meant every Ask run was
+    // invisible here, which is why the shell's "runs in flight" counter sat
+    // at 0 throughout a live Ask conversation. Only one join ever matches a
+    // given row, so this cannot double-count.
     `SELECT r.* FROM runs r
-     INNER JOIN tasks t ON t.id = r.task_id
-     WHERE t.workspace_id = $1
+     LEFT JOIN tasks t ON t.id = r.task_id
+     LEFT JOIN pages p ON p.id = r.page_id
+     LEFT JOIN agents a ON a.id = r.agent_id
+     WHERE (t.workspace_id = $1 OR p.workspace_id = $1 OR a.workspace_id = $1)
        AND r.status IN ('queued', 'dispatched', 'running', 'waiting_directory')
      ORDER BY r.created_at DESC`,
     [workspaceId],
@@ -429,6 +446,21 @@ export async function setRunPageContext(runId: number, pageId: number, subtreeBl
 export async function listRunsForPage(pageId: number): Promise<Run[]> {
   const pool = getBrokerPool()
   const res = await pool.query<RunRow>(`SELECT * FROM runs WHERE page_id = $1 ORDER BY created_at DESC`, [pageId])
+  return res.rows.map(rowToRun)
+}
+
+/** The "Ask" page's standalone conversation history with one agent — runs
+ * with neither a task nor a page (`enqueueRun` called with both null), which
+ * is exactly the shape `runs_task_agent_active_uidx` treats as "at most one
+ * ACTIVE run for this agent with no task/page" — the same one-run-at-a-time
+ * semantics the page-scoped docked panel already relies on via `page_id`,
+ * just scoped by `agent_id` instead. */
+export async function listRunsForAgentStandalone(agentId: number): Promise<Run[]> {
+  const pool = getBrokerPool()
+  const res = await pool.query<RunRow>(
+    `SELECT * FROM runs WHERE agent_id = $1 AND task_id IS NULL AND page_id IS NULL ORDER BY created_at DESC`,
+    [agentId],
+  )
   return res.rows.map(rowToRun)
 }
 
