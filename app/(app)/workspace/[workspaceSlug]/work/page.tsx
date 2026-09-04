@@ -1,5 +1,6 @@
 import { notFound } from 'next/navigation'
 import { getPayloadClient } from '@/lib/payload'
+import { sessionConfigOptions, type AgentHandshake } from '@/lib/runtimes/handshake'
 import { getWorkspaceBySlug } from '@/lib/pages-cache'
 import { getActiveModelConfig, type ActiveModelConfig } from '@/lib/runtimes/hermes/providers'
 import { listSessions } from '@/lib/broker'
@@ -29,7 +30,10 @@ export default async function WorkPage({
       where: { workspace: { equals: workspace.id }, enabled: { equals: true } },
       sort: 'name',
       limit: 100,
-      depth: 0,
+      // depth 1 so each agent's runtime profile comes back with it, carrying
+      // the handshake that says which settings that runtime offers. The
+      // composer's chips are built from that, not from a list we maintain.
+      depth: 1,
       overrideAccess: true,
     }),
     payload.find({
@@ -68,7 +72,22 @@ export default async function WorkPage({
       workspaceSlug={workspaceSlug}
       agents={agentsResult.docs.map((a) => {
         const profile = typeof a.hermesProfile === 'string' ? a.hermesProfile.trim() : ''
-        return { id: a.id, name: a.name, profile, model: modelByProfile.get(profile) ?? null }
+        const runtime = a.runtimeProfile && typeof a.runtimeProfile !== 'number' ? a.runtimeProfile : null
+        const handshake = (runtime?.handshake ?? null) as AgentHandshake | null
+        return {
+          id: a.id,
+          name: a.name,
+          profile,
+          model: modelByProfile.get(profile) ?? null,
+          // Whatever this agent's runtime declared about itself. Undefined
+          // when it has never been probed, which the composer distinguishes
+          // from "offers nothing".
+          runtimeOptions: sessionConfigOptions(handshake),
+          runtimeDefaults:
+            a.runtimeConfig && typeof a.runtimeConfig === 'object'
+              ? (a.runtimeConfig as Record<string, unknown>)
+              : {},
+        }
       })}
       projects={projectsResult.docs.map((p) => ({ id: p.id, name: p.name }))}
       initialSessions={sessions}

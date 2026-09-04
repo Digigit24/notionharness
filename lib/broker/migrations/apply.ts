@@ -20,13 +20,15 @@ async function main() {
     fs.readFileSync(path.join(import.meta.dirname, '0007_sessions_and_worktrees.sql'), 'utf8'),
     fs.readFileSync(path.join(import.meta.dirname, '0008_dispatcher_heartbeat.sql'), 'utf8'),
     fs.readFileSync(path.join(import.meta.dirname, '0009_teams.sql'), 'utf8'),
+    fs.readFileSync(path.join(import.meta.dirname, '0010_run_cancel_request.sql'), 'utf8'),
+    fs.readFileSync(path.join(import.meta.dirname, '0011_run_runtime_config.sql'), 'utf8'),
   ].join('\n')
 
   const pool = new Pool({ connectionString: process.env.DATABASE_URI || '', max: 1 })
   try {
     await pool.query(sql)
     console.log(
-      'Broker schema applied: runs, run_messages, run_usage, run page context, NULL-safe active-run index, run suggestion status, run dismissed_at, sessions + worktrees, dispatcher heartbeat, teams.',
+      'Broker schema applied: runs, run_messages, run_usage, run page context, NULL-safe active-run index, run suggestion status, run dismissed_at, sessions + worktrees, dispatcher heartbeat, teams, run cancel requests, per-run runtime config.',
     )
   } finally {
     await pool.end()

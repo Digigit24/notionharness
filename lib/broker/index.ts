@@ -36,6 +36,7 @@ export {
   listRunEventsForRuns,
   listRunEventsSince,
 } from './messages'
+export { isRunCancellationRequested, requestRunCancellation } from './runs'
 export { subscribeToRunNotifications } from './notify'
 export { clearRunBacklog, publishRunEvent, subscribeToRunEvents } from './live-bus'
 export type { LiveRunEvent } from './live-bus'

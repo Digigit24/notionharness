@@ -558,6 +558,64 @@ type TerminalRegistry = ReturnType<typeof createTerminalRegistry>
 // needs to talk to us.
 // ---------------------------------------------------------------------------
 
+/**
+ * What the agent is actually asking permission to do, in one readable block.
+ *
+ * The useful specifics live in `rawInput` — the command for a shell call, the
+ * path and content for a write — which is agent-shaped and untyped, so this
+ * pulls out the fields that carry meaning across every agent seen so far and
+ * falls back to compact JSON rather than showing nothing. Approving an
+ * unnamed action is the failure being fixed; showing slightly awkward JSON is
+ * strictly better than that.
+ */
+function describePermissionRequest(toolCall: {
+  kind?: string | null
+  rawInput?: unknown
+  locations?: Array<{ path?: string; line?: number | null }> | null
+}): string {
+  const parts: string[] = []
+  const input = (toolCall.rawInput ?? null) as Record<string, unknown> | null
+
+  if (input && typeof input === 'object') {
+    // The names real agents use for the thing being run or touched, in the
+    // order they are worth showing.
+    const command = input.command ?? input.cmd ?? input.script
+    if (typeof command === 'string' && command.trim()) parts.push(command.trim())
+
+    const path = input.path ?? input.file_path ?? input.filePath ?? input.file
+    if (typeof path === 'string' && path.trim() && !parts.includes(path.trim())) parts.push(path.trim())
+
+    const url = input.url
+    if (typeof url === 'string' && url.trim()) parts.push(url.trim())
+
+    if (parts.length === 0) {
+      try {
+        const json = JSON.stringify(input)
+        if (json && json !== '{}') parts.push(json.length > 600 ? `${json.slice(0, 600)}…` : json)
+      } catch {
+        // Unserialisable input: better to say nothing extra than to throw
+        // inside a permission handler and strand the turn.
+      }
+    }
+  }
+
+  const locations = (toolCall.locations ?? [])
+    .map((location) => (location?.path ? `${location.path}${location.line ? `:${location.line}` : ''}` : ''))
+    .filter(Boolean)
+  if (locations.length > 0) parts.push(locations.join(String.fromCharCode(10)))
+
+  // `rawInput.path` and `locations` routinely name the same file, and printing
+  // it twice makes a short, clear card look like a mistake. Verified live: a
+  // write request listed its path once from each source.
+  const seen = new Set<string>()
+  const unique = parts.filter((part) => {
+    if (seen.has(part)) return false
+    seen.add(part)
+    return true
+  })
+  return unique.join(String.fromCharCode(10))
+}
+
 function buildClientApp(
   permissionTimeoutMs: number,
   permissionMode: 'ask' | 'auto' | 'deny',
@@ -576,12 +634,30 @@ function buildClientApp(
       .onRequest('session/request_permission', async (ctx) => {
         // Proof of life for the inactivity watchdog in `sendTurn`.
         touch()
+        // The shape here is ACP's `RequestPermissionRequest`, and it does NOT
+        // carry `title`/`detail`. It carries a `toolCall`. Reading fields that
+        // do not exist is why every approval card in this app said only
+        // "Permission requested" with no indication of what was being asked —
+        // a prompt to approve something unnamed, which is both useless and
+        // exactly the kind of thing a person clicks through out of habit.
+        //
+        // Option labels have the same problem one level down: ACP calls the
+        // field `name`, and this read `label`, so the buttons fell back to
+        // generic text instead of the agent's own wording.
         const params = ctx.params as {
           id?: string
-          title?: string
-          detail?: string
-          options?: Array<{ optionId?: string; kind?: string; label?: string }>
+          toolCall?: {
+            toolCallId?: string
+            title?: string | null
+            name?: string | null
+            kind?: string | null
+            rawInput?: unknown
+            locations?: Array<{ path?: string; line?: number | null }> | null
+            content?: unknown
+          }
+          options?: Array<{ optionId?: string; kind?: string; name?: string; label?: string }>
         }
+        const toolCall = params.toolCall ?? {}
         // ACP does not guarantee an `id` on every request, but the transcript
         // needs a stable key to match the "settled" event back to the card it
         // resolves, so synthesize one when the agent omits it.
@@ -589,10 +665,12 @@ function buildClientApp(
         const options: PermissionOption[] = (params.options ?? []).map((option) => ({
           optionId: option.optionId ?? '',
           kind: option.kind ?? '',
-          label: option.label,
+          // `name` is the ACP field; `label` kept as a fallback so an agent
+          // that sends the other spelling still gets its own wording shown.
+          label: option.name ?? option.label,
         }))
-        const title = params.title ?? 'Permission requested'
-        const detail = params.detail ?? ''
+        const title = toolCall.title || toolCall.name || 'Permission requested'
+        const detail = describePermissionRequest(toolCall)
 
         // Every permission request enters the transcript, in all three modes.
         // Under `auto` and `deny` it is a record of what the agent was

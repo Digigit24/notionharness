@@ -1,10 +1,12 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { Bot, FolderGit2, GitBranch, Loader2, RotateCcw, Send, Square, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
+import type { SessionConfigOption } from '@/lib/runtimes/handshake'
+import { ComposerChips, composerOptions } from './composer-chips'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Thread } from '@/components/thread/Thread'
@@ -35,6 +37,12 @@ export interface WorkAgent {
   name: string
   profile: string
   model: ActiveModelConfig | null
+  /** Settings this agent's runtime declares for a session — its model, effort
+   * level, permission mode. `undefined` when the runtime has never been
+   * probed, which is a different answer from an empty list. */
+  runtimeOptions?: SessionConfigOption[]
+  /** The agent's own saved values, which the composer chips start from. */
+  runtimeDefaults?: Record<string, unknown>
 }
 
 export interface WorkProject {
@@ -84,6 +92,25 @@ export function WorkView({
   // R5.1 — the changes rail, collapsed by default. Closed it costs nothing,
   // which is what lets it read git on demand instead of polling.
   const [gitRailOpen, setGitRailOpen] = useState(false)
+  /**
+   * Prompts typed while the agent was still answering.
+   *
+   * The composer used to disable itself mid-turn, which loses the most useful
+   * moment there is: watching an agent go the wrong way and wanting to say so
+   * immediately. You had to hold the thought until it finished. Now the box
+   * stays live, and anything sent while it is busy is queued and delivered the
+   * moment the turn ends.
+   *
+   * Queued rather than injected mid-turn, and that is a real limitation worth
+   * being straight about: this harness spawns one process per turn, so there
+   * is no live session to steer into. True mid-turn steering needs a
+   * persistent per-session process, which is a structural change, not a flag.
+   */
+  const [queued, setQueued] = useState<string[]>([])
+  /** Per-message runtime overrides chosen in the composer chips. Reset after
+   * each send, because "answer this one harder" is about one message; a
+   * lasting change belongs on the agent. */
+  const [messageConfig, setMessageConfig] = useState<Record<string, unknown>>({})
   const [prompt, setPrompt] = useState('')
   const [sending, setSending] = useState(false)
   const [stopping, setStopping] = useState(false)
@@ -101,6 +128,11 @@ export function WorkView({
   const [draftProjectId, setDraftProjectId] = useState<number | null>(null)
 
   const agentId = activeSession?.agentId ?? draftAgentId
+  // The chips are built from THIS agent's runtime, so switching agent switches
+  // what can be decided per message — which is correct, because it is the
+  // runtime that decides what settings exist.
+  const activeAgent = agents.find((a) => a.id === agentId) ?? null
+  const chipOptions = composerOptions(activeAgent?.runtimeOptions)
   const projectId = activeSession?.projectId ?? draftProjectId
   const selectedAgent = agents.find((a) => a.id === agentId) ?? null
 
@@ -166,6 +198,31 @@ export function WorkView({
     if (landed) setPendingSend(null)
   }, [thread, pendingSend])
 
+  // Deliver a queued prompt the moment the agent is free.
+  //
+  // Its own effect, keyed on exactly what it reads. Folding it into the rail
+  // refresh below would have given it that effect's dependency list, which
+  // does not include the queue — so it would have fired against a stale
+  // snapshot and dropped messages.
+  //
+  // `handleSend` is recreated every render and is deliberately NOT a
+  // dependency: including it would re-run this on each render, and the guard
+  // below (not answering, not already sending, something queued) is what makes
+  // the send happen exactly once per turn boundary.
+  const drainRef = useRef(false)
+  useEffect(() => {
+    if (isAnswering || sending || queued.length === 0) {
+      drainRef.current = false
+      return
+    }
+    if (drainRef.current) return
+    drainRef.current = true
+    const [next, ...rest] = queued
+    setQueued(rest)
+    void handleSend(next)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAnswering, sending, queued])
+
   // Keep the rail's "answering" dots and ordering honest while a turn runs.
   useEffect(() => {
     if (!isAnswering) {
@@ -214,6 +271,14 @@ export function WorkView({
       setError('Pick an agent first.')
       return
     }
+    // Busy? Queue it and clear the box, so the thought is captured now and
+    // delivered the instant the agent is free.
+    if (isAnswering) {
+      setQueued((current) => [...current, text])
+      if (!override) setPrompt('')
+      return
+    }
+
     setSending(true)
     setError(null)
     setFailedSend(null)
@@ -254,7 +319,9 @@ export function WorkView({
         workspaceSlug,
         prompt: text,
         projectId,
+        runtimeConfig: Object.keys(messageConfig).length > 0 ? messageConfig : null,
       })
+      setMessageConfig({})
       if (sessionId !== activeSessionId) {
         router.replace(`/workspace/${workspaceSlug}/work?session=${sessionId}`, { scroll: false })
       }
@@ -434,6 +501,32 @@ export function WorkView({
         </div>
 
         <div className="mt-3 shrink-0">
+          {/* Queued messages are shown, and removable. A message that has been
+              accepted but is invisible is indistinguishable from one that was
+              silently dropped. */}
+          {queued.length > 0 && (
+            <div className="mb-2 flex flex-col gap-1">
+              {queued.map((text, index) => (
+                <div
+                  key={`${index}-${text.slice(0, 24)}`}
+                  className="flex items-center gap-2 rounded-md border border-black/10 bg-black/[0.02] px-2 py-1 text-xs dark:border-white/10 dark:bg-white/[0.03]"
+                >
+                  <span className="shrink-0 text-[10px] uppercase tracking-wide text-black/40 dark:text-white/40">
+                    Queued
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">{text}</span>
+                  <button
+                    type="button"
+                    aria-label="Remove queued message"
+                    onClick={() => setQueued((current) => current.filter((_, i) => i !== index))}
+                    className="shrink-0 rounded p-0.5 text-black/40 hover:bg-black/5 dark:text-white/40 dark:hover:bg-white/10"
+                  >
+                    <X size={11} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="rounded-2xl border border-black/10 bg-white shadow-sm transition focus-within:border-black/20 focus-within:shadow-md dark:border-white/10 dark:bg-white/[0.03] dark:focus-within:border-white/20">
             <Textarea
               value={prompt}
@@ -444,10 +537,13 @@ export function WorkView({
                   void handleSend()
                 }
               }}
-              placeholder={isAnswering ? 'Agent is answering…' : 'Say what you need…'}
+              placeholder={isAnswering ? 'Queue a message while it works…' : 'Say what you need…'}
               autoResize
               className="max-h-48 min-h-14 resize-none border-0 bg-transparent px-4 py-3 text-sm shadow-none focus-visible:ring-0 dark:bg-transparent"
-              disabled={sending || isAnswering}
+              // Live while the agent answers. Watching it go the wrong way and
+              // wanting to say so immediately is the most useful moment there
+              // is, and disabling the box threw it away.
+              disabled={sending}
             />
             <div className="flex flex-wrap items-center justify-between gap-2 px-3 pb-2.5">
               <div className="flex items-center gap-1.5">
@@ -524,17 +620,39 @@ export function WorkView({
                 )}
               </div>
 
+              {chipOptions.length > 0 && (
+                <ComposerChips
+                  options={chipOptions}
+                  values={messageConfig}
+                  disabled={sending}
+                  onChange={setMessageConfig}
+                />
+              )}
+
               {isAnswering ? (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="rounded-full"
-                  onClick={() => void handleStop()}
-                  disabled={stopping}
-                >
-                  <Square size={11} />
-                  {stopping ? 'Stopping…' : 'Stop'}
-                </Button>
+                <div className="flex items-center gap-1.5">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="rounded-full"
+                    onClick={() => void handleStop()}
+                    disabled={stopping}
+                  >
+                    <Square size={11} />
+                    {stopping ? 'Stopping…' : 'Stop'}
+                  </Button>
+                  {/* Queueing is a send, so it gets the send button rather than
+                      a second mental model. */}
+                  <Button
+                    size="sm"
+                    className="rounded-full"
+                    onClick={() => void handleSend()}
+                    disabled={!prompt.trim()}
+                  >
+                    <Send size={12} />
+                    Queue
+                  </Button>
+                </div>
               ) : (
                 <Button
                   size="sm"

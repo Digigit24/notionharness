@@ -29,6 +29,8 @@ import {
   setHermesSessionId,
   touchSession,
   getChatSession,
+  isRunCancellationRequested,
+  requestRunCancellation,
   getWorktree,
   touchWorktree,
   type Run,
@@ -89,6 +91,8 @@ const agentInFlightCounts = new Map<number, number>()
 // answer they no longer want. In-process only, like `inFlightRuns` above:
 // a run whose server restarted is reclaimed by the lease sweeper instead.
 const runCancelControls = new Map<number, () => Promise<void>>()
+// Timers watching for a stop raised in another process, one per in-flight run.
+const cancelWatchers = new Map<number, ReturnType<typeof setInterval>>()
 
 /**
  * Interrupts a run that's still answering. Uses ACP's own `session/cancel`
@@ -97,11 +101,28 @@ const runCancelControls = new Map<number, () => Promise<void>>()
  * it had already streamed stays in the transcript.
  */
 export async function requestRunCancel(runId: number): Promise<{ cancelled: boolean }> {
+  // Recorded in the database FIRST, because that is the signal that reliably
+  // reaches the process actually running the turn. This used to be the
+  // in-process map alone, and in Next the map reached from a server action is
+  // not necessarily the map the dispatcher filled — so Stop found no control,
+  // returned false, and did nothing at all with no explanation.
+  const accepted = await requestRunCancellation(runId).catch(() => false)
+
+  // The in-process control remains as the fast path: when the turn happens to
+  // be running right here, this cancels within milliseconds rather than
+  // waiting for the watcher below to notice.
   const cancel = runCancelControls.get(runId)
-  if (!cancel) return { cancelled: false }
-  await cancel()
-  return { cancelled: true }
+  if (cancel) {
+    await cancel().catch(() => undefined)
+    return { cancelled: true }
+  }
+  return { cancelled: accepted }
 }
+
+/** How quickly a stop requested from another process is noticed. Short enough
+ * to feel immediate, long enough that a long turn does not hammer the
+ * database — and the in-process path above usually gets there first anyway. */
+const CANCEL_POLL_MS = 2_000
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -573,10 +594,18 @@ async function executeClaimedRun(
       // Per-agent values for whatever settings this runtime declares about
       // itself — its model, its effort level, whatever it offers. Ids come
       // from the runtime's own probe, so nothing here names a specific CLI.
-      sessionConfig:
-        agent.runtimeConfig && typeof agent.runtimeConfig === 'object'
-          ? (agent.runtimeConfig as Record<string, unknown>)
-          : undefined,
+      // The agent's defaults, with this turn's own overrides on top. Merged
+      // rather than replaced: choosing "high effort" for one message should
+      // not silently drop the model that agent is configured to use.
+      sessionConfig: (() => {
+        const base =
+          agent.runtimeConfig && typeof agent.runtimeConfig === 'object'
+            ? (agent.runtimeConfig as Record<string, unknown>)
+            : {}
+        const override = run.runtimeConfig ?? {}
+        const merged = { ...base, ...override }
+        return Object.keys(merged).length > 0 ? merged : undefined
+      })(),
       // P5.4: when permissionMode is 'ask', wire the callback that creates a
       // real pending approval and waits for the user to resolve it. Also raise
       // timeouts significantly — the turn can now be blocked waiting for a human.
@@ -599,6 +628,20 @@ async function executeClaimedRun(
       env: { ...stringEnv(agent.customEnv), ...(run.runToken ? { RUN_TOKEN: run.runToken } : {}) },
       onControl: (control) => {
         runCancelControls.set(run.id, control.cancel)
+        // A stop pressed in a different process reaches this turn only through
+        // the database, so watch for it. Cleared in the `finally` below along
+        // with the control itself.
+        const watcher = setInterval(() => {
+          void isRunCancellationRequested(run.id)
+            .then((requested) => {
+              if (!requested) return
+              clearInterval(watcher)
+              void control.cancel().catch(() => undefined)
+            })
+            .catch(() => undefined)
+        }, CANCEL_POLL_MS)
+        watcher.unref?.()
+        cancelWatchers.set(run.id, watcher)
       },
       onEvent: (envelope) => {
         const seq = seqBase + envelope.seq
@@ -672,6 +715,11 @@ async function executeClaimedRun(
     decrAgentInFlight(agentId)
     // The turn is over either way — nothing left to interrupt.
     runCancelControls.delete(run.id)
+    const watcher = cancelWatchers.get(run.id)
+    if (watcher) {
+      clearInterval(watcher)
+      cancelWatchers.delete(run.id)
+    }
   }
 
   // Same reason as the catch block above — settleRun must never run ahead

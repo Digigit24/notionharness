@@ -1,0 +1,13 @@
+-- Stop, made to actually work.
+--
+-- Cancellation used to live only in an in-process Map in the dispatcher
+-- worker. That is unreliable in Next: server actions and route handlers are
+-- bundled into separate server chunks, so the Map the Stop action reached was
+-- not necessarily the Map the dispatcher had filled. The action then found no
+-- control, returned `{ cancelled: false }`, and the UI showed nothing --
+-- pressing Stop did nothing at all, silently.
+--
+-- A column is the right home for this: it is visible to whichever process is
+-- actually running the turn, survives a restart, and works when the run is
+-- executing somewhere other than the process handling the click.
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS cancel_requested_at TIMESTAMPTZ;

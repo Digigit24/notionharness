@@ -117,6 +117,11 @@ export async function sendSessionMessage(input: {
   prompt: string
   /** Set from the composer's project picker; persists on the session. */
   projectId?: number | null
+  /** Per-turn overrides for the runtime's own declared settings — the
+   * composer's mode and effort chips. Deliberately per message rather than
+   * persisted on the agent: "answer this one harder" is a property of the
+   * question, not a change to who is answering it. */
+  runtimeConfig?: Record<string, unknown> | null
 }): Promise<{ runId: number }> {
   const user = await requireUser()
   const text = typeof input.prompt === 'string' ? input.prompt.trim() : ''
@@ -136,6 +141,7 @@ export async function sendSessionMessage(input: {
       accountableUser: user.id,
       // The raw message, with no context prefix. See this file's header.
       prompt: text,
+      runtimeConfig: input.runtimeConfig ?? null,
     })
   } catch (err) {
     // The active-run index now includes the session, so this can only mean a

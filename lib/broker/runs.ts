@@ -22,6 +22,7 @@ interface RunRow {
   page_subtree_block_id: string | null
   suggestion_status: SuggestionStatus
   prompt: string | null
+  runtime_config?: Record<string, unknown> | null
   next_seq: string | number
   // node-postgres's default type parser returns `timestamp`/`timestamptz`
   // columns as `Date` objects, not strings — this pool has no custom OID
@@ -66,6 +67,10 @@ export function rowToRun(row: RunRow): Run {
     pageSubtreeBlockId: row.page_subtree_block_id,
     suggestionStatus: row.suggestion_status,
     prompt: row.prompt,
+    runtimeConfig:
+      row.runtime_config && typeof row.runtime_config === 'object'
+        ? (row.runtime_config as Record<string, unknown>)
+        : null,
     nextSeq: Number(row.next_seq),
     leaseExpiresAt: toISOStringOrNull(row.lease_expires_at),
     startedAt: toISOStringOrNull(row.started_at),
@@ -98,11 +103,16 @@ export async function enqueueRun(input: {
   /** Chat session owning this run (`chat_sessions.id`). Set for every run
    * started from the Work view; null for task- and page-scoped runs. */
   sessionId?: number | null
+  /** Per-turn overrides for the settings this agent's RUNTIME declares (its
+   * model, effort, permission mode). Merged over the agent's own defaults by
+   * the worker, so a single message can be answered with more effort without
+   * changing the agent. */
+  runtimeConfig?: Record<string, unknown> | null
 }): Promise<Run> {
   const pool = getBrokerPool()
   const res = await pool.query<RunRow>(
-    `INSERT INTO runs (task_id, agent_id, status, originator_user, accountable_user, priority, max_attempts, prompt, page_id, session_id)
-     VALUES ($1, $2, 'queued', $3, $4, $5, $6, $7, $8, $9)
+    `INSERT INTO runs (task_id, agent_id, status, originator_user, accountable_user, priority, max_attempts, prompt, page_id, session_id, runtime_config)
+     VALUES ($1, $2, 'queued', $3, $4, $5, $6, $7, $8, $9, $10)
      RETURNING *`,
     [
       input.taskId ?? null,
@@ -114,6 +124,9 @@ export async function enqueueRun(input: {
       input.prompt ?? null,
       input.pageId ?? null,
       input.sessionId ?? null,
+      input.runtimeConfig && Object.keys(input.runtimeConfig).length > 0
+        ? JSON.stringify(input.runtimeConfig)
+        : null,
     ],
   )
   return rowToRun(res.rows[0])
@@ -550,4 +563,36 @@ export async function dismissRun(runId: number): Promise<void> {
     `UPDATE runs SET dismissed_at = now(), updated_at = now() WHERE id = $1 AND dismissed_at IS NULL`,
     [runId],
   )
+}
+
+
+/**
+ * Records that a human asked this run to stop.
+ *
+ * Deliberately a database write rather than only an in-process signal: the
+ * process handling the click is not reliably the process running the turn
+ * (Next bundles server actions and route handlers separately), which is why
+ * Stop silently did nothing before this existed. Returns false for a run that
+ * has already settled, so the caller can say "it had already finished" rather
+ * than implying it stopped something.
+ */
+export async function requestRunCancellation(runId: number): Promise<boolean> {
+  const pool = getBrokerPool()
+  const { rows } = await pool.query(
+    `UPDATE runs SET cancel_requested_at = COALESCE(cancel_requested_at, now()), updated_at = now()
+      WHERE id = $1 AND status NOT IN ('completed', 'failed', 'cancelled')
+      RETURNING id`,
+    [runId],
+  )
+  return rows.length > 0
+}
+
+/** Whether a stop has been asked for. Polled by the worker running the turn. */
+export async function isRunCancellationRequested(runId: number): Promise<boolean> {
+  const pool = getBrokerPool()
+  const { rows } = await pool.query<{ requested: boolean }>(
+    `SELECT (cancel_requested_at IS NOT NULL) AS requested FROM runs WHERE id = $1`,
+    [runId],
+  )
+  return rows[0]?.requested === true
 }

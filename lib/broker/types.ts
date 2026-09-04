@@ -37,6 +37,9 @@ export interface Run {
   suggestionStatus: SuggestionStatus
   /** Serialized prompt for page-scoped runs (taskId is null). */
   prompt: string | null
+  /** Per-turn overrides for the runtime's own declared settings, merged over
+   * the agent's defaults. Null when the turn used the agent as configured. */
+  runtimeConfig: Record<string, unknown> | null
   nextSeq: number
   leaseExpiresAt: string | null
   startedAt: string | null
