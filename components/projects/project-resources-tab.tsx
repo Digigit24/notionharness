@@ -21,10 +21,15 @@ export function ProjectResourcesTab({
   projectId,
   workspaceSlug,
   initialResources,
+  compact = false,
 }: {
   projectId: number
   workspaceSlug: string
   initialResources: ProjectResource[]
+  /** Rendered in the detail page's right rail rather than as a full tab:
+   * drops the page padding and the max-width, which exist for a tab body and
+   * would waste most of a 320px column. */
+  compact?: boolean
 }) {
   const router = useRouter()
   const [resources, setResources] = useState(initialResources)
@@ -76,7 +81,7 @@ export function ProjectResourcesTab({
   }
 
   return (
-    <div className="max-w-2xl p-6">
+    <div className={compact ? 'flex flex-col gap-3' : 'max-w-2xl p-6'}>
       <div className="mb-4 flex items-center justify-between">
         <p className="text-sm text-black/50 dark:text-white/50">
           Which git repos or local directories this project&apos;s runs work against — the runtime&apos;s own

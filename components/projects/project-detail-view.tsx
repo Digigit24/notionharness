@@ -145,57 +145,64 @@ export function ProjectDetailView({
       count: initialRuns.length,
       content: <ProjectRunsTab projectId={currentProject.id} workspaceSlug={workspace.slug} agents={agents} initialRuns={initialRuns} />,
     },
-    {
-      key: 'resources',
-      label: 'Resources',
-      count: initialResources.length,
-      content: (
-        <ProjectResourcesTab projectId={currentProject.id} workspaceSlug={workspace.slug} initialResources={initialResources} />
-      ),
-    },
-    {
-      key: 'worktrees',
-      label: 'Worktrees',
-      count: gitOverview?.worktrees.length,
-      content: gitOverview ? (
-        <ProjectWorktreesTab
-          workspaceSlug={workspace.slug}
-          projectId={currentProject.id}
-          overview={gitOverview}
-        />
-      ) : (
-        <div className="p-6 text-xs text-black/50 dark:text-white/50">
-          Git information could not be read on this machine.
-        </div>
-      ),
-    },
-    {
-      key: 'files',
-      label: 'Files',
-      content: (
-        <div className="p-6">
-          {/* ROADMAP B-1 — `lib/run-worktrees/*` only knows how to browse
-              ONE run's worktree at a time, scoped by `runId` against a
-              single global repo (`RUN_WORKTREE_SOURCE_REPO`, this app's own
-              codebase per `lib/run-worktrees/config.ts`). The project now
-              DOES have a repo/directory binding (see the Resources tab —
-              `project_resources`, Phase C) — what's still missing is a file
-              browser keyed by that binding rather than by a single run's
-              worktree; building one is out of scope for this pass. */}
-          <EmptyState
-            icon={<FolderOpen />}
-            title="File browsing isn't available yet"
-            description="Projects don't have a repo or directory binding today, and the run-worktree tooling only browses one run's files at a time. Add a repo binding in Settings once that field exists."
-          />
-        </div>
-      ),
-    },
-    {
-      key: 'settings',
-      label: 'Settings',
-      content: <ProjectSettingsTab project={currentProject} workspaceSlug={workspace.slug} onUpdated={setCurrentProject} />,
-    },
   ]
+
+  // Four tabs, not eight.
+  //
+  // Resources, Worktrees and Settings were each a tab holding a short list or
+  // a small form — the kind of thing you check while looking at something
+  // else, not a place you go. As tabs they hid the project's actual work
+  // behind a row of chrome and cost a click to answer "which repo is this?".
+  // In the rail they are all visible at once, beside whatever tab is open.
+  //
+  // Files was an empty state explaining a feature that does not exist yet.
+  // A tab that never has content is worse than no tab: it advertises a place
+  // to look and then wastes the look. It returns when it has something in it.
+  const rightRail = (
+    <div className="flex flex-col gap-5 text-sm">
+      <section>
+        <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-black/40 dark:text-white/40">
+          Repository
+        </h2>
+        {gitOverview ? (
+          <ProjectWorktreesTab
+            workspaceSlug={workspace.slug}
+            projectId={currentProject.id}
+            overview={gitOverview}
+            compact
+          />
+        ) : (
+          <p className="text-xs text-black/50 dark:text-white/50">
+            Git information could not be read on this machine.
+          </p>
+        )}
+      </section>
+
+      <section className="border-t border-black/10 pt-4 dark:border-white/10">
+        <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-black/40 dark:text-white/40">
+          Resources
+        </h2>
+        <ProjectResourcesTab
+          projectId={currentProject.id}
+          workspaceSlug={workspace.slug}
+          initialResources={initialResources}
+          compact
+        />
+      </section>
+
+      <section className="border-t border-black/10 pt-4 dark:border-white/10">
+        <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-black/40 dark:text-white/40">
+          Settings
+        </h2>
+        <ProjectSettingsTab
+          project={currentProject}
+          workspaceSlug={workspace.slug}
+          onUpdated={setCurrentProject}
+          compact
+        />
+      </section>
+    </div>
+  )
 
   return (
     <DetailLayout
@@ -219,6 +226,7 @@ export function ProjectDetailView({
         />
       }
       tabs={tabs}
+      rightRail={rightRail}
       defaultTab="overview"
     />
   )

@@ -22,9 +22,9 @@
  */
 
 import * as React from 'react'
-import { Suspense, useCallback, useMemo } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { usePathname, useRouter, useSearchParams } from 'next/navigation'
+import { usePathname, useSearchParams } from 'next/navigation'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
@@ -80,25 +80,52 @@ function DetailLayoutFallback(props: DetailLayoutProps) {
 
 function DetailLayoutWithUrlState(props: DetailLayoutProps) {
   const { tabs, defaultTab, tabParam = 'tab' } = props
-  const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
 
   const fallbackTab = defaultTab ?? tabs[0]?.key
   const requestedTab = searchParams.get(tabParam)
-  const activeTab = useMemo(() => {
-    if (requestedTab && tabs.some((tab) => tab.key === requestedTab)) return requestedTab
-    return fallbackTab
-  }, [requestedTab, tabs, fallbackTab])
+
+  // Local state first, URL second.
+  //
+  // This used to be `router.push` on every tab click, which is a full App
+  // Router navigation: the server component re-runs and the tab only changes
+  // once it answers. On a detail page that loads runs, usage and git state,
+  // that is a visible stall on a control that should feel like a button —
+  // which is what "the tabs lag" was.
+  //
+  // The tab is now local state, so switching is immediate, and the URL is
+  // updated with `history.replaceState` afterwards. That keeps every tab
+  // linkable and the back button intact without asking the server for
+  // permission to change a highlight (D0: no round trip on a UI action).
+  const initialTab = requestedTab && tabs.some((tab) => tab.key === requestedTab) ? requestedTab : fallbackTab
+  const [selectedTab, setSelectedTab] = useState<string | undefined>(initialTab)
+
+  // A real navigation (back/forward, or a link into a specific tab) still
+  // wins — that is a URL change we did not make, and it should be obeyed.
+  useEffect(() => {
+    if (requestedTab && tabs.some((tab) => tab.key === requestedTab)) setSelectedTab(requestedTab)
+  }, [requestedTab, tabs])
+
+  const activeTab = useMemo(
+    () => (selectedTab && tabs.some((tab) => tab.key === selectedTab) ? selectedTab : fallbackTab),
+    [selectedTab, tabs, fallbackTab],
+  )
 
   const onTabChange = useCallback(
     (nextKey: string) => {
-      const params = new URLSearchParams(searchParams.toString())
-      params.set(tabParam, nextKey)
-      router.push(`${pathname}?${params.toString()}`, { scroll: false })
+      setSelectedTab(nextKey)
+      // Deliberately not `router.replace`: even a replace re-runs the server
+      // component in the App Router. This edits the address bar only.
+      if (typeof window !== 'undefined') {
+        const params = new URLSearchParams(window.location.search)
+        params.set(tabParam, nextKey)
+        window.history.replaceState(null, '', `${pathname}?${params.toString()}`)
+      }
     },
-    [router, pathname, searchParams, tabParam],
+    [pathname, tabParam],
   )
+
 
   return <DetailLayoutShell {...props} activeTab={activeTab} onTabChange={onTabChange} />
 }
@@ -153,7 +180,13 @@ function DetailLayoutShell({
         <Tabs value={activeTab} onValueChange={onTabChange} className="min-h-0 min-w-0 flex-1 gap-0">
           <TabsList className="mx-6 mt-3 h-auto w-fit gap-0.5 p-1">
             {tabs.map((tab) => (
-              <TabsTrigger key={tab.key} value={tab.key} className="gap-1.5 px-3 py-1">
+              <TabsTrigger
+                key={tab.key}
+                value={tab.key}
+                // Hover feedback was absent, so a tab gave no sign it was a
+                // control until it was already selected.
+                className="gap-1.5 px-3 py-1 transition-colors hover:bg-black/[0.04] dark:hover:bg-white/[0.06]"
+              >
                 {tab.label}
                 {typeof tab.count === 'number' && (
                   <Badge variant="secondary" className="h-4 min-w-4 px-1 text-[10px] leading-none">

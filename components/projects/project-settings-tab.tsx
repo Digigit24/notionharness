@@ -17,10 +17,15 @@ export function ProjectSettingsTab({
   project,
   workspaceSlug,
   onUpdated,
+  compact = false,
 }: {
   project: Project
   workspaceSlug: string
   onUpdated: (project: Project) => void
+  /** Rendered in the detail page's right rail rather than as a full tab:
+   * drops the page padding and the max-width, which exist for a tab body and
+   * would waste most of a 320px column. */
+  compact?: boolean
 }) {
   const [name, setName] = useState(project.name)
   const [icon, setIcon] = useState(project.icon ?? '')
@@ -50,7 +55,7 @@ export function ProjectSettingsTab({
   }
 
   return (
-    <div className="flex max-w-lg flex-col gap-4 p-6">
+    <div className={compact ? 'flex flex-col gap-3' : 'flex max-w-lg flex-col gap-4 p-6'}>
       <Field label="Name">
         <Input value={name} onChange={(e) => setName(e.target.value)} />
       </Field>

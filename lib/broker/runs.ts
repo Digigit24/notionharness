@@ -302,7 +302,10 @@ export async function listActiveRunsForWorkspace(workspaceId: number): Promise<R
  * Runs tab wants the full list for its cost rollup, not a page of it). */
 export async function listRunsForProject(projectId: number, opts: { agentId?: number | null; limit?: number } = {}): Promise<Run[]> {
   const pool = getBrokerPool()
-  const conditions = ['t.project_id = $1']
+  // The three ways a run can belong to a project: through its task, through
+  // the chat session it was started from, or through the page it was scoped
+  // to. Any one of them counts.
+  const conditions = ['(t.project_id = $1 OR cs.project_id = $1 OR p.project_id = $1)']
   const params: unknown[] = [projectId]
   if (opts.agentId != null) {
     params.push(opts.agentId)
@@ -314,8 +317,18 @@ export async function listRunsForProject(projectId: number, opts: { agentId?: nu
     limitClause = `LIMIT $${params.length}`
   }
   const res = await pool.query<RunRow>(
+    // LEFT JOINs and an OR, not an INNER JOIN on tasks.
+    //
+    // A run belongs to a project three different ways, and this only ever saw
+    // one of them. An INNER JOIN on tasks means a run started from a Work
+    // session bound to a project — `task_id` NULL, `session_id` set — was
+    // excluded outright, which is exactly why the Runs tab could be empty for
+    // a project someone had been working in all day. Page-scoped runs had the
+    // same problem.
     `SELECT r.* FROM runs r
-     INNER JOIN tasks t ON t.id = r.task_id
+     LEFT JOIN tasks t ON t.id = r.task_id
+     LEFT JOIN chat_sessions cs ON cs.id = r.session_id
+     LEFT JOIN pages p ON p.id = r.page_id
      WHERE ${conditions.join(' AND ')}
      ORDER BY r.created_at DESC
      ${limitClause}`,

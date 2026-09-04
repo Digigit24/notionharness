@@ -35,10 +35,15 @@ export function ProjectWorktreesTab({
   workspaceSlug,
   projectId,
   overview,
+  compact = false,
 }: {
   workspaceSlug: string
   projectId: number
   overview: ProjectGitOverview
+  /** Rendered in the detail page's right rail rather than as a full tab:
+   * drops the page padding and the max-width, which exist for a tab body and
+   * would waste most of a 320px column. */
+  compact?: boolean
 }) {
   const router = useRouter()
   const [resources, setResources] = useState(overview.resources)
@@ -73,7 +78,7 @@ export function ProjectWorktreesTab({
   }
 
   return (
-    <div className="space-y-6">
+    <div className={compact ? 'space-y-3' : 'space-y-6'}>
       {error && (
         <p className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
           {error}

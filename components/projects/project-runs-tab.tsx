@@ -123,9 +123,24 @@ export function ProjectRunsTab({
               {rows.map(({ run, usage }) => (
                 <tr key={run.id} className="hover:bg-black/[.03] dark:hover:bg-white/[.04]">
                   <td className="border-b border-black/5 px-2 py-2 dark:border-white/10">
-                    <Link href={`/workspace/${workspaceSlug}/runs/${run.id}/review`} className="font-medium hover:underline">
+                    {/* A run started from a conversation goes back to that
+                        conversation, because that is where its context is —
+                        the prompt, the reply, the whole thread. The review
+                        screen is the right destination only for a run that
+                        has no conversation to return to. */}
+                    <Link
+                      href={
+                        run.sessionId
+                          ? `/workspace/${workspaceSlug}/work?session=${run.sessionId}`
+                          : `/workspace/${workspaceSlug}/runs/${run.id}/review`
+                      }
+                      className="font-medium hover:underline"
+                    >
                       Run #{run.id}
                     </Link>
+                    {run.sessionId && (
+                      <span className="ml-1.5 text-[10px] text-black/35 dark:text-white/35">in Work</span>
+                    )}
                   </td>
                   <td className="border-b border-black/5 px-2 py-2 dark:border-white/10">
                     <Badge variant={STATUS_BADGE_VARIANT[run.status]}>{run.status}</Badge>
