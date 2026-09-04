@@ -17,6 +17,7 @@ import {
   loadChannelRunsAction,
   loadThreadAction,
   markChannelReadAction,
+  notifyTypingAction,
   pollTeamRoomAction,
   stopTeamRoomAction,
 } from '@/app/(app)/workspace/[workspaceSlug]/teams/actions'
@@ -49,11 +50,26 @@ const VIEWS: Array<{ id: RoomView; label: string; icon: typeof MessageSquare }> 
   { id: 'board', label: 'Board', icon: Network },
 ]
 
-/** How often the room asks what changed. Six seconds is a compromise, not a
- * target: it is slow enough that an idle room costs almost nothing and fast
- * enough that a delegation does not feel lost. The real fix is a push channel
- * — see `pollTeamRoomAction`. */
-const POLL_MS = 6000
+/**
+ * R12-P3.3 — the push channel D0's own header called "the real fix" now
+ * exists (`/api/teams/[teamId]/events/stream`), so this stopped being the
+ * room's clock and became its reconciliation sweep: the interval that
+ * catches whatever a missed `NOTIFY` — a dropped LISTEN, or a notification
+ * that arrived mid-reconnect (`lib/broker/notify.ts` documents both) —
+ * would otherwise leave stale. Sixty seconds, not six: the fast path is the
+ * SSE `refresh` event driving `pollNowRef` below, and this is only the net
+ * under it.
+ */
+const POLL_MS = 60_000
+
+/** R12-P3.2 — how long a typing signal is trusted with nobody renewing it.
+ * The composer throttles its OWN publishes to one per two seconds while
+ * there is uncommitted text (`message-composer.tsx`), so four seconds is
+ * "missed at most one renewal, not stuck forever" — long enough to survive
+ * one dropped `NOTIFY` in a row, short enough that closing the tab or
+ * clearing the box reads as "stopped typing" within a breath rather than a
+ * ghost that lingers after the person left. */
+const TYPING_TTL_MS = 4_000
 
 /**
  * How many polls in a row have to fail before the room says so.
@@ -166,6 +182,10 @@ export function TeamRoom({
    * `listPendingChannelApprovals`.
    */
   const [approvals, setApprovals] = useState<ChannelApproval[]>(initialApprovals)
+  /** R12-P3.2 — slotId → the timestamp its last typing signal arrived at.
+   * A `Map`, not a `Set`, because expiring one signal without disturbing the
+   * others needs to know WHEN each one arrived, not just that it did. */
+  const [typingSlotIds, setTypingSlotIds] = useState<Map<number, number>>(() => new Map())
   const [pending, setPending] = useState<PendingReply[]>([])
   const [skipped, setSkipped] = useState<SkippedMention[]>([])
   /**
@@ -398,6 +418,104 @@ export function TeamRoom({
       window.clearInterval(handle)
     }
   }, [workspaceId, channel.id, mergeMessages, mergeFeed])
+
+  /**
+   * R12-P3.3 — the push connection. One `EventSource` per open room, wired
+   * to the SAME `pollNowRef` the header's manual Retry button already uses:
+   * a `refresh` frame is not new data, it is "ask for new data NOW instead of
+   * on your next sixty-second tick", so this reuses the tested read path
+   * (`pollTeamRoomAction`) rather than teaching the client a second way to
+   * receive a room delta.
+   *
+   * `EventSource` auto-reconnects on its own with backoff, which is exactly
+   * P3's "Done when": a 30-second network pull produces a state that
+   * self-heals with no lost messages, because the room's data never actually
+   * depended on this connection staying up — the 60s sweep above is still
+   * running underneath it the whole time.
+   */
+  useEffect(() => {
+    if (typeof EventSource === 'undefined') return
+    let cancelled = false
+    let source: EventSource | null = null
+
+    const connect = () => {
+      if (cancelled) return
+      source = new EventSource(`/api/teams/${channel.id}/events/stream`)
+
+      source.addEventListener('refresh', () => pollNowRef.current?.())
+
+      source.addEventListener('typing', (event) => {
+        try {
+          const { slotId } = JSON.parse((event as MessageEvent).data) as { slotId?: number }
+          if (typeof slotId !== 'number') return
+          setTypingSlotIds((prev) => {
+            const next = new Map(prev)
+            next.set(slotId, Date.now())
+            return next
+          })
+        } catch {
+          // A malformed typing frame is cosmetic — the indicator just does
+          // not appear for this one signal.
+        }
+      })
+
+      // The browser's own `EventSource` retries on `error` with its default
+      // backoff; nothing here forces a reconnect. What IS added is the
+      // catch-up: the moment the connection is healthy again, ask for a
+      // fresh delta rather than trusting that nothing changed while it was
+      // down — the server sends its own `refresh` on every new connect
+      // (see the route's own comment), but `onopen` covers the resume case
+      // too, at zero extra cost.
+      source.onopen = () => pollNowRef.current?.()
+    }
+
+    connect()
+    return () => {
+      cancelled = true
+      source?.close()
+    }
+  }, [channel.id])
+
+  /** R12-P3.2 — expired typing signals fall off on a timer rather than on
+   * next render: nobody re-renders this component just because four seconds
+   * passed, so without a timer a typing dot could sit frozen on screen long
+   * after the two-second republish stopped arriving. Runs only while there is
+   * at least one entry to expire. */
+  useEffect(() => {
+    if (typingSlotIds.size === 0) return
+    const handle = window.setInterval(() => {
+      const cutoff = Date.now() - TYPING_TTL_MS
+      setTypingSlotIds((prev) => {
+        let changed = false
+        const next = new Map(prev)
+        for (const [slotId, at] of prev) {
+          if (at < cutoff) {
+            next.delete(slotId)
+            changed = true
+          }
+        }
+        return changed ? next : prev
+      })
+    }, 1000)
+    return () => window.clearInterval(handle)
+  }, [typingSlotIds.size])
+
+  /** Published on every keystroke the composer throttles down to one per two
+   * seconds — see `MessageComposer`'s own `onTyping` prop. Best-effort by
+   * construction: `notifyTypingAction` swallows everything itself, so there
+   * is nothing here to catch. */
+  const notifyTyping = useCallback(() => {
+    void notifyTypingAction({ workspaceId, teamId: channel.id })
+  }, [workspaceId, channel.id])
+
+  /** Who is typing, minus me — announcing your own keystrokes back to
+   * yourself is not a feature. Derived rather than filtered at publish time,
+   * because the SSE frame's `slotId` is the ONLY honest source for "someone
+   * else is typing" and the room already knows its own slot. */
+  const typingSlotIdsOthers = useMemo(
+    () => [...typingSlotIds.keys()].filter((id) => id !== mySlotId),
+    [typingSlotIds, mySlotId],
+  )
 
   /**
    * Marking read, once per new high-water mark.
@@ -1079,6 +1197,8 @@ export function TeamRoom({
             approvals={approvals}
             currentUserId={currentUserId}
             onApprovalSettled={onApprovalSettled}
+            typingSlotIds={typingSlotIdsOthers}
+            onTyping={notifyTyping}
             unreadBoundary={unreadBoundaryRef.current}
             unreadAtOpen={initialUnread.unreadCount}
             mentionsAtOpen={initialUnread.mentionCount}
@@ -1141,6 +1261,8 @@ export function TeamRoom({
             approvals={approvals}
             currentUserId={currentUserId}
             onApprovalSettled={onApprovalSettled}
+            typingSlotIds={typingSlotIdsOthers}
+            onTyping={notifyTyping}
             mySlotId={mySlotId}
             onClose={() => {
               setThreadRootId(null)

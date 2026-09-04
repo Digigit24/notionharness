@@ -291,6 +291,35 @@ export async function resolveApproval(
   // that is actually parked is here too: a stale entry, or a second process
   // holding the real turn, both look identical from this side.
   await announceDecision(notice)
+
+  // R12-P3.3/P3.5 — the channel's approval strip is one of the things that
+  // must "ride the same subscription" as messages and reactions rather than
+  // wait for its own poll interval. A decision never inserts a new
+  // `team_messages` row (only the block ANNOUNCEMENT does, in
+  // `announceApprovalInChannel`), so without this the strip would sit on
+  // screen, already stale, for up to a minute after somebody clicked Approve.
+  const runId = (approval as { runId?: number | null }).runId
+  if (runId != null) {
+    void bestEffort(
+      (async () => {
+        const [{ getRun }, { getChannelMessage, notifyChannelEvent }, { getTeamBindingForSession }] = await Promise.all([
+          import('@/lib/broker/runs'),
+          import('@/lib/broker/channels'),
+          import('@/lib/broker'),
+        ])
+        const run = await getRun(runId)
+        if (!run?.channelMessageId || !run.sessionId) return
+        const [source, binding] = await Promise.all([
+          getChannelMessage(run.channelMessageId),
+          getTeamBindingForSession(run.sessionId),
+        ])
+        const teamId = source?.teamId ?? binding?.teamId
+        if (teamId != null) await notifyChannelEvent(teamId)
+      })(),
+      'a decision that cannot find its channel still settled the run — the strip catches up on the next poll',
+      { approvalId, runId },
+    )
+  }
 }
 
 export async function listPendingApprovalsForUser(userId: number) {

@@ -506,6 +506,7 @@ export async function teamReact(caller: TeamCaller, input: { messageId: number; 
     messageId: input.messageId,
     actorSlotId: caller.slotId,
     emoji: input.emoji,
+    teamId: caller.teamId,
   })
   return JSON.stringify({ messageId: input.messageId, emoji: input.emoji, added }, null, 2)
 }

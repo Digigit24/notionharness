@@ -27,6 +27,7 @@ import { ConnectStrip } from './connect-strip'
 import { isConnectRequest } from '@/lib/hermes/connect-request'
 import { MessageRow } from './message-row'
 import { MessageComposer } from './message-composer'
+import { TypingIndicatorRow } from './typing-indicator-row'
 import { PendingReplyRow } from './pending-reply-row'
 
 /**
@@ -54,6 +55,8 @@ export function ThreadPane({
   approvals,
   currentUserId,
   onApprovalSettled,
+  typingSlotIds,
+  onTyping,
   mySlotId,
   onClose,
   onDispatched,
@@ -83,6 +86,10 @@ export function ThreadPane({
   approvals: ChannelApproval[]
   currentUserId: number
   onApprovalSettled: (externalId: string) => void
+  /** R12-P3.2 — same set the feed shows, already excluding this reader's own
+   * slot. One SSE connection, one typing set, two renderers of it. */
+  typingSlotIds: number[]
+  onTyping: () => void
   mySlotId: number | null
   onClose: () => void
   /** R12-P3.1 - a reply paints before the server confirms it, exactly as a
@@ -341,6 +348,14 @@ export function ThreadPane({
           )}
         </div>
 
+        {typingSlotIds.length > 0 && (
+          <ul>
+            {typingSlotIds.map((slotId) => (
+              <TypingIndicatorRow key={slotId} slotId={slotId} slots={slots} />
+            ))}
+          </ul>
+        )}
+
         {root != null && (
           <MessageComposer
             slots={slots}
@@ -352,6 +367,7 @@ export function ThreadPane({
             showRecipient={false}
             autoFocus
             onSend={send}
+            onTyping={onTyping}
           />
         )}
       </PaneBoundary>

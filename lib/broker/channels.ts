@@ -10,7 +10,63 @@
 // the mailbox-and-board layer and this is the room layer. They share tables
 // deliberately; they do not share concerns.
 import { getBrokerPool } from './db'
+import { bestEffort } from '@/lib/failures'
 import type { TeamMessageKind } from './teams'
+
+/**
+ * R12-P3.3 — the push half of the channel going real-time.
+ *
+ * One shared `pg_notify` channel for every room in the install, not one per
+ * team: `LISTEN` is cheap on ONE connection (`lib/broker/notify.ts` already
+ * carries the approval-decision channel this way) but a channel PER TEAM
+ * would mean a fresh `LISTEN name` for every room anyone ever opens, which
+ * never gets unregistered when the room closes. The payload carries the team
+ * id so the one SSE route subscribed to this channel can ignore every
+ * notification that is not its own room — a filter in the route, not a
+ * connection per room.
+ *
+ * Best-effort and fire-and-forget: this is the PUSH path, and the room's own
+ * fallback poll (`team-room.tsx`) is what makes correctness never depend on a
+ * `NOTIFY` arriving. A dropped wake-up costs at most one poll interval, which
+ * is the same failure mode `subscribeToNotifications` already documents for
+ * the approval channel.
+ */
+export const CHANNEL_EVENTS_CHANNEL = 'channel_events'
+
+export async function notifyChannelEvent(teamId: number): Promise<void> {
+  await bestEffort(
+    getBrokerPool().query(`SELECT pg_notify('${CHANNEL_EVENTS_CHANNEL}', $1)`, [JSON.stringify({ teamId })]),
+    'a missed room wake-up is covered by the fallback poll',
+    { teamId },
+  )
+}
+
+/**
+ * R12-P3.2 — a person typing, and NOTHING written to disk for it.
+ *
+ * A separate channel from `CHANNEL_EVENTS_CHANNEL` on purpose: that one means
+ * "go re-fetch the room", and every subscriber pays a query for it. This one
+ * carries the whole fact in its payload — team, slot, timestamp — so the SSE
+ * route can forward it verbatim with no database round trip at all. Folding
+ * typing into the same channel would mean every keystroke in a busy room
+ * triggered a `pollTeamRoomAction` call on every other open tab, which is
+ * exactly the load a "no rows written" feature exists to avoid.
+ *
+ * Composer-side throttling (`message-composer.tsx`, one call per two seconds
+ * while there is uncommitted text) is what keeps this cheap; nothing here
+ * enforces a rate, because `pg_notify` has no row to rate-limit against.
+ */
+export const CHANNEL_TYPING_CHANNEL = 'channel_typing'
+
+export async function notifyTyping(teamId: number, slotId: number): Promise<void> {
+  await bestEffort(
+    getBrokerPool().query(`SELECT pg_notify('${CHANNEL_TYPING_CHANNEL}', $1)`, [
+      JSON.stringify({ teamId, slotId, at: Date.now() }),
+    ]),
+    'a missed typing signal is cosmetic — the indicator simply never appears for that keystroke',
+    { teamId, slotId },
+  )
+}
 
 /** Who a message points at. Ids, never names, so a rename cannot orphan one. */
 export type MentionTarget =
@@ -233,6 +289,9 @@ export async function postChannelMessage(input: {
   )
   const created = await getChannelMessage(Number(rows[0].id))
   if (!created) throw new Error('The message vanished immediately after being written.')
+  // Fired after the row is fully committed and re-read, so a viewer woken by
+  // this can never poll and find nothing there yet.
+  void notifyChannelEvent(input.teamId)
   return created
 }
 
@@ -311,6 +370,11 @@ export async function toggleReaction(input: {
   messageId: number
   actorSlotId: number
   emoji: string
+  /** Optional ONLY for callers that predate this — every current call site
+   * passes it, and passing it is what turns a reaction into a live update for
+   * everyone else looking at the room instead of something they notice on
+   * their next poll. */
+  teamId?: number
 }): Promise<{ added: boolean }> {
   const pool = getBrokerPool()
   const inserted = await pool.query(
@@ -318,6 +382,7 @@ export async function toggleReaction(input: {
      VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING id`,
     [input.messageId, input.actorSlotId, input.emoji],
   )
+  if (input.teamId != null) void notifyChannelEvent(input.teamId)
   if (inserted.rows.length > 0) return { added: true }
   await pool.query(
     `DELETE FROM team_message_reactions WHERE message_id = $1 AND actor_slot_id = $2 AND emoji = $3`,

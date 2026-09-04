@@ -66,6 +66,7 @@ export function MessageComposer({
   showRecipient,
   autoFocus,
   onSend,
+  onTyping,
   onCommand,
   focusToken,
 }: {
@@ -78,6 +79,16 @@ export function MessageComposer({
   showRecipient: boolean
   autoFocus?: boolean
   onSend: (input: { body: string; kind: TeamMessageKind; toSlotId: number | null }) => Promise<void>
+  /**
+   * R12-P3.2 — fired at most once every two seconds while the box holds
+   * uncommitted text. The throttle lives HERE rather than in the caller so
+   * every composer in the room (the feed's and the thread's) gets it for
+   * free and cannot disagree about the interval. Absent entirely for a
+   * composer with nobody to tell — there is none today, but the prop is
+   * optional rather than required so a future read-only or preview composer
+   * never has to wire a no-op.
+   */
+  onTyping?: () => void
   /**
    * Enables slash commands. Absent (the thread pane) means a leading "/" is
    * just a character — a reply that starts with a path should not be
@@ -98,6 +109,16 @@ export function MessageComposer({
   const [commandError, setCommandError] = useState<string | null>(null)
   const [commandHighlight, setCommandHighlight] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // R12-P3.2's throttle. A ref, not state: this value changing must never
+  // cause a re-render — it exists purely to gate a fire-and-forget call.
+  const lastTypingNotifyRef = useRef(0)
+  const notifyTypingThrottled = useCallback(() => {
+    if (!onTyping) return
+    const now = Date.now()
+    if (now - lastTypingNotifyRef.current < 2000) return
+    lastTypingNotifyRef.current = now
+    onTyping()
+  }, [onTyping])
 
   useEffect(() => {
     if (focusToken === undefined || focusToken === 0) return
@@ -312,6 +333,11 @@ export function MessageComposer({
             setBody(e.target.value)
             setCaret(e.target.selectionStart ?? e.target.value.length)
             setPickerDismissed(false)
+            // Only while there is something to be typing — clearing the box
+            // must not itself announce "typing", or Enter-to-send would look
+            // like the sender started a new message the instant they finished
+            // the last one.
+            if (e.target.value.trim().length > 0) notifyTypingThrottled()
           }}
           onSelect={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
           placeholder={placeholder}

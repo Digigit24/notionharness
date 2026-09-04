@@ -16,6 +16,7 @@ import { ApprovalStrip } from './approval-strip'
 import { ConnectStrip } from './connect-strip'
 import { isConnectRequest } from '@/lib/hermes/connect-request'
 import { MessageComposer, type SlashCommandRunner } from './message-composer'
+import { TypingIndicatorRow } from './typing-indicator-row'
 import { MessageRow } from './message-row'
 import { PendingReplyRow } from './pending-reply-row'
 import {
@@ -78,6 +79,8 @@ export function ChannelView({
   approvals,
   currentUserId,
   onApprovalSettled,
+  typingSlotIds,
+  onTyping,
   onDismissPending,
   onOpenTask,
   onMakeTask,
@@ -111,6 +114,12 @@ export function ChannelView({
   currentUserId: number
   /** Lets the room drop a decided request without waiting for the next poll. */
   onApprovalSettled: (externalId: string) => void
+  /** R12-P3.2 — slot ids currently typing, ALREADY excluding this reader's
+   * own — the room computes that once rather than every consumer re-deriving
+   * "not me" from `mySlotId`. */
+  typingSlotIds: number[]
+  /** Fired by the composer, throttled, while there is uncommitted text. */
+  onTyping: () => void
   /**
    * The read cursor as it stood when the channel was OPENED, frozen by the
    * room. The divider must not chase the cursor: marking the feed read moves
@@ -755,6 +764,17 @@ export function ChannelView({
       )}
 
       <div className="shrink-0 border-t border-black/10 pt-2 dark:border-white/10">
+        {/* R12-P3.2 — one row per typer, above the composer, siblings of the
+            ghost rows an agent gets in the feed. Rendered from `slots` the
+            room already has in memory, so this costs nothing beyond the SSE
+            frame that put the id in `typingSlotIds`. */}
+        {typingSlotIds.length > 0 && (
+          <ul>
+            {typingSlotIds.map((slotId) => (
+              <TypingIndicatorRow key={slotId} slotId={slotId} slots={slots} />
+            ))}
+          </ul>
+        )}
         {mySlotId == null && (
           // Stated, not hidden. Reactions and unread are both recorded against
           // a SLOT, so a reader with none genuinely cannot have either — and
@@ -777,6 +797,7 @@ export function ChannelView({
           showKind
           showRecipient
           onSend={send}
+          onTyping={onTyping}
           onCommand={onCommand}
           focusToken={composerFocusToken}
         />

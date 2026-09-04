@@ -37,7 +37,7 @@ export {
   listRunEventsSince,
 } from './messages'
 export { channelMessageHasRun, isRunCancellationRequested, requestRunCancellation } from './runs'
-export { subscribeToRunNotifications } from './notify'
+export { subscribeToRunNotifications, subscribeToNotifications } from './notify'
 export { clearRunBacklog, publishRunEvent, subscribeToRunEvents } from './live-bus'
 export type { LiveRunEvent } from './live-bus'
 export {
@@ -88,9 +88,13 @@ export {
   listPendingChannelApprovals,
   listThread,
   markChannelRead,
+  notifyChannelEvent,
+  notifyTyping,
   parseMentions,
   postChannelMessage,
   toggleReaction,
+  CHANNEL_EVENTS_CHANNEL,
+  CHANNEL_TYPING_CHANNEL,
 } from './channels'
 export type {
   ChannelApproval,

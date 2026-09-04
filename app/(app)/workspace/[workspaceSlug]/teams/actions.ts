@@ -25,6 +25,7 @@ import {
   listTeamTasks,
   listThread,
   markChannelRead,
+  notifyTyping,
   parseMentions,
   postChannelMessage,
   removeTeamMember,
@@ -715,6 +716,26 @@ export async function postChannelMessageAction(input: {
 }
 
 /**
+ * R12-P3.2 — "I am typing", published and never stored.
+ *
+ * `void` on the mutation is deliberate: `notifyTyping` is a `pg_notify` with
+ * no row behind it, so there is nothing for `revalidatePath` to invalidate and
+ * nothing worth a `guard()`/`unwrap()` round trip over — a lost typing signal
+ * is cosmetic, not a failure a person should ever see a toast for. The one
+ * thing that IS enforced is the slot: exactly the same re-derive-from-session
+ * rule `toggleReactionAction` uses, so a browser cannot announce that some
+ * other member is typing.
+ */
+export async function notifyTypingAction(input: { workspaceId: number; teamId: number }): Promise<void> {
+  const user = await getCurrentPayloadUser()
+  if (!user) return
+  await requireWorkspace(input.workspaceId, user.id).catch(() => null)
+  const mine = await resolveMySlot(input.teamId, user.id).catch(() => null)
+  if (!mine) return
+  await notifyTyping(input.teamId, mine.id)
+}
+
+/**
  * Adds or removes one reaction, as the caller's own slot.
  *
  * `actorSlotId` is deliberately NOT a parameter. `toggleReaction` writes a row
@@ -740,7 +761,7 @@ export async function toggleReactionAction(input: {
     if (!emoji || [...emoji].length > 4) raise('invalid_input', 'That is not an emoji.')
     const message = await getChannelMessage(input.messageId)
     if (!message || message.teamId !== team.id) raise('not_found', 'That message is not in this channel.')
-    const { added } = await toggleReaction({ messageId: input.messageId, actorSlotId: mine.id, emoji })
+    const { added } = await toggleReaction({ messageId: input.messageId, actorSlotId: mine.id, emoji, teamId: team.id })
     return { added, actorSlotId: mine.id }
   })
 }
