@@ -15,6 +15,11 @@ import type { Payload } from 'payload'
 
 export type PageOrigin =
   | {
+      kind: 'channel'
+      teamId: number
+      channelName: string
+    }
+  | {
       kind: 'record'
       /** The row's own title, resolved from the database's primary field —
        * never the opaque record id, which was the A4.1 bug. */
@@ -100,18 +105,55 @@ export async function getPageOrigin(
 ): Promise<PageOrigin> {
   const workspaceId = typeof page.workspace === 'number' ? page.workspace : page.workspace.id
 
+  // --- A channel canvas ---
+  //
+  // A channel's canvas is an ordinary `pages` row tagged with
+  // `linkedSourceType='team'`, which buys three things at no cost:
+  // `getSidebarPages` already excludes anything with a `linkedSourceType`, so
+  // canvases never clutter the tree; this header already renders provenance;
+  // and the editor is `PageCanvas`, unchanged. A dedicated `canvas_page_id`
+  // column would have bought none of them.
+  if (page.linkedSourceType === 'team' && page.linkedSourceId != null) {
+    const teamId = Number(page.linkedSourceId)
+    if (Number.isFinite(teamId)) {
+      const { getTeam } = await import('@/lib/broker/teams')
+      const team = await getTeam(teamId).catch(() => null)
+      // A canvas whose channel is gone falls through to "no origin" rather
+      // than claiming a channel that no longer exists.
+      if (team) return { kind: 'channel', teamId, channelName: team.name }
+    }
+  }
+
   // --- A row-paired page ---
-  if (page.linkedSourceType === 'user-database' && page.linkedSourceId != null && page.linkedRecordId != null) {
+  // 'userDatabase', not 'user-database'.
+  //
+  // This compared against a hyphenated string that `collections/Pages.ts` never
+  // stores, so the record header shipped in R7.4 has never rendered once — four
+  // real row-paired pages in this database carry 'userDatabase' and every one
+  // of them fell through to "no origin". A silent mismatch between a stored
+  // enum value and a literal is exactly the kind of bug a typecheck cannot
+  // catch, which is why the value now comes from the collection's own option
+  // list rather than being retyped here.
+  if (page.linkedSourceType === 'userDatabase' && page.linkedSourceId != null && page.linkedRecordId != null) {
     const databaseId = Number(page.linkedSourceId)
+    // The RECORD id may legitimately not be a number. Two real pages in this
+    // database carry `pending-row-<timestamp>-<rand>` — an optimistic
+    // client-side id whose row was never reconciled. Requiring both to be
+    // numeric meant those pages resolved to nothing at all, which is the wrong
+    // answer: the database is perfectly well known, and "a row in QA2
+    // Database" is far more use than silence. Only the DATABASE id gates the
+    // branch; a missing row degrades to a stated fallback title.
     const recordId = Number(page.linkedRecordId)
-    if (Number.isFinite(databaseId) && Number.isFinite(recordId)) {
+    if (Number.isFinite(databaseId)) {
       const [database, row] = await Promise.all([
         payload
           .findByID({ collection: 'databases', id: databaseId, depth: 0, overrideAccess: true, disableErrors: true })
           .catch(() => null),
-        payload
-          .findByID({ collection: 'database-rows', id: recordId, depth: 0, overrideAccess: true, disableErrors: true })
-          .catch(() => null),
+        Number.isFinite(recordId)
+          ? payload
+              .findByID({ collection: 'database-rows', id: recordId, depth: 0, overrideAccess: true, disableErrors: true })
+              .catch(() => null)
+          : null,
       ])
       if (database) {
         return {

@@ -40,6 +40,15 @@ export const Pages: CollectionConfig = {
       options: [
         { label: 'User Database', value: 'userDatabase' },
         { label: 'Payload Collection', value: 'payload' },
+        // A channel's canvas. Tagging it here is what keeps canvases out of
+        // the sidebar tree for free — `getSidebarPages` excludes any page with
+        // a `linkedSourceType` — and what lets `PageOriginHeader` say which
+        // channel it belongs to. NOTE: this column is a postgres enum, so the
+        // value also had to be added to `enum_pages_linked_source_type`
+        // (migrations/20260904_page_linked_source_team.sql). Payload alone
+        // would have accepted the string and the database would have rejected
+        // the insert.
+        { label: 'Team channel', value: 'team' },
       ],
       admin: {
         description:
@@ -51,7 +60,8 @@ export const Pages: CollectionConfig = {
       type: 'text',
       index: true,
       admin: {
-        description: "The linked backend's own identifier: a `databases` doc id for 'userDatabase', or a collection slug for 'payload'.",
+        description:
+          "The linked backend's own identifier: a `databases` doc id for 'userDatabase', a collection slug for 'payload', or a `teams` id for 'team'.",
       },
     },
     {

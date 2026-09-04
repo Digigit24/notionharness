@@ -13,6 +13,15 @@
 // on purpose; see the comments at `buildServer` and on `enableJsonResponse`.
 // The tool bodies live in `lib/teams/tools.ts` so the permission rules can be
 // read on their own.
+//
+// R6.4 adds the three tools that make a member a PARTICIPANT in the channel
+// rather than a bot posting into it: a reply that lands under the message that
+// prompted it (`threadRootId` on `team_send_message`), the thread read that
+// makes such a reply answerable (`team_read_thread`), and an acknowledgement
+// that costs the room nothing to read (`team_react`). The tool DESCRIPTIONS
+// below carry more weight than usual for these: an agent will only thread a
+// reply if the description tells it when to, so each one says when to reach
+// for the tool, not merely what it does.
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import { z } from 'zod'
@@ -23,7 +32,9 @@ import {
   teamClaimTask,
   teamCreateTask,
   teamListTasks,
+  teamReact,
   teamReadInbox,
+  teamReadThread,
   teamReportDone,
   teamSendMessage,
   teamUpdateTask,
@@ -76,18 +87,83 @@ function buildServer(caller: TeamCaller) {
     'team_send_message',
     {
       description:
-        'Send a message to one teammate, or to the whole team if `to` is omitted. ' +
-        "Kind 'instruction' may only be sent by the team leader.",
+        'Post in the team channel, or to one teammate if `to` is given. Reply UNDER a message by passing its id ' +
+        'as `threadRootId` — do that whenever you are answering something rather than raising something new, ' +
+        'or your answer lands in the feed detached from the question. Mention a teammate by writing @ and their ' +
+        'exact display name in the body; that is recorded as a real mention and shows in their badge. ' +
+        "Kind 'instruction' may only be sent by the team leader. Returns the posted message, including the id you " +
+        'need for team_react and for further replies.',
       inputSchema: {
-        to: z.coerce.number().int().positive().optional().describe('Recipient slot id. Omit to broadcast.'),
+        to: z.coerce.number().int().positive().optional().describe('Recipient slot id. Omit to post to the channel.'),
         kind: MESSAGE_KIND.default('status'),
         body: z.string().min(1).max(100_000),
         task: z.coerce.number().int().positive().optional().describe('Task id this message is about.'),
+        threadRootId: z.coerce
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe(
+            'Id of the message you are replying to. Replying to a reply attaches to the same thread rather than ' +
+              'nesting, so you can pass either the root or any message in the thread.',
+          ),
       },
     },
-    async ({ to, kind, body, task }) => {
+    async ({ to, kind, body, task, threadRootId }) => {
       try {
-        return textResult(await teamSendMessage(caller, { to: to ?? null, kind, body, task: task ?? null }))
+        return textResult(
+          await teamSendMessage(caller, {
+            to: to ?? null,
+            kind,
+            body,
+            task: task ?? null,
+            threadRootId: threadRootId ?? null,
+          }),
+        )
+      } catch (error) {
+        return errorResult(error)
+      }
+    },
+  )
+
+  server.registerTool(
+    'team_read_thread',
+    {
+      description:
+        'Read one thread: the message that started it plus every reply, oldest first. Use this after someone ' +
+        'replies to you, or before answering a follow-up, so you answer the actual question rather than the ' +
+        'summary of it in the feed. Passing a reply id works — it resolves to that reply\'s thread.',
+      inputSchema: {
+        rootId: z.coerce.number().int().positive().describe('The id of the thread root, or of any reply in it.'),
+      },
+    },
+    async ({ rootId }) => {
+      try {
+        return textResult(await teamReadThread(caller, { rootId }))
+      } catch (error) {
+        return errorResult(error)
+      }
+    },
+  )
+
+  server.registerTool(
+    'team_react',
+    {
+      description:
+        'React to a message with a single emoji, and call it again with the same emoji to take the reaction back. ' +
+        'Prefer this over posting "ok" or "seen" — it acknowledges without adding a message everyone else then ' +
+        'has to read. Returns `added: true` if the reaction was placed, `added: false` if it was removed.',
+      inputSchema: {
+        messageId: z.coerce.number().int().positive(),
+        // Short and whitespace-free: this is a reaction, not a second body.
+        // Bounded here rather than in the tool so an over-long value is
+        // refused by the schema before it reaches a write.
+        emoji: z.string().trim().min(1).max(16).regex(/^\S+$/, 'A reaction is a single emoji, with no spaces.'),
+      },
+    },
+    async ({ messageId, emoji }) => {
+      try {
+        return textResult(await teamReact(caller, { messageId, emoji }))
       } catch (error) {
         return errorResult(error)
       }

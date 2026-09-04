@@ -35,22 +35,57 @@
 // permission checks on purpose: a refused call deletes its own reservation, so
 // being told "only the leader may assign" never poisons a later, legitimate
 // attempt.
+//
+// **R6.4 added a fourth: an agent is a PARTICIPANT in the channel, not a bot
+// posting into it.** Three things separate the two, and all three are here:
+//
+//   * a reply goes UNDER the message that prompted it. Without a thread root
+//     an agent's answer lands flat in the feed next to the question, and the
+//     room reads as a log rather than a conversation. `team_send_message`
+//     therefore routes through `postChannelMessage`, not `sendTeamMessage` —
+//     the former is the only writer that resolves a root, flattens a
+//     reply-to-a-reply onto it, and refuses a cross-channel reply.
+//   * an agent can READ the thread it was pulled into (`team_read_thread`).
+//     A participant that can be replied to but cannot read the reply is still
+//     a bot.
+//   * an agent can ACKNOWLEDGE without speaking (`team_react`). "Seen, on it"
+//     as a message is noise every other member then has to read.
+//
+// And when an agent names a teammate, that has to become a real mention — an
+// id in `team_messages.mentions` that the unread badge and the mention search
+// can find — rather than plain text nothing indexes. `parseMentions` runs on
+// every post, against the live roster, for exactly that reason.
+//
+// **Scoping note for everything new below.** `listThread`, `getChannelMessage`
+// and `toggleReaction` all take a BARE id and none of them asks which channel
+// it belongs to — the same shape that made `requireOwnTeamTask` necessary for
+// tasks. Message ids are one global sequence, so every id arriving from an
+// agent is checked against `caller.teamId` before it is used. There is no path
+// below where a client-supplied id reaches a write unverified.
 import {
   claimTeamTask,
   createTeamTask,
   getTeamMember,
   getTeamTask,
+  listTeamMembers,
   listTeamTasks,
   markTeamMessagesRead,
   readTeamInbox,
   reportTeamTaskDone,
-  sendTeamMessage,
   updateTeamTaskStatus,
   type TeamMessageKind,
   type TeamRole,
   type TeamTask,
   type TeamTaskStatus,
 } from '@/lib/broker/teams'
+import {
+  getChannelMessage,
+  listThread,
+  parseMentions,
+  postChannelMessage,
+  toggleReaction,
+  type ChannelMessage,
+} from '@/lib/broker/channels'
 import { runTeamToolOnce, touchAndReadTeamSlot } from './reliability'
 
 /** How long an identical call counts as a retry rather than a repeat, for the
@@ -204,16 +239,58 @@ function summariseTask(task: TeamTask) {
 
 // --- Messaging --------------------------------------------------------------
 
+/** One channel message, as an agent sees it.
+ *
+ * Ids for every relationship and no rendered text: `thread` is what
+ * `team_send_message` wants back to keep replying in place, `id` is what
+ * `team_react` takes, and `mentions` is the parsed index rather than a repeat
+ * of the body the model can already read. */
+function summariseChannelMessage(message: ChannelMessage) {
+  return {
+    id: message.id,
+    from: message.fromSlotId,
+    to: message.toSlotId,
+    broadcast: message.toSlotId == null,
+    kind: message.kind,
+    body: message.body,
+    task: message.taskId,
+    at: message.createdAt,
+    /** Null for a root. Pass a root's `id` here to reply under it. */
+    thread: message.threadRootId,
+    mentions: message.mentions,
+    replies: message.replyCount,
+    lastReplyAt: message.lastReplyAt,
+    reactions: message.reactions.map((r) => ({ emoji: r.emoji, count: r.count, by: r.actorSlotIds })),
+  }
+}
+
 /**
- * `team_send_message(to?, kind, body, task?)`. Omitting `to` broadcasts.
+ * `team_send_message(to?, kind, body, task?, threadRootId?)`. Omitting `to`
+ * broadcasts; omitting `threadRootId` posts a new root in the feed.
  *
  * 'instruction' is leader-only. That is the one kind that reads as an order on
  * the receiving side, and a room where any member can issue orders has no
  * leader at all — the role would be decoration.
+ *
+ * **Why `postChannelMessage` and not `sendTeamMessage`.** The latter is the
+ * mailbox writer: it inserts a row and nothing else. It cannot resolve a
+ * thread root, so a reply written through it would be a root; it cannot
+ * flatten a reply-to-a-reply, so threads would nest without limit; and it does
+ * not look at the parent's `team_id`, so `thread_root_id` — an id straight off
+ * the wire — would be an unchecked pointer into another channel's
+ * conversation. `postChannelMessage` does all three inside the call that
+ * writes, which is the only place a check cannot be raced past. Reimplementing
+ * any of it here would be a second, weaker copy of a rule that already exists.
  */
 export async function teamSendMessage(
   caller: TeamCaller,
-  input: { to?: number | null; kind: TeamMessageKind; body: string; task?: number | null },
+  input: {
+    to?: number | null
+    kind: TeamMessageKind
+    body: string
+    task?: number | null
+    threadRootId?: number | null
+  },
 ): Promise<string> {
   return runTeamToolOnce(
     {
@@ -221,20 +298,39 @@ export async function teamSendMessage(
       slotId: caller.slotId,
       tool: 'team_send_message',
       taskId: input.task ?? null,
-      args: { to: input.to ?? null, kind: input.kind, body: input.body },
+      // `thread` is part of the fingerprint, and has to be: the same one-line
+      // answer posted as a root and then, minutes later, under the question
+      // that prompted it are two different messages. Without it here the
+      // second would be swallowed as a retry of the first and the thread would
+      // stay silent — a dropped reply is precisely the failure this tool was
+      // added to prevent.
+      args: {
+        to: input.to ?? null,
+        kind: input.kind,
+        body: input.body,
+        thread: input.threadRootId ?? null,
+      },
       repeatWindowMs: MESSAGE_REPEAT_WINDOW_MS,
     },
     async () => {
       if (input.kind === 'instruction') requireLeader(caller, "send 'instruction' messages")
 
+      // ONE roster read, two jobs. Mentions have to be resolved against the
+      // roster anyway, and the recipient check is a lookup in the same list —
+      // so this REPLACES the old `getTeamMember(to)` rather than adding to it,
+      // and the mention support below costs no extra round trip. A team's
+      // roster is bounded by its member count, so this is one small indexed
+      // read, not an unbounded list.
+      const roster = await listTeamMembers(caller.teamId)
+
       if (input.to != null) {
-        const recipient = await getTeamMember(input.to).catch(() => null)
+        const recipient = roster.find((member) => member.id === input.to)
         // This is also the dead-letter guard at the sending end (R6.6). A slot
         // removed since the sender last read the roster is refused here, with
         // the roster's own answer, rather than accepted into a mailbox nobody
         // will ever open. Messages that were already in flight when the slot
         // went are handled at the other end, by the trigger in migration 0012.
-        if (!recipient || recipient.teamId !== caller.teamId) {
+        if (!recipient) {
           throw new TeamPermissionError(
             `Slot ${input.to} is not a member of your team — it may have been removed. ` +
               `Nothing was sent. Read the roster before addressing it again.`,
@@ -246,17 +342,125 @@ export async function teamSendMessage(
       // render it as a link.
       if (input.task != null) await requireOwnTeamTask(caller, input.task)
 
-      const message = await sendTeamMessage({
+      // Parsed against THIS team's roster only, so "@Lead" in one channel can
+      // never resolve to another channel's leader. `parseMentions` returns slot
+      // ids; the body is left exactly as written.
+      const mentions = parseMentions(input.body, roster)
+
+      // `threadRootId` is passed through unchecked ON PURPOSE — see the
+      // docstring. `postChannelMessage` throws 'That thread belongs to a
+      // different channel.' / 'That thread no longer exists.' for a bad root,
+      // and those throws are deliberately NOT translated into
+      // `TeamPermissionError` here: doing so would mean re-reading the parent
+      // row just to learn what the writer is about to learn anyway, i.e. a
+      // second round trip on the hottest write in the room to change a prefix
+      // on a sentence that is already actionable. The route renders either as
+      // an `isError` tool result the model reads.
+      const message = await postChannelMessage({
         teamId: caller.teamId,
         fromSlotId: caller.slotId,
         toSlotId: input.to ?? null,
         kind: input.kind,
         body: input.body,
         taskId: input.task ?? null,
+        threadRootId: input.threadRootId ?? null,
+        mentions,
       })
-      return `Sent message ${message.id} (${message.kind}) ${input.to == null ? 'to the whole team' : `to slot ${input.to}`}.`
+
+      // JSON rather than the sentence this used to return. Threads and
+      // reactions are both addressed BY ID, so the id an agent needs next can
+      // no longer be a number embedded in prose it has to parse back out.
+      // `thread` is echoed because it may differ from what was asked for: a
+      // reply aimed at another reply comes back pointing at the root.
+      return JSON.stringify(summariseChannelMessage(message), null, 2)
     },
   )
+}
+
+/**
+ * `team_read_thread(rootId)` — the message that started a thread plus every
+ * reply, oldest first.
+ *
+ * Member-safe: R6.2 lets a member read the board, and a member that cannot
+ * read the conversation it was pulled into is worse off than one that cannot
+ * read the board.
+ *
+ * Scoped in ONE query, not two. `listThread` returns the root first (a reply's
+ * id is always greater than its root's, because the root has to exist before
+ * anything can point at it), so its `teamId` is the authorisation answer and
+ * a separate `getChannelMessage` to pre-check would be a wasted round trip.
+ * The refusal wording matches `requireOwnTeamTask`: "does not exist" and
+ * "belongs to another channel" must stay indistinguishable, or the tool
+ * becomes a way to enumerate every other team's message ids.
+ */
+export async function teamReadThread(caller: TeamCaller, input: { rootId: number }): Promise<string> {
+  // A pure read: no idempotency record, and deliberately no `markChannelRead`
+  // either. `team_members.last_read_message_id` is a channel-wide high-water
+  // mark, so moving it because a slot opened ONE thread would mark every feed
+  // message below that id read as well — messages this agent never saw. The
+  // unread badge lying is worse than it being stale.
+  let messages = await listThread(input.rootId)
+  const first = messages[0]
+  if (!first || first.teamId !== caller.teamId) {
+    throw new TeamPermissionError(`Message ${input.rootId} is not in your channel.`)
+  }
+
+  // The caller pointed at a reply rather than the root. Resolve it instead of
+  // returning a one-message "thread", which would read to the model as "nobody
+  // answered". The extra query happens only on this wrong-argument path, never
+  // on the normal one, and the parent is in this channel by construction —
+  // `postChannelMessage` cannot have written a cross-channel root.
+  const rootId = first.threadRootId ?? first.id
+  if (first.threadRootId != null) messages = await listThread(first.threadRootId)
+
+  return JSON.stringify(
+    {
+      root: rootId,
+      count: messages.length,
+      messages: messages.map(summariseChannelMessage),
+    },
+    null,
+    2,
+  )
+}
+
+/**
+ * `team_react(messageId, emoji)` — acknowledge without adding a message.
+ *
+ * Member-safe, and scoped to the channel: `toggleReaction` takes a bare
+ * message id, so the one read below is what stops a slot decorating another
+ * team's conversation (and, by the difference between a refusal and a success,
+ * probing which message ids exist elsewhere).
+ *
+ * HONEST GAP — this is the one tool in this file that is NOT wrapped in
+ * `runTeamToolOnce`, and it is the one call where repeating is not safe. A
+ * toggle has no fixed point: a transport-level retry after the write committed
+ * will REMOVE the reaction it just added. Wrapping it would trade that for a
+ * worse bug — a deliberate un-react inside the repeat window would be
+ * swallowed and replayed as "added", so a reaction could never be taken back,
+ * which is the entire point of a cheap acknowledgement. Neither is free, and I
+ * have chosen the recoverable one: the response states the resulting state
+ * (`added`), so an agent that retried can see the flip and correct it in one
+ * more call. Closing it properly needs an explicit desired state (react /
+ * unreact) or a client-supplied idempotency key on the tool; the unit's brief
+ * specifies a toggle, so I have not silently redesigned the surface. The
+ * concurrent case is already safe — migration 0013's unique index means two
+ * simultaneous identical reactions cannot double-count.
+ */
+export async function teamReact(caller: TeamCaller, input: { messageId: number; emoji: string }): Promise<string> {
+  const message = await getChannelMessage(input.messageId)
+  // Same wording as `teamReadThread` and `requireOwnTeamTask`, for the same
+  // reason: a distinct "that exists but is not yours" is an enumeration oracle.
+  if (!message || message.teamId !== caller.teamId) {
+    throw new TeamPermissionError(`Message ${input.messageId} is not in your channel.`)
+  }
+
+  const { added } = await toggleReaction({
+    messageId: input.messageId,
+    actorSlotId: caller.slotId,
+    emoji: input.emoji,
+  })
+  return JSON.stringify({ messageId: input.messageId, emoji: input.emoji, added }, null, 2)
 }
 
 /**

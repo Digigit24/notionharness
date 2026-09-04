@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { CheckSquare, Table2 } from 'lucide-react'
+import { CheckSquare, Hash, Table2 } from 'lucide-react'
 
 import type { PageOrigin } from '@/lib/page-origin'
 
@@ -16,6 +16,21 @@ import type { PageOrigin } from '@/lib/page-origin'
  */
 export function PageOriginHeader({ workspaceSlug, origin }: { workspaceSlug: string; origin: PageOrigin }) {
   if (!origin) return null
+
+  if (origin.kind === 'channel') {
+    return (
+      <div className="mb-2 flex flex-wrap items-center gap-1.5 text-xs text-black/50 dark:text-white/50">
+        <Hash size={12} className="shrink-0" />
+        <span>Canvas for</span>
+        <Link
+          href={`/workspace/${workspaceSlug}/teams/${origin.teamId}`}
+          className="font-medium text-primary underline-offset-2 hover:underline"
+        >
+          #{origin.channelName}
+        </Link>
+      </div>
+    )
+  }
 
   if (origin.kind === 'record') {
     return (

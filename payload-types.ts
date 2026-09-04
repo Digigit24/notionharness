@@ -245,9 +245,9 @@ export interface Page {
   /**
    * Which DataSource backend this page mirrors a row from, if any — set together with linkedSourceId/linkedRecordId. Empty for a regular, unlinked page.
    */
-  linkedSourceType?: ('userDatabase' | 'payload') | null;
+  linkedSourceType?: ('userDatabase' | 'payload' | 'team') | null;
   /**
-   * The linked backend's own identifier: a `databases` doc id for 'userDatabase', or a collection slug for 'payload'.
+   * The linked backend's own identifier: a `databases` doc id for 'userDatabase', a collection slug for 'payload', or a `teams` id for 'team'.
    */
   linkedSourceId?: string | null;
   /**

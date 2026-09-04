@@ -1,0 +1,16 @@
+-- Channel canvases: allow `pages.linked_source_type = 'team'`.
+--
+-- A channel's canvas is an ordinary page tagged with linkedSourceType='team',
+-- which is what makes it free: getSidebarPages already excludes any page with a
+-- linkedSourceType, so canvases never clutter the tree, and PageOriginHeader
+-- already renders provenance for one.
+--
+-- This column is a POSTGRES ENUM (`enum_pages_linked_source_type`), not the
+-- varchar that later select fields in this project use, so a new option is a
+-- schema change rather than just a code change. Payload would have accepted
+-- the string; the database would have rejected the insert.
+--
+-- `ALTER TYPE ... ADD VALUE` cannot run inside a transaction block, which is
+-- why this is its own statement in its own file rather than folded into
+-- another migration.
+ALTER TYPE enum_pages_linked_source_type ADD VALUE IF NOT EXISTS 'team';
