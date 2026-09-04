@@ -40,7 +40,47 @@ export type ResolvedMcpServer =
 export interface RunSubstitutions {
   RUN_TOKEN?: string
   RUN_ID?: string
+  /**
+   * R6.2 — the `team_members.id` this run is acting as, for `/api/mcp/teams`.
+   *
+   * Same reasoning as the two above, one step further. A team plugin row is
+   * one row for the whole workspace, but the slot it speaks as is a property
+   * of the RUN, not of the row: the same agent can hold two slots in two
+   * teams, and a row that hard-coded a slot id would be a key to somebody
+   * else's board the moment the roster changed. So the slot arrives here, per
+   * run, from the dispatcher's session -> slot join.
+   *
+   * ABSENT, never empty, when the run occupies no slot — see
+   * `SLOT_SCOPED_PLACEHOLDERS` below for what absence does.
+   */
+  TEAM_SLOT_ID?: string
 }
+
+/**
+ * Placeholders that decide whether a plugin row applies to a run at all,
+ * rather than merely filling a value in.
+ *
+ * `{{RUN_TOKEN}}` names a credential every run has. `{{TEAM_SLOT_ID}}` names
+ * one that only *some* runs have, and a run without it must not receive the
+ * server: `/api/mcp/teams` refuses any request whose `X-Team-Slot-Id` is not
+ * a numeric slot, so a non-team run would be handed seven tools that fail on
+ * every call — the exact "present and refusing" state the enabled-flag comment
+ * below rejects. Substituting an empty string would be worse still, because a
+ * blank header looks supplied.
+ *
+ * So a row that references one of these without a value is treated as OUT OF
+ * SCOPE for this run, exactly like a row scoped to a different agent: no
+ * server, and no `skipped` entry either. It is not a fault to report — the
+ * plugin is fine, this run simply is not a team member — and reporting it
+ * would put a system message about a missing plugin into the transcript of
+ * every ordinary turn an agent that also sits on a team ever takes.
+ *
+ * The cost of that choice, stated because it is real: a typo'd
+ * `{{TEAM_SLOT_ID}}` in some unrelated plugin makes that plugin quietly
+ * vanish from dispatched runs. It stays visible in the settings preview and
+ * on the agent page, which resolve with no substitutions at all (see below).
+ */
+const SLOT_SCOPED_PLACEHOLDERS = ['TEAM_SLOT_ID'] as const satisfies ReadonlyArray<keyof RunSubstitutions>
 
 /** Replaces `{{NAME}}` with a per-run value. An unknown placeholder is left
  * exactly as written rather than blanked, so a typo is visible in the request
@@ -104,6 +144,30 @@ function toMeta(configOptions: unknown): Record<string, unknown> | undefined {
     meta[id] = (option as { value?: unknown }).value
   }
   return Object.keys(meta).length > 0 ? { config: meta } : undefined
+}
+
+/** Does any `[{ name, value }]` pair in this JSON column mention `{{NAME}}`? */
+function referencesPlaceholder(column: unknown, name: string): boolean {
+  if (!Array.isArray(column)) return false
+  const needle = `{{${name}}}`
+  return column.some((entry) => {
+    const value = (entry as { value?: unknown } | null)?.value
+    return typeof value === 'string' && value.includes(needle)
+  })
+}
+
+/**
+ * True when this plugin row is in scope for THIS run, as opposed to for this
+ * agent in general. Only `headers` and `env` are examined because those are
+ * the only columns `substitute` is ever applied to.
+ */
+export function appliesToRun(plugin: Plugin, values: RunSubstitutions): boolean {
+  for (const name of SLOT_SCOPED_PLACEHOLDERS) {
+    // Empty counts as absent: a blank slot id is not a slot.
+    if (values[name]) continue
+    if (referencesPlaceholder(plugin.headers, name) || referencesPlaceholder(plugin.env, name)) return false
+  }
+  return true
 }
 
 /** True when this plugin row applies to this agent. */
@@ -172,6 +236,12 @@ export async function resolvePluginsForRun(params: {
   const result: ResolvedPlugins = { servers: [], skipped: [] }
   for (const plugin of docs) {
     if (!appliesToAgent(plugin, params.agentId)) continue
+    // Only a caller that supplied per-run values is asking a per-run question.
+    // Without them this is the "which plugins apply to this agent" query the
+    // docstring above describes (the settings preview, the agent page), and a
+    // team plugin must still be listed there — it is genuinely reachable by
+    // this agent, just not by this non-existent run.
+    if (params.substitutions && !appliesToRun(plugin, params.substitutions)) continue
     const server = pluginToMcpServer(plugin, params.substitutions ?? {})
     if ('error' in server) {
       result.skipped.push({ name: plugin.name, reason: server.error })

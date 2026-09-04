@@ -2,8 +2,9 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
-import { ExternalLink, Send, X } from 'lucide-react'
-import type { TeamMessage, TeamMessageKind, TeamTask } from '@/lib/broker'
+import { ExternalLink, MailX, Send, X } from 'lucide-react'
+import type { TeamMessageKind, TeamTask } from '@/lib/broker'
+import type { TeamRoomMessage } from '@/lib/teams/reliability'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -16,7 +17,7 @@ import {
   MESSAGE_KIND_LABEL,
   colourOf,
   recipientLabel,
-  senderLabel,
+  senderLabelForMessage,
   slotById,
   type TeamSlotView,
 } from './shared'
@@ -55,11 +56,11 @@ export function ChannelFeed({
   workspaceSlug: string
   teamId: number
   slots: TeamSlotView[]
-  messages: TeamMessage[]
+  messages: TeamRoomMessage[]
   tasks: TeamTask[]
   focusSlotId: number | null
   onFocusSlot: (id: number | null) => void
-  onAppendMessage: (message: TeamMessage) => void
+  onAppendMessage: (message: TeamRoomMessage) => void
 }) {
   const [cap, setCap] = useState(WINDOW_SIZE)
   const [body, setBody] = useState('')
@@ -144,13 +145,27 @@ export function ChannelFeed({
           <ul className="space-y-2">
             {visible.map((message) => {
               const from = slotById(slots, message.fromSlotId)
-              const isHuman = message.fromSlotId == null
+              // Three senders now, not two: a person (null sender, no system
+              // kind), a slot (an id, live or departed), and the room itself
+              // (null sender WITH a system kind - the reliability sweep and the
+              // room-wide stop write those). Before R6.6 the third case did not
+              // exist and the second was destroyed on slot deletion, so both
+              // were printed as "You".
+              const isSystem = message.systemKind != null
+              const isHuman = message.fromSlotId == null && !isSystem
+              const dead = message.undeliverableAt != null
               return (
-                <li key={message.id} className="flex gap-2.5">
+                <li
+                  key={message.id}
+                  className={cn(
+                    'flex gap-2.5',
+                    isSystem && 'rounded-md bg-black/[.03] px-1.5 py-1 dark:bg-white/[.05]',
+                  )}
+                >
                   <span
                     aria-hidden
                     className="mt-1.5 size-2 shrink-0 rounded-full"
-                    style={{ backgroundColor: isHuman ? '#94a3b8' : colourOf(from) }}
+                    style={{ backgroundColor: isSystem ? '#f59e0b' : isHuman ? '#94a3b8' : colourOf(from) }}
                   />
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-baseline gap-x-1.5 text-xs">
@@ -167,12 +182,30 @@ export function ChannelFeed({
                         onClick={() => from && onFocusSlot(from.id)}
                         disabled={!from}
                       >
-                        {senderLabel(slots, message.fromSlotId)}
+                        {senderLabelForMessage(slots, message)}
                       </button>
                       <span className="text-black/35 dark:text-white/35">→</span>
-                      <span className="text-black/55 dark:text-white/55">
+                      <span
+                        className={cn(
+                          'text-black/55 dark:text-white/55',
+                          message.addresseeMissing && 'text-red-600 dark:text-red-400',
+                        )}
+                      >
                         {recipientLabel(slots, message.toSlotId)}
                       </span>
+                      {/* A dead letter is shown, not hidden. The bug R6.6 fixes
+                          was a private message quietly becoming a broadcast;
+                          replacing it with a private message quietly vanishing
+                          would be the same failure with better manners. */}
+                      {dead && (
+                        <span
+                          className="inline-flex items-center gap-1 rounded border border-red-500/40 px-1 py-px text-[10px] uppercase tracking-wide text-red-600 dark:text-red-400"
+                          title={message.undeliverableReason ?? undefined}
+                        >
+                          <MailX size={10} />
+                          undelivered
+                        </span>
+                      )}
                       <span
                         className={cn(
                           'rounded border px-1 py-px text-[10px] uppercase tracking-wide',
@@ -190,7 +223,20 @@ export function ChannelFeed({
                         {formatRelativeTime(message.createdAt)}
                       </span>
                     </div>
-                    <p className="mt-0.5 text-sm whitespace-pre-wrap break-words">{message.body}</p>
+                    <p
+                      className={cn(
+                        'mt-0.5 text-sm whitespace-pre-wrap break-words',
+                        dead && 'text-black/45 line-through dark:text-white/45',
+                        isSystem && 'text-black/70 dark:text-white/70',
+                      )}
+                    >
+                      {message.body}
+                    </p>
+                    {dead && message.undeliverableReason && (
+                      <p className="mt-0.5 text-[11px] text-red-600/80 dark:text-red-400/80">
+                        {message.undeliverableReason} Nobody else received it.
+                      </p>
+                    )}
                   </div>
                 </li>
               )
@@ -198,9 +244,10 @@ export function ChannelFeed({
           </ul>
 
           <p className="mt-4 border-t border-black/5 pt-2 text-[11px] text-black/35 dark:border-white/5 dark:text-white/35">
-            Messages sent from this box are attributed to you. A member whose slot has since been deleted also shows
-            as “You”, because `team_messages.from_slot_id` is cleared when a slot is removed — the schema cannot tell
-            the two apart.
+            Messages sent from this box are attributed to you. Rows from &ldquo;Room&rdquo; were written by the
+            reliability sweep or by a room-wide stop, not by a person. A departed member now keeps its identity and
+            reads as &ldquo;a removed member&rdquo;; only rows written before that fix are still indistinguishable
+            from yours, because their sender id was destroyed and cannot be recovered.
           </p>
         </div>
 
@@ -297,7 +344,7 @@ export function ChannelFeed({
                 {focusMessages.slice(-WINDOW_SIZE).map((m) => (
                   <li key={m.id} className="text-xs">
                     <div className="flex items-baseline gap-1.5 text-[11px] text-black/45 dark:text-white/45">
-                      <span>{senderLabel(slots, m.fromSlotId)}</span>
+                      <span>{senderLabelForMessage(slots, m)}</span>
                       <span>→</span>
                       <span>{recipientLabel(slots, m.toSlotId)}</span>
                       <span className="ml-auto">{formatRelativeTime(m.createdAt)}</span>

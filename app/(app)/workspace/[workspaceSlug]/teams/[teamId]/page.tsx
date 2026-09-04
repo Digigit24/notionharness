@@ -1,7 +1,8 @@
 import { notFound } from 'next/navigation'
 import { getPayloadClient } from '@/lib/payload'
 import { getWorkspaceBySlug } from '@/lib/pages-cache'
-import { claimableTasks, getTeam, listTeamMembers, listTeamMessages, listTeamTasks } from '@/lib/broker'
+import { claimableTasks, getTeam, listTeamMembers, listTeamTasks } from '@/lib/broker'
+import { listTeamRoomMessages, readTeamStopState, sweepTeamSlots } from '@/lib/teams/reliability'
 import { Breadcrumbs } from '@/components/nav/breadcrumbs'
 import { TeamRoom } from '@/components/teams/team-room'
 import type { TeamSlotView } from '@/components/teams/shared'
@@ -38,11 +39,20 @@ export default async function TeamRoomPage({
   // guessable and the room carries the whole conversation.
   if (!team || team.workspaceId !== workspace.id) notFound()
 
-  const [members, messages, tasks, claimable, payload] = await Promise.all([
+  // R6.6 — the sweep runs before the reads and is awaited, so a room opened
+  // after every member died shows the tasks already back on the board rather
+  // than a stale assignment that corrects itself six seconds later. It is one
+  // query plus writes only when something actually changed, and it is the only
+  // thing in the app that runs it (see `lib/teams/reliability.ts`'s closing
+  // note on the dispatcher tick being its proper home).
+  const sweep = await sweepTeamSlots(team.id)
+
+  const [members, messages, tasks, claimable, stop, payload] = await Promise.all([
     listTeamMembers(team.id),
-    listTeamMessages(team.id, { limit: 200 }),
+    listTeamRoomMessages(team.id, { limit: 200 }),
     listTeamTasks(team.id),
     claimableTasks(team.id),
+    readTeamStopState(team.id),
     getPayloadClient(),
   ])
 
@@ -82,6 +92,8 @@ export default async function TeamRoomPage({
         initialMessages={messages}
         initialTasks={tasks}
         initialClaimableIds={claimable.map((t) => t.id)}
+        initialHealth={sweep.health}
+        initialStop={stop}
         agents={agentsResult.docs
           .filter((a) => a.enabled !== false)
           .map((a) => ({ id: a.id, name: a.name }))}

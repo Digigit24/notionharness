@@ -3,30 +3,37 @@
 import { useMemo } from 'react'
 import Link from 'next/link'
 import { Crown, ExternalLink } from 'lucide-react'
-import type { TeamMessage, TeamTask } from '@/lib/broker'
+import type { TeamTask } from '@/lib/broker'
+import type { TeamRoomMessage, TeamSlotHealth } from '@/lib/teams/reliability'
 import { formatRelativeTime } from '@/lib/relative-time'
 import { cn } from '@/lib/utils'
-import { TASK_STATUS_CLASS, TASK_STATUS_LABEL, colourOf, senderLabel, type TeamSlotView } from './shared'
+import {
+  SLOT_STATE_CLASS,
+  SLOT_STATE_DOT,
+  SLOT_STATE_LABEL,
+  TASK_STATUS_CLASS,
+  TASK_STATUS_LABEL,
+  colourOf,
+  formatSilence,
+  healthBySlot,
+  senderLabelForMessage,
+  type TeamSlotView,
+} from './shared'
 
 /** The last few rows a lane shows. A lane is a glance, not a transcript — the
  * full history is one click away in the channel or in Work. */
 const LANE_MESSAGE_COUNT = 8
 
 /**
- * What a lane can say about a member without inventing anything.
+ * What a lane says about a member's WORK. Presence is now a separate line.
  *
- * R6.4 wants presence — idle, thinking, running a tool, waiting on approval,
- * blocked, lost — "derived from the run and its heartbeat rather than
- * guessed". There is no heartbeat producer for team slots: R6.6 is unbuilt and
- * nothing writes a per-slot liveness row, so *thinking*, *running a tool* and
- * *lost* are not derivable today and are deliberately absent rather than
- * approximated from message timestamps, which would look like presence and be
- * fiction.
- *
- * What IS real is the board: a slot either owns work or it does not, and a
- * task it owns is either blocked or not. That is what this returns.
+ * The two were conflated while R6.6 was unbuilt, because the board was the only
+ * honest signal available: a slot either owns work or it does not. It is still
+ * the honest answer to that question, and it is still not an answer to the
+ * other one — a member can hold three tasks and be dead, which is exactly the
+ * state the heartbeat line above it now exposes.
  */
-function laneState(tasks: TeamTask[]): { label: string; tone: string } {
+function laneWork(tasks: TeamTask[]): { label: string; tone: string } {
   const active = tasks.filter((t) => t.status === 'in_progress' || t.status === 'claimed')
   const blocked = tasks.filter((t) => t.status === 'blocked')
   if (active.length > 0) {
@@ -46,17 +53,20 @@ export function LanesView({
   slots,
   messages,
   tasks,
+  health,
 }: {
   workspaceSlug: string
   slots: TeamSlotView[]
-  messages: TeamMessage[]
+  messages: TeamRoomMessage[]
   tasks: TeamTask[]
+  health: TeamSlotHealth[]
 }) {
+  const healthOf = healthBySlot(health)
   // Bucketed once for the whole view rather than filtered inside each lane:
   // with n slots and m messages the per-lane filter is n×m on every render,
   // and the feed is the array that grows without bound.
   const byLane = useMemo(() => {
-    const map = new Map<number, { messages: TeamMessage[]; tasks: TeamTask[] }>()
+    const map = new Map<number, { messages: TeamRoomMessage[]; tasks: TeamTask[] }>()
     for (const slot of slots) map.set(slot.id, { messages: [], tasks: [] })
     for (const message of messages) {
       if (message.fromSlotId != null) map.get(message.fromSlotId)?.messages.push(message)
@@ -86,11 +96,17 @@ export function LanesView({
       <div className="flex min-h-0 flex-1 gap-3 overflow-x-auto pb-2">
         {slots.map((slot) => {
           const lane = byLane.get(slot.id) ?? { messages: [], tasks: [] }
-          const state = laneState(lane.tasks)
+          const work = laneWork(lane.tasks)
+          const state = healthOf.get(slot.id)
           return (
             <section
               key={slot.id}
-              className="flex min-h-0 w-72 shrink-0 flex-col rounded-xl border border-black/10 dark:border-white/10"
+              className={cn(
+                'flex min-h-0 w-72 shrink-0 flex-col rounded-xl border',
+                state?.state === 'lost'
+                  ? 'border-red-500/40 bg-red-500/[.03]'
+                  : 'border-black/10 dark:border-white/10',
+              )}
             >
               <header className="shrink-0 border-b border-black/10 px-3 py-2 dark:border-white/10">
                 <div className="flex items-center gap-2">
@@ -107,7 +123,24 @@ export function LanesView({
                 <p className="mt-0.5 truncate text-xs text-black/45 dark:text-white/45">
                   {slot.agentName ?? `agent ${slot.agentId}`}
                 </p>
-                <p className={cn('mt-0.5 text-xs', state.tone)}>{state.label}</p>
+                {/* Presence first, work second. When a member is lost, what it
+                    was holding is the second question — whether anyone is
+                    behind the lane at all is the first. */}
+                {state && (
+                  <p className={cn('mt-0.5 flex items-center gap-1 text-xs', SLOT_STATE_CLASS[state.state])}>
+                    <span aria-hidden className={cn('size-1.5 shrink-0 rounded-full', SLOT_STATE_DOT[state.state])} />
+                    {SLOT_STATE_LABEL[state.state]}
+                    <span className="opacity-70">
+                      &middot; {state.lastSeenAt ? `seen ${formatSilence(state.silentForMs)} ago` : 'never seen'}
+                    </span>
+                  </p>
+                )}
+                <p className={cn('mt-0.5 text-xs', work.tone)}>{work.label}</p>
+                {state?.state === 'lost' && state.lostReason && (
+                  <p className="mt-1 text-[11px] text-red-600 dark:text-red-400">
+                    {state.lostReason} Its tasks went back to the board.
+                  </p>
+                )}
               </header>
 
               <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
@@ -131,7 +164,7 @@ export function LanesView({
                     {lane.messages.slice(-LANE_MESSAGE_COUNT).map((message) => (
                       <li key={`${slot.id}-${message.id}`} className="text-xs">
                         <div className="flex items-baseline gap-1.5 text-[11px] text-black/40 dark:text-white/40">
-                          <span>{senderLabel(slots, message.fromSlotId)}</span>
+                          <span>{senderLabelForMessage(slots, message)}</span>
                           <span className="ml-auto">{formatRelativeTime(message.createdAt)}</span>
                         </div>
                         <p className="mt-0.5 line-clamp-4 whitespace-pre-wrap break-words">{message.body}</p>
@@ -169,9 +202,11 @@ export function LanesView({
         is null for every slot this UI creates.
       */}
       <p className="mt-2 shrink-0 text-[11px] text-black/35 dark:text-white/35">
-        Lanes show the board and the mailbox, which are real. Live streaming text, tool cards and terminals per lane
-        are not wired up: that needs the run event stream mounted per slot. No slot is bound to a worktree yet, so
-        there is no merge action here either.
+        Lanes show the board, the mailbox and each member&rsquo;s heartbeat, which are real. Presence is derived from
+        the slot&rsquo;s own runs, tool calls, messages and task moves rather than from a separate liveness writer, so
+        it cannot keep ticking inside a process whose agent is wedged. Live streaming text, tool cards and terminals
+        per lane are still not wired up: that needs the run event stream mounted per slot. No slot is bound to a
+        worktree yet, so there is no merge action here either.
       </p>
     </div>
   )

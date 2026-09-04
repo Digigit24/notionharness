@@ -1,4 +1,8 @@
 import type { TeamMember, TeamMessageKind, TeamTask, TeamTaskStatus } from '@/lib/broker'
+// `import type` and nothing else: `lib/teams/reliability.ts` pulls in `pg` and
+// `node:crypto`, and this module is imported by client components. Types are
+// erased at compile time, so nothing from it reaches the browser bundle.
+import type { TeamRoomMessage, TeamSlotHealth, TeamSlotState } from '@/lib/teams/reliability'
 
 /**
  * Types and constants shared by the Teams route and its client components.
@@ -95,18 +99,93 @@ export function slotById(slots: TeamSlotView[], id: number | null): TeamSlotView
 /**
  * Who a message is from, in the feed's terms.
  *
- * `from_slot_id IS NULL` means either "the human said this" or "the slot that
- * said it has since been deleted", because the column is ON DELETE SET NULL.
- * The two are genuinely indistinguishable in the current schema, so this
- * returns the human label and the ambiguity is stated in the channel's own
- * footnote instead of being hidden behind a confident name.
+ * Three cases now, where there used to be two badly-merged ones. `from_slot_id`
+ * used to be ON DELETE SET NULL, so a departed member's messages became
+ * indistinguishable from the human's and every one of them was printed as
+ * "You". Migration 0012 dropped that FK action, so a removed slot keeps its id
+ * and this can finally say what actually happened.
+ *
+ * A dangling id (non-null, no matching roster row) is a member that has left.
+ * Only a genuinely NULL sender is the human — and, since 0012, only when the
+ * row carries no `system_kind`; see `senderLabelForMessage`.
  */
 export function senderLabel(slots: TeamSlotView[], fromSlotId: number | null): string {
-  return slotById(slots, fromSlotId)?.displayName ?? 'You'
+  if (fromSlotId == null) return 'You'
+  return slotById(slots, fromSlotId)?.displayName ?? 'a removed member'
+}
+
+/** The room itself is the third speaker: rows written by the reliability sweep
+ * and the stop action, which are neither a person nor a slot. */
+export function senderLabelForMessage(slots: TeamSlotView[], message: TeamRoomMessage): string {
+  if (message.systemKind) return 'Room'
+  return senderLabel(slots, message.fromSlotId)
 }
 
 export function recipientLabel(slots: TeamSlotView[], toSlotId: number | null): string {
-  return slotById(slots, toSlotId)?.displayName ?? 'everyone'
+  if (toSlotId == null) return 'everyone'
+  return slotById(slots, toSlotId)?.displayName ?? `a removed member (slot ${toSlotId})`
+}
+
+// --- Reliability (R6.6) ------------------------------------------------------
+
+/** Deliberately plain words, not jargon. A person reading a roster needs to
+ * know whether to wait, to intervene, or to do nothing. */
+export const SLOT_STATE_LABEL: Record<TeamSlotState, string> = {
+  lost: 'lost',
+  awaiting_approval: 'waiting on you',
+  awaiting_directory: 'waiting on a directory',
+  running: 'working',
+  queued: 'queued',
+  silent: 'quiet',
+  idle: 'idle',
+}
+
+/**
+ * Colour carries the urgency, and only two states get a loud one.
+ *
+ * `lost` is red because work was taken off a member and put back on the board.
+ * `awaiting_approval` is amber because a person is the blocker and nothing
+ * moves until they act. Everything else is deliberately quiet: a roster where
+ * every row is coloured tells you nothing, which is the failure R6.6 names —
+ * a lost slot that looks like a working one is not reliability, and neither is
+ * a working one that looks alarming.
+ */
+export const SLOT_STATE_CLASS: Record<TeamSlotState, string> = {
+  lost: 'text-red-600 dark:text-red-400',
+  awaiting_approval: 'text-amber-600 dark:text-amber-400',
+  awaiting_directory: 'text-amber-600 dark:text-amber-400',
+  running: 'text-indigo-600 dark:text-indigo-400',
+  queued: 'text-black/45 dark:text-white/45',
+  silent: 'text-amber-600/80 dark:text-amber-400/80',
+  idle: 'text-black/40 dark:text-white/40',
+}
+
+/** The dot beside a name, so state is readable without reading the word. */
+export const SLOT_STATE_DOT: Record<TeamSlotState, string> = {
+  lost: 'bg-red-500',
+  awaiting_approval: 'bg-amber-500',
+  awaiting_directory: 'bg-amber-500',
+  running: 'bg-indigo-500',
+  queued: 'bg-black/25 dark:bg-white/25',
+  silent: 'bg-amber-400',
+  idle: 'bg-black/20 dark:bg-white/20',
+}
+
+export function healthBySlot(health: TeamSlotHealth[]): Map<number, TeamSlotHealth> {
+  return new Map(health.map((h) => [h.slotId, h]))
+}
+
+/** Silence, in the coarsest unit that is still true. "quiet 4m" is what a
+ * person can act on; "quiet 247s" is a number they then have to divide. */
+export function formatSilence(ms: number | null): string {
+  if (ms == null) return 'never seen'
+  const seconds = Math.round(ms / 1000)
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.round(minutes / 60)
+  if (hours < 48) return `${hours}h`
+  return `${Math.round(hours / 24)}d`
 }
 
 /** The tasks a slot is carrying right now — the only member state this app can

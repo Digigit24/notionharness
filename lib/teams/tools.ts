@@ -22,6 +22,19 @@
 //     board but not close tasks, and a leader can be the only slot permitted
 //     to assign") are enforced here, server-side, on the resolved slot — never
 //     on anything the caller sent us.
+//
+// **R6.6 added a third thing this layer has to do: make every call safe to
+// repeat.** An agent retries — on a transport error after the write committed,
+// on a timeout it cannot distinguish from a failure, and because a model
+// decided to. Before this, a retried `team_report_done` was refused with an
+// error the first call never produced, and a retried `team_claim_task` was
+// told somebody else had taken it when "somebody else" was itself. Every
+// mutating tool below is now wrapped in `runTeamToolOnce`, keyed by slot, tool
+// and task exactly as R6.6 asks, and a retry replays the first call's answer
+// verbatim instead of running a second effect. The wrapper is OUTSIDE the
+// permission checks on purpose: a refused call deletes its own reservation, so
+// being told "only the leader may assign" never poisons a later, legitimate
+// attempt.
 import {
   claimTeamTask,
   createTeamTask,
@@ -38,6 +51,18 @@ import {
   type TeamTask,
   type TeamTaskStatus,
 } from '@/lib/broker/teams'
+import { runTeamToolOnce, touchAndReadTeamSlot } from './reliability'
+
+/** How long an identical call counts as a retry rather than a repeat, for the
+ * two tools where an identical repeat is legitimate.
+ *
+ * A member can move a task to `in_progress`, be blocked, and move it back; it
+ * can send the same one-line status twice in an afternoon. Neither is a
+ * mistake, so those two are deduplicated within a window instead of forever.
+ * Every irreversible call — creating a task, claiming one, reporting one done
+ * — passes no window and is deduplicated permanently. */
+const STATUS_REPEAT_WINDOW_MS = 60_000
+const MESSAGE_REPEAT_WINDOW_MS = 10 * 60_000
 
 /** The authenticated identity behind one MCP request: a slot, not an agent.
  * The same agent can hold two slots in one team with different jobs, so every
@@ -89,7 +114,15 @@ export async function resolveTeamCaller(input: {
   runAgentId: number | null
   runSessionId: number | null
 }): Promise<TeamCallerResolution> {
-  const slot = await getTeamMember(input.slotId).catch(() => null)
+  // R6.6 — this read is also the slot's HEARTBEAT, folded into the same
+  // statement so it costs nothing extra on the tool path (see
+  // `touchAndReadTeamSlot`). A tool call is the strongest evidence a slot is
+  // alive, and the agent check below is applied inside the same UPDATE, so a
+  // caller that fails it cannot make a slot look alive by knocking on it.
+  const { slot } = await touchAndReadTeamSlot(input.slotId, input.runAgentId).catch(() => ({
+    slot: null,
+    heartbeat: false,
+  }))
   if (!slot) return { ok: false, status: 401, message: 'Unauthorized: unknown team slot.' }
 
   // The run's agent must be the agent this slot is filled by. A run token
@@ -182,28 +215,48 @@ export async function teamSendMessage(
   caller: TeamCaller,
   input: { to?: number | null; kind: TeamMessageKind; body: string; task?: number | null },
 ): Promise<string> {
-  if (input.kind === 'instruction') requireLeader(caller, "send 'instruction' messages")
+  return runTeamToolOnce(
+    {
+      teamId: caller.teamId,
+      slotId: caller.slotId,
+      tool: 'team_send_message',
+      taskId: input.task ?? null,
+      args: { to: input.to ?? null, kind: input.kind, body: input.body },
+      repeatWindowMs: MESSAGE_REPEAT_WINDOW_MS,
+    },
+    async () => {
+      if (input.kind === 'instruction') requireLeader(caller, "send 'instruction' messages")
 
-  if (input.to != null) {
-    const recipient = await getTeamMember(input.to).catch(() => null)
-    if (!recipient || recipient.teamId !== caller.teamId) {
-      throw new TeamPermissionError(`Slot ${input.to} is not a member of your team.`)
-    }
-  }
-  // A referenced task must be ours too — otherwise a message is a way to
-  // smuggle another team's task id into this team's feed, where the UI will
-  // render it as a link.
-  if (input.task != null) await requireOwnTeamTask(caller, input.task)
+      if (input.to != null) {
+        const recipient = await getTeamMember(input.to).catch(() => null)
+        // This is also the dead-letter guard at the sending end (R6.6). A slot
+        // removed since the sender last read the roster is refused here, with
+        // the roster's own answer, rather than accepted into a mailbox nobody
+        // will ever open. Messages that were already in flight when the slot
+        // went are handled at the other end, by the trigger in migration 0012.
+        if (!recipient || recipient.teamId !== caller.teamId) {
+          throw new TeamPermissionError(
+            `Slot ${input.to} is not a member of your team — it may have been removed. ` +
+              `Nothing was sent. Read the roster before addressing it again.`,
+          )
+        }
+      }
+      // A referenced task must be ours too — otherwise a message is a way to
+      // smuggle another team's task id into this team's feed, where the UI will
+      // render it as a link.
+      if (input.task != null) await requireOwnTeamTask(caller, input.task)
 
-  const message = await sendTeamMessage({
-    teamId: caller.teamId,
-    fromSlotId: caller.slotId,
-    toSlotId: input.to ?? null,
-    kind: input.kind,
-    body: input.body,
-    taskId: input.task ?? null,
-  })
-  return `Sent message ${message.id} (${message.kind}) ${input.to == null ? 'to the whole team' : `to slot ${input.to}`}.`
+      const message = await sendTeamMessage({
+        teamId: caller.teamId,
+        fromSlotId: caller.slotId,
+        toSlotId: input.to ?? null,
+        kind: input.kind,
+        body: input.body,
+        taskId: input.task ?? null,
+      })
+      return `Sent message ${message.id} (${message.kind}) ${input.to == null ? 'to the whole team' : `to slot ${input.to}`}.`
+    },
+  )
 }
 
 /**
@@ -220,6 +273,16 @@ export async function teamReadInbox(
   caller: TeamCaller,
   input: { since?: number; limit?: number },
 ): Promise<string> {
+  // No idempotency record: a cursor read is already idempotent, and the only
+  // write it makes (`read_at`) is guarded by `read_at IS NULL`, so a retry
+  // cannot change an answer or a timestamp.
+  //
+  // R6.6's dead-letter fix lives underneath this call rather than in it.
+  // `readTeamInbox`'s broadcast branch is `to_slot_id IS NULL`; migration 0012
+  // dropped the `ON DELETE SET NULL` that turned a removed addressee's private
+  // mail into exactly that, so a message to a slot that no longer exists now
+  // matches NEITHER branch and reaches nobody. It is marked undeliverable and
+  // announced once in the room instead.
   const messages = await readTeamInbox({
     teamId: caller.teamId,
     slotId: caller.slotId,
@@ -278,6 +341,32 @@ export async function teamCreateTask(
   caller: TeamCaller,
   input: { subject: string; description?: string | null; assignTo?: number | null; blockedBy?: number[] },
 ): Promise<string> {
+  // Permanently deduplicated: a retried creation is the clearest form of
+  // double-booking there is — two identical tasks on the board, one of which
+  // two members will each pick up believing it is theirs.
+  return runTeamToolOnce(
+    {
+      teamId: caller.teamId,
+      slotId: caller.slotId,
+      tool: 'team_create_task',
+      taskId: null,
+      args: {
+        subject: input.subject,
+        description: input.description ?? null,
+        assignTo: input.assignTo ?? null,
+        // Sorted, because the same dependency set in a different order is the
+        // same call, and an agent has no reason to preserve order across a retry.
+        blockedBy: [...(input.blockedBy ?? [])].sort((a, b) => a - b),
+      },
+    },
+    () => createTaskEffect(caller, input),
+  )
+}
+
+async function createTaskEffect(
+  caller: TeamCaller,
+  input: { subject: string; description?: string | null; assignTo?: number | null; blockedBy?: number[] },
+): Promise<string> {
   requireLeader(caller, 'create or assign tasks')
 
   if (input.assignTo != null) {
@@ -325,6 +414,18 @@ export async function teamCreateTask(
  * knowingly.
  */
 export async function teamClaimTask(caller: TeamCaller, input: { id: number }): Promise<string> {
+  // Permanently deduplicated, and this is the case that most needed it: before
+  // R6.6 a retried claim re-ran the guarded UPDATE, matched nothing (the slot
+  // already owned the row), and was told "slot N claimed it first" — where N
+  // was the caller. An agent that believes it lost a race it actually won
+  // abandons work it is holding.
+  return runTeamToolOnce(
+    { teamId: caller.teamId, slotId: caller.slotId, tool: 'team_claim_task', taskId: input.id },
+    () => claimTaskEffect(caller, input),
+  )
+}
+
+async function claimTaskEffect(caller: TeamCaller, input: { id: number }): Promise<string> {
   await requireOwnTeamTask(caller, input.id)
   const claimed = await claimTeamTask(input.id, caller.slotId)
   if (claimed) return JSON.stringify({ claimed: true, task: summariseTask(claimed) }, null, 2)
@@ -361,6 +462,26 @@ export async function teamUpdateTask(
   caller: TeamCaller,
   input: { id: number; status: TeamTaskStatus },
 ): Promise<string> {
+  // Windowed rather than permanent: claimed -> in_progress -> blocked ->
+  // in_progress is a legitimate life for a task, so the same transition an
+  // hour later must be allowed through. Within the window it is a retry.
+  return runTeamToolOnce(
+    {
+      teamId: caller.teamId,
+      slotId: caller.slotId,
+      tool: 'team_update_task',
+      taskId: input.id,
+      args: { status: input.status },
+      repeatWindowMs: STATUS_REPEAT_WINDOW_MS,
+    },
+    () => updateTaskEffect(caller, input),
+  )
+}
+
+async function updateTaskEffect(
+  caller: TeamCaller,
+  input: { id: number; status: TeamTaskStatus },
+): Promise<string> {
   const task = await requireOwnTeamTask(caller, input.id)
 
   if (caller.role !== 'leader') {
@@ -392,6 +513,31 @@ export async function teamUpdateTask(
  * attributes.
  */
 export async function teamReportDone(
+  caller: TeamCaller,
+  input: { task: number; summary: string },
+): Promise<string> {
+  // The call R6.6 names explicitly: "a retried team_report_done must not
+  // broadcast a second report or overwrite a result". Permanently deduplicated
+  // by (slot, task, summary), and the first call's answer — including the list
+  // of tasks it unblocked — is replayed verbatim.
+  //
+  // The `already done` guard below is NOT redundant with this. It covers the
+  // other caller: a leader, or the same slot with a different summary, closing
+  // a task somebody else already settled. Idempotency answers "you did this
+  // before"; the guard answers "somebody did this before".
+  return runTeamToolOnce(
+    {
+      teamId: caller.teamId,
+      slotId: caller.slotId,
+      tool: 'team_report_done',
+      taskId: input.task,
+      args: { summary: input.summary },
+    },
+    () => reportDoneEffect(caller, input),
+  )
+}
+
+async function reportDoneEffect(
   caller: TeamCaller,
   input: { task: number; summary: string },
 ): Promise<string> {

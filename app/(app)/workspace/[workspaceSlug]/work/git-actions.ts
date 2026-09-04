@@ -13,7 +13,16 @@
 // actually is when they want to know what the agent just changed.
 
 import { getCurrentPayloadUser } from '@/lib/current-user'
+import { getPayloadClient } from '@/lib/payload'
 import { getWorktree, getChatSession } from '@/lib/broker'
+import {
+  HunkStaleError,
+  stageHunk,
+  summariseFileHunks,
+  unstageHunk,
+  type HunkSummary,
+  type HunkTarget,
+} from '@/lib/git/hunks'
 import {
   commit as gitCommit,
   directoryExists,
@@ -39,9 +48,10 @@ async function requireUser() {
 /**
  * Resolves a session to the checkout it is bound to.
  *
- * Every action in this file goes through here, so there is exactly one place
- * that decides which directory a git command may touch — and it is derived
- * from stored state, never from anything a caller passes in.
+ * This decides WHICH directory a git command may touch, derived from stored
+ * state and never from anything a caller passes in. It does not decide
+ * WHETHER the caller may touch it — that is `resolveScopedSessionRepo` and
+ * `requireSessionRepoForMember`, which every exported action goes through.
  */
 async function resolveSessionRepo(sessionId: number): Promise<{ dir: string; branch: string } | null> {
   const session = await getChatSession(sessionId)
@@ -51,6 +61,35 @@ async function resolveSessionRepo(sessionId: number): Promise<{ dir: string; bra
   if (!(await directoryExists(worktree.path))) return null
   if (!(await isGitRepo(worktree.path))) return null
   return { dir: worktree.path, branch: worktree.branch }
+}
+
+/**
+ * The same resolution, plus the workspace-membership check, returning null
+ * instead of throwing.
+ *
+ * `sessionId` arrives from the browser, and `resolveSessionRepo` on its own
+ * only stops a caller naming a DIRECTORY — it happily resolves someone
+ * else's session id to someone else's checkout. The reads below used to do
+ * exactly that: any logged-in user could read another workspace's diff, and
+ * the writes could stage, commit and push into it. Membership is derived from
+ * the session row's own workspace, never from a workspace id the caller
+ * supplies (which is all `work/actions.ts`'s `requireSession` checks).
+ *
+ * Null rather than a throw for the read paths, because they already have a
+ * "not bound to a checkout" empty state and a stranger probing session ids
+ * should not be able to tell the two apart.
+ */
+async function resolveScopedSessionRepo(sessionId: number): Promise<{ dir: string; branch: string } | null> {
+  const user = await requireUser()
+  const session = await getChatSession(sessionId)
+  if (!session) return null
+  // The membership read is a database round trip and the repo resolution
+  // shells out to git; serialising them would cost a spawn for nothing (D0).
+  const [repo, allowed] = await Promise.all([
+    resolveSessionRepo(sessionId),
+    userIsInWorkspace(user.id, session.workspaceId),
+  ])
+  return allowed ? repo : null
 }
 
 export interface SessionGitState {
@@ -86,8 +125,7 @@ const EMPTY: SessionGitState = {
 }
 
 export async function getSessionGitState(sessionId: number): Promise<SessionGitState> {
-  await requireUser()
-  const repo = await resolveSessionRepo(sessionId)
+  const repo = await resolveScopedSessionRepo(sessionId)
   if (!repo) return EMPTY
   try {
     // Independent reads, so they go together. `readGhStatus` in particular
@@ -128,25 +166,20 @@ export async function getSessionDiff(
   sessionId: number,
   options: { path?: string; staged?: boolean } = {},
 ): Promise<SessionDiff | null> {
-  await requireUser()
-  const repo = await resolveSessionRepo(sessionId)
+  const repo = await resolveScopedSessionRepo(sessionId)
   if (!repo) return null
   const { patch, truncated } = await readDiff(repo.dir, { path: options.path, staged: options.staged })
   return { patch, truncated, staged: Boolean(options.staged) }
 }
 
 export async function stageSessionPaths(sessionId: number, paths: string[]): Promise<void> {
-  await requireUser()
-  const repo = await resolveSessionRepo(sessionId)
-  if (!repo) throw new Error('This conversation is not bound to a checkout.')
+  const repo = await requireSessionRepoForMember(sessionId)
   if (paths.length === 0) return
   await stagePaths(repo.dir, paths)
 }
 
 export async function unstageSessionPaths(sessionId: number, paths: string[]): Promise<void> {
-  await requireUser()
-  const repo = await resolveSessionRepo(sessionId)
-  if (!repo) throw new Error('This conversation is not bound to a checkout.')
+  const repo = await requireSessionRepoForMember(sessionId)
   if (paths.length === 0) return
   await unstagePaths(repo.dir, paths)
 }
@@ -161,9 +194,7 @@ export async function unstageSessionPaths(sessionId: number, paths: string[]): P
  * else's name with nobody having read it.
  */
 export async function commitSession(sessionId: number, message: string): Promise<GitCommit | null> {
-  await requireUser()
-  const repo = await resolveSessionRepo(sessionId)
-  if (!repo) throw new Error('This conversation is not bound to a checkout.')
+  const repo = await requireSessionRepoForMember(sessionId)
   const text = message.trim()
   if (!text) throw new Error('A commit needs a message.')
   return gitCommit(repo.dir, text)
@@ -179,8 +210,7 @@ export async function commitSession(sessionId: number, message: string): Promise
  * repository already knows.
  */
 export async function suggestCommitMessage(sessionId: number): Promise<string> {
-  await requireUser()
-  const repo = await resolveSessionRepo(sessionId)
+  const repo = await resolveScopedSessionRepo(sessionId)
   if (!repo) return ''
   const status = await readStatus(repo.dir)
   const staged = status.changes.filter((c) => c.staged).map((c) => c.path)
@@ -212,9 +242,7 @@ export async function pushSession(
   sessionId: number,
   options: { openPullRequest?: boolean; title?: string; body?: string } = {},
 ): Promise<PushResult> {
-  await requireUser()
-  const repo = await resolveSessionRepo(sessionId)
-  if (!repo) throw new Error('This conversation is not bound to a checkout.')
+  const repo = await requireSessionRepoForMember(sessionId)
 
   const status = await readStatus(repo.dir)
   const branch = status.branch
@@ -251,4 +279,246 @@ export async function pushSession(
     .split(String.fromCharCode(10))
     .find((line) => line.startsWith('http'))
   return { pushed: true, prUrl: url, detail: url ? `Opened ${url}` : `Pushed ${branch}.` }
+}
+
+// ---------------------------------------------------------------------------
+// R5.2 — hunk staging.
+//
+// Staging a whole file is the wrong granularity for reviewing what an agent
+// did: a run usually touches one file for two unrelated reasons, and the
+// choice a person wants to make is "this change yes, that one not yet". The
+// actions below are the server half of that; the client half is
+// `components/review/hunk-staged-diff.tsx`.
+//
+// The mechanics live in `lib/git/hunks.ts` (synthesised single-hunk patch,
+// `git apply --cached`, `--reverse` to take one back out). What lives here is
+// the scoping.
+
+/** Owner-or-member, read the way `app/api/runs/[id]/events/stream/route.ts`
+ * reads it. There is no shared helper for this yet, and inventing one would
+ * mean editing files this unit does not own. */
+async function userIsInWorkspace(userId: number, workspaceId: number): Promise<boolean> {
+  const payload = await getPayloadClient()
+  const workspace = await payload
+    .findByID({ collection: 'workspaces', id: workspaceId, depth: 0, overrideAccess: true, disableErrors: true })
+    .catch(() => null)
+  if (!workspace) return false
+  const ownerId = typeof workspace.owner === 'number' ? workspace.owner : workspace.owner?.id
+  const memberIds = Array.isArray(workspace.members)
+    ? workspace.members.map((member) => (typeof member === 'number' ? member : member.id))
+    : []
+  return ownerId === userId || memberIds.includes(userId)
+}
+
+/**
+ * Same session resolution as everything else in this file, plus a workspace
+ * membership check.
+ *
+ * `sessionId` arrives from the browser. `resolveSessionRepo` turns it into a
+ * directory purely from stored state, which stops a caller naming a directory
+ * — but on its own it does NOT stop a caller naming SOMEONE ELSE'S session
+ * id and staging, unstaging, committing or pushing in another workspace's
+ * checkout. `work/actions.ts` compares the session against a workspace id the
+ * CALLER supplies, which is not a membership check either. Here it is derived
+ * from the session row's own workspace and checked against the logged-in user.
+ *
+ * The membership read runs alongside the repo resolution because the latter
+ * shells out to `git rev-parse`; serialising them would put a process spawn in
+ * front of a database round trip for nothing (D0).
+ */
+async function requireSessionRepoForMember(sessionId: number): Promise<{ dir: string; branch: string }> {
+  const user = await requireUser()
+  const session = await getChatSession(sessionId)
+  if (!session) throw new Error('That conversation no longer exists.')
+
+  const [repo, allowed] = await Promise.all([
+    resolveSessionRepo(sessionId),
+    userIsInWorkspace(user.id, session.workspaceId),
+  ])
+  if (!allowed) throw new Error('That conversation belongs to another workspace.')
+  if (!repo) throw new Error('This conversation is not bound to a checkout.')
+  return repo
+}
+
+/**
+ * A repository-relative path is the only kind this accepts.
+ *
+ * `git diff -- ../elsewhere` would fail on its own, but that is relying on a
+ * message rather than on a rule. An absolute path or a `..` segment is refused
+ * before git sees it, and the patch that comes back is matched against this
+ * same path again inside `selectHunk` — so naming one file and staging
+ * another's hunk stays impossible even if a pathspec did something surprising.
+ */
+function assertRepoRelativePath(path: string): string {
+  const value = path.trim()
+  if (!value) throw new Error('No file path given.')
+  const normalised = value.replace(/\\/g, '/')
+  if (normalised.startsWith('/') || /^[a-zA-Z]:/.test(normalised)) {
+    throw new Error('Only paths inside the checkout can be staged.')
+  }
+  if (normalised.split('/').some((segment) => segment === '..')) {
+    throw new Error('Only paths inside the checkout can be staged.')
+  }
+  return normalised
+}
+
+/**
+ * Big enough for any file a person will actually read hunk by hunk, and a hard
+ * limit rather than a truncation: a patch cut off mid-hunk still parses, and
+ * applying its last hunk would write half a change into the index. Anything
+ * larger reports itself unavailable and the caller falls back to staging the
+ * whole file.
+ */
+const HUNK_PATCH_MAX_BYTES = 2_000_000
+
+/** An alias rather than a second declaration: the boundary metadata is
+ * produced by `lib/git/hunks.ts` and is covered by the tests that also cover
+ * the patch synthesis, so the two cannot drift apart on what an index or a
+ * fingerprint means. */
+export type SessionHunk = HunkSummary
+
+export interface SessionFileHunks {
+  path: string
+  patch: string
+  staged: boolean
+  isBinary: boolean
+  hunks: SessionHunk[]
+  /** Set when per-hunk staging cannot be offered for this file, with the
+   * reason to show. The diff itself is still returned. */
+  unavailable: string | null
+}
+
+/** Shared by the read action and the two write actions, so a stage returns the
+ * new state of the file without the client having to ask for it. */
+async function readFileHunks(dir: string, filePath: string, staged: boolean): Promise<SessionFileHunks> {
+  const { patch, truncated } = await readDiff(dir, { path: filePath, staged, maxBytes: HUNK_PATCH_MAX_BYTES })
+  const base = { path: filePath, patch, staged, isBinary: false, hunks: [] as SessionHunk[] }
+
+  if (truncated) {
+    return {
+      ...base,
+      unavailable: 'This diff is too large to stage hunk by hunk — stage the whole file instead.',
+    }
+  }
+
+  const summary = summariseFileHunks(patch, filePath)
+  // An untracked file has no diff at all, and neither has a clean one. Nothing
+  // to offer and nothing to apologise for.
+  if (!summary.found) return { ...base, unavailable: null }
+  if (summary.isBinary) return { ...base, isBinary: true, unavailable: 'Binary file — it can only be staged whole.' }
+  if (summary.multipleFiles) {
+    // A pathspec that matched more than one file: refuse rather than guess
+    // which file the hunk indexes belong to.
+    return {
+      ...base,
+      unavailable: 'That path matched more than one file — open a single file to stage its hunks.',
+    }
+  }
+
+  return { ...base, unavailable: null, hunks: summary.hunks }
+}
+
+/**
+ * One file's diff AND its hunk boundaries, in a single call.
+ *
+ * Deliberately not "call `getSessionDiff`, then a second action for the
+ * hunks": the panel needs both to paint, and two round trips to render one
+ * file is exactly the latency D0 is about. The patch is parsed server-side and
+ * only the boundaries cross the wire — the client never sends patch text back,
+ * which keeps `git apply --cached` fed exclusively by bytes git itself
+ * produced seconds earlier.
+ */
+export async function getSessionFileHunks(
+  sessionId: number,
+  path: string,
+  options: { staged?: boolean } = {},
+): Promise<SessionFileHunks> {
+  const repo = await requireSessionRepoForMember(sessionId)
+  return readFileHunks(repo.dir, assertRepoRelativePath(path), Boolean(options.staged))
+}
+
+export interface HunkApplyResult {
+  ok: boolean
+  /** Present when `ok` is false, and already a sentence for a human — "this
+   * hunk no longer applies, refresh" rather than `error: patch failed:
+   * lib/x.ts:41`. */
+  message?: string
+  /** True specifically when the file moved underneath, so the caller can tell
+   * a stale diff from a refusal. */
+  stale?: boolean
+  /** The same side of the diff, re-read after the apply. Returned with the
+   * result so a click costs ONE round trip instead of "apply, then fetch the
+   * new diff" — the hunk list always changes, so the second call was
+   * guaranteed, which is exactly the shape D0 calls out. */
+  next?: SessionFileHunks
+}
+
+/**
+ * Returned rather than thrown.
+ *
+ * A `throw` from a server action reaches the browser as an opaque digest in a
+ * production build, and the message this feature most needs to deliver intact
+ * is precisely the "your diff is stale" one. Genuine faults — not bound to a
+ * checkout, not a member of the workspace — still throw, because those are
+ * bugs or attacks, not states the UI should narrate.
+ */
+async function applyHunk(
+  sessionId: number,
+  input: { path: string; hunkIndex: number; fingerprint: string },
+  direction: 'stage' | 'unstage',
+): Promise<HunkApplyResult> {
+  const repo = await requireSessionRepoForMember(sessionId)
+  const filePath = assertRepoRelativePath(input.path)
+  if (!Number.isInteger(input.hunkIndex) || input.hunkIndex < 0) throw new Error('Bad hunk reference.')
+  if (!input.fingerprint) throw new Error('Bad hunk reference.')
+
+  // Staging reads the unstaged diff (index → worktree) and applies it forward;
+  // unstaging reads the staged diff (HEAD → index) and reverses it. Same side
+  // is what the caller is looking at, so it is also what gets returned.
+  const side = direction === 'unstage'
+  const current = await readFileHunks(repo.dir, filePath, side)
+  if (current.unavailable) return { ok: false, message: current.unavailable, next: current }
+
+  const target: HunkTarget = { path: filePath, index: input.hunkIndex, fingerprint: input.fingerprint }
+  try {
+    // Re-read rather than trusting whatever the client last saw: staging is a
+    // write, and the only patch that may be applied is one this process just
+    // got out of git. Accepting patch text from the browser would turn
+    // `git apply --cached` into a write-anything primitive.
+    if (direction === 'stage') await stageHunk(repo.dir, current.patch, target)
+    else await unstageHunk(repo.dir, current.patch, target)
+  } catch (err) {
+    // The file can also change between that read and the apply. git catches
+    // that race itself and `lib/git/hunks.ts` maps its message onto the same
+    // error, so both land here saying the same thing — and both come back with
+    // a fresh diff so the person is looking at the truth immediately.
+    if (err instanceof HunkStaleError) {
+      return {
+        ok: false,
+        stale: true,
+        message: err.message,
+        next: await readFileHunks(repo.dir, filePath, side).catch(() => undefined),
+      }
+    }
+    throw err
+  }
+  return { ok: true, next: await readFileHunks(repo.dir, filePath, side) }
+}
+
+/** Stages one hunk. The worktree is untouched — the change is already in it,
+ * only the index gains it. */
+export async function stageSessionHunk(
+  sessionId: number,
+  input: { path: string; hunkIndex: number; fingerprint: string },
+): Promise<HunkApplyResult> {
+  return applyHunk(sessionId, input, 'stage')
+}
+
+/** Takes one hunk back out of the index, leaving the rest of the file staged
+ * and the worktree exactly as it was. */
+export async function unstageSessionHunk(
+  sessionId: number,
+  input: { path: string; hunkIndex: number; fingerprint: string },
+): Promise<HunkApplyResult> {
+  return applyHunk(sessionId, input, 'unstage')
 }

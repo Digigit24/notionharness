@@ -33,7 +33,9 @@ import {
   requestRunCancellation,
   getWorktree,
   touchWorktree,
+  getTeamBindingForSession,
   type Run,
+  type TeamRunBinding,
 } from '@/lib/broker'
 import { RunWorktreeManager } from '@/lib/run-worktrees/manager'
 import { resolveRunWorktreeConfig } from '@/lib/run-worktrees/config'
@@ -183,28 +185,55 @@ export async function dispatchNextRun(workerId: string): Promise<DispatchOutcome
 }
 
 /**
- * The project worktree this run should execute in, when its session is bound
- * to one.
+ * A bound worktree, or null if the binding cannot be honoured.
  *
- * Returns null for anything unbound, and also for a worktree whose row says
- * it was removed — a stale binding must fall back to a disposable checkout
- * rather than failing the run or, worse, running in a directory that no
- * longer means what it used to.
+ * A row that says `removed`, or a path that is no longer on disk, must fall
+ * back to a disposable checkout rather than failing the run or — worse —
+ * running in a directory that no longer means what it used to. `describe` is
+ * only there so the warning names what pointed at the missing path.
  */
-async function resolveSessionWorktree(run: Run) {
-  if (!run.sessionId) return null
-  const session = await getChatSession(run.sessionId).catch(() => null)
-  if (!session?.worktreeId) return null
-  const worktree = await getWorktree(session.worktreeId).catch(() => null)
+async function usableWorktree(worktreeId: number, describe: string) {
+  const worktree = await getWorktree(worktreeId).catch(() => null)
   if (!worktree || worktree.status === 'removed') return null
   const { existsSync } = await import('node:fs')
   if (!existsSync(worktree.path)) {
     console.warn(
-      `[dispatcher] Session ${session.id} points at worktree ${worktree.path}, which is not on disk — using a disposable checkout instead.`,
+      `[dispatcher] ${describe} points at worktree ${worktree.path}, which is not on disk — using a disposable checkout instead.`,
     )
     return null
   }
   return worktree
+}
+
+/**
+ * The project worktree this run should execute in, when its session is bound
+ * to one — or when its TEAM says where it belongs.
+ *
+ * R6.1 — this is where `teams.workspace_mode` stops being a stored string and
+ * starts deciding something. `getTeamBindingForSession` has already applied
+ * the mode: 'shared' answers with the one checkout the whole team works in,
+ * 'per_member' answers with this slot's own. Taking that over the session's
+ * own binding is the point — under 'shared', two slots whose sessions were
+ * bound separately must still land in the same directory, or the mode means
+ * nothing.
+ *
+ * A team binding that resolves to nothing falls through to the ordinary
+ * session binding, and then to a disposable checkout, exactly as before: a
+ * team whose slots nobody has bound to a repository is a team of agents that
+ * still runs, just without a shared tree.
+ */
+async function resolveSessionWorktree(run: Run, team: TeamRunBinding | null) {
+  if (team?.worktreeId != null) {
+    const teamTree = await usableWorktree(
+      team.worktreeId,
+      `Team ${team.teamId} slot ${team.slotId} (${team.workspaceMode})`,
+    )
+    if (teamTree) return teamTree
+  }
+  if (!run.sessionId) return null
+  const session = await getChatSession(run.sessionId).catch(() => null)
+  if (!session?.worktreeId) return null
+  return usableWorktree(session.worktreeId, `Session ${session.id}`)
 }
 
 function stringArray(raw: unknown): string[] {
@@ -394,6 +423,77 @@ async function executeClaimedRun(
   // plugins is the state every agent was in until this existed, so the turn
   // proceeds without them rather than refusing to start.
   const agentWorkspaceId = typeof agent.workspace === 'number' ? agent.workspace : agent.workspace?.id
+
+  // R6.2 — is this run a team member taking its turn?
+  //
+  // The only link that exists is the session: a run carries `session_id`, a
+  // team slot carries `session_id`. `getTeamBindingForSession` does that join,
+  // the team lookup and the workspace-mode worktree choice in one query,
+  // because this is the dispatch path and every extra round trip here is paid
+  // by every run in the install (D0).
+  //
+  // The agent check is not redundant with the endpoint's. `/api/mcp/teams`
+  // refuses a slot whose agent is not the run's agent, so a mismatch here
+  // could only ever produce a credential that is rejected on first use — but
+  // handing an agent a tool that is guaranteed to fail is worse than not
+  // handing it one, and the mismatch itself (a slot whose agent was swapped
+  // while its session kept running) is worth a line in the log.
+  const rawTeamBinding = run.sessionId
+    ? await getTeamBindingForSession(run.sessionId).catch((err) => {
+        console.warn(`[dispatcher] Could not resolve the team slot for run ${run.id}.`, err)
+        return null
+      })
+    : null
+  let teamBinding: TeamRunBinding | null = rawTeamBinding
+  if (rawTeamBinding && rawTeamBinding.agentId !== agentId) {
+    console.warn(
+      `[dispatcher] Run ${run.id} (agent ${agentId}) shares a session with team slot ${rawTeamBinding.slotId}, ` +
+        `which is filled by agent ${rawTeamBinding.agentId} — dispatching it without team tools.`,
+    )
+    teamBinding = null
+  } else if (rawTeamBinding && agentWorkspaceId && rawTeamBinding.workspaceId !== agentWorkspaceId) {
+    // The slot's team and the agent must live in the same workspace, because
+    // everything below reads from the AGENT's: the plugin row is registered in
+    // `agentWorkspaceId` and `resolvePluginsForRun` is scoped to it, while the
+    // slot id substituted into that row's header belongs to the team's. Let
+    // those diverge and a run would carry one workspace's credential to
+    // another workspace's board — and nothing downstream would catch it, since
+    // `/api/mcp/teams` compares agents and sessions but never workspaces.
+    //
+    // Not reachable through the UI today (`addSlotAction` calls
+    // `requireAgent(agentId, workspaceId)`), which is precisely why it is
+    // checked here rather than assumed: the guard that makes it true lives in
+    // a server action, and an agent moved between workspaces after its slot
+    // was filled would leave exactly this row behind. Dropping the team tools
+    // is the conservative answer — the turn still runs, and the roster is a
+    // human's to repair.
+    console.warn(
+      `[dispatcher] Run ${run.id} is in workspace ${agentWorkspaceId} but team slot ${rawTeamBinding.slotId} ` +
+        `belongs to team ${rawTeamBinding.teamId} in workspace ${rawTeamBinding.workspaceId} — ` +
+        `dispatching it without team tools.`,
+    )
+    teamBinding = null
+  }
+
+  // A team that predates this wiring has no plugin row, because nothing had
+  // created one when it was made. Repaired here rather than left broken: the
+  // check is one indexed lookup, it only happens for a run that actually
+  // occupies a slot (a small minority of runs), and it is idempotent, so after
+  // the first team turn in a workspace it finds the row and returns. The
+  // ALTERNATIVE — telling the user to create a second team, or to hand-write a
+  // plugin row with three placeholder headers — is not a fix.
+  if (teamBinding && agentWorkspaceId) {
+    await import('@/lib/teams/registration')
+      .then(({ ensureTeamMcpPlugin }) => ensureTeamMcpPlugin(agentWorkspaceId))
+      .catch((err) => {
+        console.warn(
+          `[dispatcher] Run ${run.id} is team ${teamBinding.teamId} slot ${teamBinding.slotId} but the team ` +
+            `plugin could not be registered for workspace ${agentWorkspaceId}; this turn has no team tools.`,
+          err,
+        )
+      })
+  }
+
   const plugins = agentWorkspaceId
     ? await resolvePluginsForRun({
         workspaceId: agentWorkspaceId,
@@ -401,7 +501,18 @@ async function executeClaimedRun(
         // A plugin row is inert configuration; the credential is per run and
         // short lived. `{{RUN_TOKEN}}` in a header value becomes this run's
         // own token here and nowhere else, so nothing live is ever stored.
-        substitutions: { RUN_TOKEN: run.runToken ?? undefined, RUN_ID: String(run.id) },
+        //
+        // `TEAM_SLOT_ID` follows the same rule and adds one of its own: it is
+        // OMITTED, not blanked, for a run that occupies no slot. An empty
+        // `X-Team-Slot-Id` header looks supplied and is not; absent is a state
+        // `lib/plugins/resolve.ts` can act on, and it does — a plugin row that
+        // needs a slot is left out of the session entirely rather than
+        // injected in a form that fails every call.
+        substitutions: {
+          RUN_TOKEN: run.runToken ?? undefined,
+          RUN_ID: String(run.id),
+          ...(teamBinding ? { TEAM_SLOT_ID: String(teamBinding.slotId) } : {}),
+        },
       }).catch((err) => {
         console.warn(`[dispatcher] Could not resolve plugins for run ${run.id}.`, err)
         return { servers: [], skipped: [] }
@@ -429,7 +540,7 @@ async function executeClaimedRun(
   // discard, while a project worktree belongs to the user and must survive
   // the run untouched.
   let runCwd: string
-  const sessionWorktree = await resolveSessionWorktree(run)
+  const sessionWorktree = await resolveSessionWorktree(run, teamBinding)
 
   // The ACP session id this thread already established, if any. Passing it
   // makes the agent replay its own history so turn two knows what turn one

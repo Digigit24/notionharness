@@ -1,11 +1,20 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Columns3, MessageSquare, Network } from 'lucide-react'
-import type { Team, TeamMessage, TeamTask } from '@/lib/broker'
+import { Columns3, MessageSquare, Network, OctagonX } from 'lucide-react'
+import type { Team, TeamTask } from '@/lib/broker'
+import type { TeamRoomMessage, TeamSlotHealth, TeamStopState } from '@/lib/teams/reliability'
 import { cn } from '@/lib/utils'
-import { markRoomReadAction, pollTeamRoomAction } from '@/app/(app)/workspace/[workspaceSlug]/teams/actions'
-import type { TeamSlotView } from './shared'
+import { Button } from '@/components/ui/button'
+import { toast } from '@/hooks/use-toast'
+import { formatRelativeTime } from '@/lib/relative-time'
+import {
+  clearTeamStopAction,
+  markRoomReadAction,
+  pollTeamRoomAction,
+  stopTeamRoomAction,
+} from '@/app/(app)/workspace/[workspaceSlug]/teams/actions'
+import { formatSilence, type TeamSlotView } from './shared'
 import { ChannelFeed } from './channel-feed'
 import { LanesView } from './lanes-view'
 import { BoardView } from './board-view'
@@ -44,15 +53,19 @@ export function TeamRoom({
   initialMessages,
   initialTasks,
   initialClaimableIds,
+  initialHealth,
+  initialStop,
   agents,
 }: {
   workspaceId: number
   workspaceSlug: string
   team: Team
   slots: TeamSlotView[]
-  initialMessages: TeamMessage[]
+  initialMessages: TeamRoomMessage[]
   initialTasks: TeamTask[]
   initialClaimableIds: number[]
+  initialHealth: TeamSlotHealth[]
+  initialStop: TeamStopState
   agents: TeamAgentOption[]
 }) {
   const [view, setView] = useState<RoomView>('channel')
@@ -61,6 +74,9 @@ export function TeamRoom({
   const [tasks, setTasks] = useState(initialTasks)
   const [claimableIds, setClaimableIds] = useState(initialClaimableIds)
   const [focusSlotId, setFocusSlotId] = useState<number | null>(null)
+  const [health, setHealth] = useState(initialHealth)
+  const [stop, setStop] = useState(initialStop)
+  const [stopping, setStopping] = useState(false)
 
   // The server re-renders this component with fresh props after any action
   // that calls revalidatePath (adding a slot, changing the leader). Without
@@ -88,7 +104,7 @@ export function TeamRoom({
   /** Appends only rows we do not already hold. The poll and an optimistic send
    * can both deliver the same message — the send returns the inserted row, and
    * the next poll reads forward from a cursor that may predate it. */
-  const mergeMessages = useCallback((incoming: TeamMessage[]) => {
+  const mergeMessages = useCallback((incoming: TeamRoomMessage[]) => {
     if (incoming.length === 0) return
     setMessages((prev) => {
       const seen = new Set(prev.map((m) => m.id))
@@ -115,6 +131,8 @@ export function TeamRoom({
         mergeMessages(delta.messages)
         setTasks(delta.tasks)
         setClaimableIds(delta.claimableIds)
+        setHealth(delta.health)
+        setStop(delta.stop)
         if (delta.messages.length > 0) {
           // Reading a room while looking at it is what "read" means; anything
           // that arrives while the tab is hidden stays unread and keeps the
@@ -148,6 +166,53 @@ export function TeamRoom({
 
   const leader = useMemo(() => slots.find((s) => s.role === 'leader') ?? null, [slots])
   const claimableCount = claimableIds.length
+  const lost = useMemo(() => health.filter((h) => h.state === 'lost'), [health])
+  const awaitingApproval = useMemo(() => health.filter((h) => h.state === 'awaiting_approval'), [health])
+  const inFlight = stop.inFlightRunIds.length
+
+  /**
+   * R6.6's room-wide stop.
+   *
+   * The button waits for the server rather than guessing. "Asked 4 turns to
+   * stop" is a claim about other processes, and it is the one place in this
+   * room where an optimistic update could lie about the machinery. Stopping is
+   * a rare, deliberate action, so the round trip is the honest cost — unlike
+   * sending a message, where the row is already known and D0 forbids it.
+   */
+  const stopRoom = useCallback(async () => {
+    setStopping(true)
+    try {
+      const result = await stopTeamRoomAction({ workspaceId, teamId: team.id })
+      toast({
+        title:
+          result.stopped.length === 0
+            ? 'Nothing was running'
+            : `Asked ${result.stopped.length} turn${result.stopped.length === 1 ? '' : 's'} to stop`,
+        description:
+          result.stopped.length === 0
+            ? 'No member turn was in flight.'
+            : 'Cooperative: everything already streamed is kept, and each run settles as cancelled.' +
+              (result.alreadySettled.length > 0
+                ? ` ${result.alreadySettled.length} had already finished.`
+                : ''),
+      })
+      // Only the fact the server just confirmed. `inFlightRunIds` is
+      // deliberately left alone: a cooperative stop is a REQUEST, and those
+      // runs are still winding down until each one settles. Zeroing the count
+      // here would disable the button and tell the room nothing is running
+      // while turns are visibly still finishing — the next poll reports what
+      // actually happened.
+      setStop((prev) => ({ ...prev, requestedAt: new Date().toISOString() }))
+    } catch (error) {
+      toast({
+        title: 'Could not stop the room',
+        description: error instanceof Error ? error.message : undefined,
+        variant: 'destructive',
+      })
+    } finally {
+      setStopping(false)
+    }
+  }, [workspaceId, team.id])
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -160,6 +225,27 @@ export function TeamRoom({
             {team.workspaceMode === 'shared' ? 'shared worktree' : 'worktree per member'}
           </p>
         </div>
+        {/*
+          Stop is a header control, not a per-lane one, because the thing it
+          stops is the room. It is disabled when nothing is in flight rather
+          than hidden: a Stop that appears and vanishes teaches people to hunt
+          for it, and its label already says how many turns it would reach.
+        */}
+        <Button
+          type="button"
+          size="sm"
+          variant={inFlight > 0 ? 'destructive' : 'outline'}
+          disabled={stopping || inFlight === 0}
+          onClick={() => void stopRoom()}
+          title={
+            inFlight === 0
+              ? 'No member turn is in flight.'
+              : `Ask all ${inFlight} in-flight member turns to stop cooperatively.`
+          }
+        >
+          <OctagonX size={14} />
+          {stopping ? 'Stopping…' : inFlight === 0 ? 'Stop room' : `Stop room (${inFlight})`}
+        </Button>
         <nav className="inline-flex items-center gap-0.5 rounded-lg border border-black/10 p-0.5 dark:border-white/10">
           {VIEWS.map(({ id, label, icon: Icon }) => (
             <button
@@ -203,6 +289,65 @@ export function TeamRoom({
         )}
       </p>
 
+      {/*
+        R6.6 — the reliability line. Present only when there is something to
+        say: a room where everyone is fine gets no banner at all, so the banner
+        appearing is itself the signal. Every number here is the sweep's own
+        answer, not a guess from message timestamps.
+      */}
+      {(lost.length > 0 || awaitingApproval.length > 0 || stop.requestedAt) && (
+        <div className="mb-3 space-y-1.5">
+          {lost.length > 0 && (
+            <p className="rounded-lg border border-red-500/30 bg-red-500/[.04] px-3 py-2 text-xs text-red-700 dark:text-red-300">
+              <span className="font-medium">
+                {lost.length} {lost.length === 1 ? 'member is' : 'members are'} lost.
+              </span>{' '}
+              {lost
+                .map(
+                  (h) =>
+                    `${h.displayName} (quiet ${formatSilence(h.silentForMs)}${
+                      h.lostReason ? `; ${h.lostReason}` : ''
+                    })`,
+                )
+                .join(' · ')}{' '}
+              Anything they were holding has been returned to the board, so an idle member can pick it up.
+            </p>
+          )}
+          {awaitingApproval.length > 0 && (
+            <p className="rounded-lg border border-amber-500/30 bg-amber-500/[.04] px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+              <span className="font-medium">Waiting on you:</span>{' '}
+              {awaitingApproval.map((h) => h.displayName).join(', ')} raised the same approval card a solo run
+              raises — answer it in the Inbox or in that member&apos;s thread. These members are not counted as
+              lost while a decision is outstanding.
+            </p>
+          )}
+          {stop.requestedAt && (
+            <p className="flex flex-wrap items-center gap-2 rounded-lg border border-black/10 px-3 py-2 text-xs text-black/60 dark:border-white/10 dark:text-white/60">
+              <span>
+                A room-wide stop was requested {formatRelativeTime(stop.requestedAt)}.
+                {inFlight > 0
+                  ? ` ${inFlight} turn${inFlight === 1 ? ' is' : 's are'} still winding down.`
+                  : ' Nothing is running.'}{' '}
+                Silence is expected for a moment, so nobody is marked lost for it straight away.
+              </span>
+              <Button
+                type="button"
+                size="xs"
+                variant="ghost"
+                className="ml-auto"
+                onClick={() =>
+                  void clearTeamStopAction({ workspaceId, teamId: team.id })
+                    .then(() => setStop((prev) => ({ ...prev, requestedAt: null, requestedBy: null })))
+                    .catch(() => undefined)
+                }
+              >
+                Clear
+              </Button>
+            </p>
+          )}
+        </div>
+      )}
+
       <div className="flex min-h-0 flex-1 gap-4">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {view === 'channel' && (
@@ -219,7 +364,13 @@ export function TeamRoom({
             />
           )}
           {view === 'lanes' && (
-            <LanesView workspaceSlug={workspaceSlug} slots={slots} messages={messages} tasks={tasks} />
+            <LanesView
+              workspaceSlug={workspaceSlug}
+              slots={slots}
+              messages={messages}
+              tasks={tasks}
+              health={health}
+            />
           )}
           {view === 'board' && (
             <BoardView
@@ -239,6 +390,7 @@ export function TeamRoom({
           teamId={team.id}
           slots={slots}
           tasks={tasks}
+          health={health}
           agents={agents}
           onSlotsChanged={setSlots}
         />

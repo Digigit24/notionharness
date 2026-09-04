@@ -143,7 +143,42 @@ export async function createTeam(input: {
       input.createdBy ?? null,
     ],
   )
-  return toTeam(rows[0])
+  const team = toTeam(rows[0])
+
+  // R6.2 - a team is useless to a dispatched agent unless the workspace has a
+  // plugin row pointing at `/api/mcp/teams`, so creating the first team is
+  // what creates it. Three alternatives were considered and rejected:
+  //
+  //  - on page render: a GET that writes configuration, and one that would
+  //    appear for a workspace nobody ever built a team in;
+  //  - at dispatch time: a write on the hot path of every run, only to
+  //    discover in the overwhelming majority of cases that it was there;
+  //  - in the migration: the row needs this app's externally reachable URL
+  //    (`NOTIONFORGE_URL`), which SQL does not have.
+  //
+  // Dynamically imported, and only on this path, because `lib/teams/
+  // registration.ts` pulls in the Payload client: a static import would make
+  // every consumer of `lib/broker` - the migration runner and half of
+  // `scripts/` included - load a Payload config they do not need and may not
+  // have. A failure is logged, not thrown: the team and its slots are real and
+  // usable from the UI without the plugin row, and losing the team because its
+  // tool registration failed would be the worse outcome. Registration is
+  // idempotent, so a later team creation repairs it - and so does the
+  // dispatcher, which re-asserts it for any run that turns out to occupy a
+  // slot, since teams created before this wiring existed never came through
+  // here at all.
+  try {
+    const { ensureTeamMcpPlugin } = await import('@/lib/teams/registration')
+    await ensureTeamMcpPlugin(team.workspaceId)
+  } catch (err) {
+    console.warn(
+      `[teams] Could not register the team MCP plugin for workspace ${team.workspaceId}; ` +
+        `dispatched members of team ${team.id} will have no team tools until it exists.`,
+      err,
+    )
+  }
+
+  return team
 }
 
 export async function listTeams(workspaceId: number): Promise<Team[]> {
@@ -252,6 +287,104 @@ export async function setTeamLeader(teamId: number, slotId: number | null): Prom
     throw err
   } finally {
     client.release()
+  }
+}
+
+/**
+ * Everything a dispatcher needs to know about a run whose session is a team
+ * slot: which slot it is, and which checkout it should run in.
+ *
+ * The join is `chat_sessions.id = team_members.session_id`, because that is
+ * the only link that exists - a run carries `session_id`, a slot carries
+ * `session_id`, and nothing carries a slot id. (A `runs.team_slot_id` column
+ * would be tighter, and is exactly what `lib/teams/tools.ts` asks for in its
+ * "HONEST GAP" note, but adding it is a migration plus a change to every
+ * enqueue site, which this unit does not own.)
+ *
+ * ONE query, not four. A run is dispatched constantly and this sits directly
+ * on that path, so the team, the slot and the mode-resolved worktree all come
+ * back together rather than as a chain of round trips (D0).
+ *
+ * Returns null when the session fills no slot - and ALSO when it somehow fills
+ * more than one. `team_members.session_id` carries an index but no unique
+ * constraint, so two slots sharing a session is representable; picking one of
+ * them would hand a run an authority it cannot be shown to have. Absent beats
+ * arbitrary, and the endpoint refuses an absent slot cleanly.
+ */
+export interface TeamRunBinding {
+  teamId: number
+  slotId: number
+  agentId: number
+  role: TeamRole
+  displayName: string
+  workspaceId: number
+  workspaceMode: TeamWorkspaceMode
+  /** The checkout this slot should run in under the team's `workspace_mode`,
+   * or null when the mode's candidate is unbound. */
+  worktreeId: number | null
+  /** The two candidates the mode chose between, kept so a caller can explain
+   * itself in a log line instead of just acting. */
+  ownWorktreeId: number | null
+  sharedWorktreeId: number | null
+}
+
+export async function getTeamBindingForSession(sessionId: number): Promise<TeamRunBinding | null> {
+  const pool = getBrokerPool()
+  const { rows } = await pool.query(
+    // `COALESCE(m.worktree_id, s.worktree_id)` on both sides because a slot
+    // may be bound directly (`team_members.worktree_id`) or through the
+    // conversation a human bound in Work (`chat_sessions.worktree_id`), and
+    // from here the two mean the same thing: the checkout this slot works in.
+    //
+    // The correlated subquery picks the team's SHARED checkout, leader first
+    // then oldest slot, so every member of a 'shared' team resolves to the
+    // same row no matter which one is asking - a deterministic rule the roster
+    // can restate, rather than "whichever happened to be bound last".
+    `SELECT m.id             AS slot_id,
+            m.team_id        AS team_id,
+            m.agent_id       AS agent_id,
+            m.role           AS role,
+            m.display_name   AS display_name,
+            t.workspace_id   AS workspace_id,
+            t.workspace_mode AS workspace_mode,
+            COALESCE(m.worktree_id, s.worktree_id) AS own_worktree_id,
+            (SELECT COALESCE(m2.worktree_id, s2.worktree_id)
+               FROM team_members m2
+               LEFT JOIN chat_sessions s2 ON s2.id = m2.session_id
+              WHERE m2.team_id = m.team_id
+                AND COALESCE(m2.worktree_id, s2.worktree_id) IS NOT NULL
+              ORDER BY (m2.role = 'leader') DESC, m2.id
+              LIMIT 1) AS shared_worktree_id
+       FROM team_members m
+       JOIN teams t ON t.id = m.team_id
+       LEFT JOIN chat_sessions s ON s.id = m.session_id
+      WHERE m.session_id = $1
+      LIMIT 2`,
+    [sessionId],
+  )
+  if (rows.length !== 1) return null
+  const row = rows[0]
+  const own = row.own_worktree_id == null ? null : Number(row.own_worktree_id)
+  const shared = row.shared_worktree_id == null ? null : Number(row.shared_worktree_id)
+  const mode: TeamWorkspaceMode = row.workspace_mode === 'shared' ? 'shared' : 'per_member'
+  return {
+    teamId: Number(row.team_id),
+    slotId: Number(row.slot_id),
+    agentId: Number(row.agent_id),
+    role: row.role === 'leader' ? 'leader' : 'member',
+    displayName: row.display_name,
+    workspaceId: Number(row.workspace_id),
+    workspaceMode: mode,
+    // This is the whole of what `teams.workspace_mode` does at run time:
+    // 'shared' sends every slot to one checkout so they see each other's edits
+    // immediately; 'per_member' sends each slot to its own and leaves the
+    // merge for afterwards. Under 'per_member' an unbound slot resolves to
+    // NOTHING rather than falling back to a teammate's checkout - the fallback
+    // would silently turn a per-member team into a shared one, which is the
+    // opposite of what was asked for.
+    worktreeId: mode === 'shared' ? (shared ?? own) : own,
+    ownWorktreeId: own,
+    sharedWorktreeId: shared,
   }
 }
 

@@ -16,7 +16,6 @@ import {
   getTeamMember,
   getTeamTask,
   listTeamMembers,
-  listTeamMessages,
   listTeamTasks,
   removeTeamMember,
   reportTeamTaskDone,
@@ -25,12 +24,24 @@ import {
   updateTeamTaskStatus,
   type Team,
   type TeamMember,
-  type TeamMessage,
   type TeamMessageKind,
   type TeamTask,
   type TeamTaskStatus,
   type TeamWorkspaceMode,
 } from '@/lib/broker'
+import { requestRunCancel } from '@/lib/dispatcher/worker'
+import {
+  clearTeamStopRequest,
+  listTeamDeadLetters,
+  listTeamRoomMessages,
+  listTeamRunsInFlight,
+  readTeamStopState,
+  recordTeamStopRequest,
+  sweepTeamSlots,
+  type TeamRoomMessage,
+  type TeamSlotHealth,
+  type TeamStopState,
+} from '@/lib/teams/reliability'
 import { slotColourFor } from '@/components/teams/shared'
 
 /**
@@ -352,17 +363,25 @@ export async function postTeamMessageAction(input: {
   body: string
   kind: TeamMessageKind
   toSlotId: number | null
-}): Promise<TeamMessage> {
+}): Promise<TeamRoomMessage> {
   await requireUser()
   await requireTeam(input.teamId, input.workspaceId)
+  // Also the dead-letter guard at this end: a slot removed while the compose
+  // box was open is refused here rather than accepted into a mailbox that will
+  // never be opened.
   if (input.toSlotId != null) await requireSlot(input.toSlotId, input.teamId)
   const body = input.body.trim()
   if (!body) throw new Error('Write something first.')
   // `fromSlotId: null` is how the human speaks — the column is nullable and no
-  // slot represents the person. That carries an ambiguity which lives in the
-  // schema and cannot be fixed from here: a deleted slot's messages also
-  // become from_slot_id NULL, so the feed can attribute a departed member's
-  // old message to you.
+  // slot represents the person.
+  //
+  // R6.6 closed most of the ambiguity that used to sit here. A departed
+  // member's messages KEEP their `from_slot_id` now (migration 0012 dropped the
+  // ON DELETE SET NULL), and rows the room writes itself carry a `system_kind`,
+  // so "the human said it" is finally its own case: NULL sender, no system
+  // kind. What survives is history — rows already NULLed by deletions that
+  // happened before that migration, whose sender id was destroyed and cannot
+  // be recovered.
   const message = await sendTeamMessage({
     teamId: input.teamId,
     fromSlotId: null,
@@ -373,13 +392,28 @@ export async function postTeamMessageAction(input: {
   // No revalidatePath: the channel appends the returned row locally.
   // Re-rendering the whole room to show a message we already hold is exactly
   // the round trip on a UI action D0 forbids.
-  return message
+  return {
+    ...message,
+    systemKind: null,
+    undeliverableAt: null,
+    undeliverableReason: null,
+    // The recipient was re-read against this team one statement ago.
+    addresseeMissing: false,
+  }
 }
 
 export interface TeamRoomDelta {
-  messages: TeamMessage[]
+  messages: TeamRoomMessage[]
   tasks: TeamTask[]
   claimableIds: number[]
+  /** R6.6 — one entry per slot, so the roster and the lanes can show which
+   * members are actually alive instead of all looking identical. */
+  health: TeamSlotHealth[]
+  stop: TeamStopState
+  /** Slots this poll's sweep declared lost, so the room can say it out loud at
+   * the moment it happens rather than leaving it to be noticed. */
+  lostSlotIds: number[]
+  releasedTaskIds: number[]
 }
 
 /**
@@ -400,12 +434,107 @@ export async function pollTeamRoomAction(input: {
 }): Promise<TeamRoomDelta> {
   await requireUser()
   await requireTeam(input.teamId, input.workspaceId)
-  const [messages, tasks, claimable] = await Promise.all([
-    listTeamMessages(input.teamId, { since: input.sinceMessageId, limit: 200 }),
+
+  // R6.6 — the sweep runs FIRST and is awaited, not fired alongside the reads.
+  // If it hands a task back to the board, the very same poll must return the
+  // released task and the announcement it wrote; running them in parallel
+  // would show the room a board one tick out of date with the message
+  // explaining it, which is the specific kind of disagreement that makes
+  // people distrust the feed.
+  //
+  // This is also, today, the ONLY thing that runs the sweep — see the closing
+  // note in `lib/teams/reliability.ts`. A room nobody has open detects nothing.
+  const sweep = await sweepTeamSlots(input.teamId)
+
+  const [messages, tasks, claimable, stop] = await Promise.all([
+    listTeamRoomMessages(input.teamId, { since: input.sinceMessageId, limit: 200 }),
     listTeamTasks(input.teamId),
     claimableTasks(input.teamId),
+    readTeamStopState(input.teamId),
   ])
-  return { messages, tasks, claimableIds: claimable.map((t) => t.id) }
+  return {
+    messages,
+    tasks,
+    claimableIds: claimable.map((t) => t.id),
+    health: sweep.health,
+    stop,
+    lostSlotIds: sweep.lostSlotIds,
+    releasedTaskIds: sweep.releasedTaskIds,
+  }
+}
+
+// --- Stopping the room ------------------------------------------------------
+
+export interface RoomStopResult {
+  /** Runs that accepted the stop. */
+  stopped: number[]
+  /** Runs that had already settled between the read and the request — reported
+   * rather than counted, so the UI never claims to have stopped something that
+   * had already finished. */
+  alreadySettled: number[]
+}
+
+/**
+ * Stops every member turn in the room, cooperatively.
+ *
+ * Reuses the one cancellation mechanism this app has: `requestRunCancel`,
+ * which writes `runs.cancel_requested_at` (migration 0010) and, when the turn
+ * happens to be executing in this very process, calls the runtime's own
+ * `session/cancel` so it lands in milliseconds instead of at the next poll.
+ * There is deliberately no team-level cancel flag — a second path would have
+ * to be learned by the worker, and it would fail exactly the way the
+ * pre-0010 in-process Map failed: unread by whichever process is holding the
+ * turn.
+ *
+ * Cooperative, and the difference matters: everything already streamed is
+ * kept, the run settles as `cancelled` through the normal path, and tasks stay
+ * assigned. A member that then goes silent for good is the sweep's problem,
+ * not this action's.
+ */
+export async function stopTeamRoomAction(input: {
+  workspaceId: number
+  teamId: number
+}): Promise<RoomStopResult> {
+  const user = await requireUser()
+  await requireTeam(input.teamId, input.workspaceId)
+
+  // Scoped by team, and the ids come from the database rather than the client.
+  // A run id off the wire would be a way to stop any run in the installation.
+  const inFlight = await listTeamRunsInFlight(input.teamId)
+
+  // In parallel: these are independent runs, and stopping five members one
+  // after another would let the last one keep working while the first is
+  // already dead — the whole point of a ROOM-wide stop is that it is one event.
+  const results = await Promise.all(
+    inFlight.map(async (run) => ({ run, ...(await requestRunCancel(run.runId).catch(() => ({ cancelled: false }))) })),
+  )
+  const stopped = results.filter((r) => r.cancelled).map((r) => r.run.runId)
+  const alreadySettled = results.filter((r) => !r.cancelled).map((r) => r.run.runId)
+
+  await recordTeamStopRequest({ teamId: input.teamId, requestedBy: user.id, runIds: stopped })
+  return { stopped, alreadySettled }
+}
+
+/** Clears the stop mark. A person decides the room is running again — nothing
+ * infers it, because "a new run appeared" is also what a stray retry looks
+ * like, and silently un-stopping a room somebody paused is worse than a banner
+ * that outstays its welcome. */
+export async function clearTeamStopAction(input: { workspaceId: number; teamId: number }): Promise<void> {
+  await requireUser()
+  await requireTeam(input.teamId, input.workspaceId)
+  await clearTeamStopRequest(input.teamId)
+}
+
+/** Undeliverable mail, newest first — the dead-letter queue R6.6 asks for,
+ * read on demand rather than shipped with every poll because it changes only
+ * when somebody removes a slot. */
+export async function listTeamDeadLettersAction(input: {
+  workspaceId: number
+  teamId: number
+}): Promise<TeamRoomMessage[]> {
+  await requireUser()
+  await requireTeam(input.teamId, input.workspaceId)
+  return listTeamDeadLetters(input.teamId)
 }
 
 export async function markRoomReadAction(input: {

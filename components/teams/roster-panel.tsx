@@ -2,17 +2,29 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Crown, Trash2, UserPlus } from 'lucide-react'
+import { Crown, MailX, Trash2, UserPlus } from 'lucide-react'
 import type { TeamTask } from '@/lib/broker'
+import type { TeamRoomMessage, TeamSlotHealth } from '@/lib/teams/reliability'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from '@/hooks/use-toast'
-import { colourOf, tasksForSlot, type TeamSlotView } from './shared'
+import { cn } from '@/lib/utils'
+import {
+  SLOT_STATE_CLASS,
+  SLOT_STATE_DOT,
+  SLOT_STATE_LABEL,
+  colourOf,
+  formatSilence,
+  healthBySlot,
+  tasksForSlot,
+  type TeamSlotView,
+} from './shared'
 import type { TeamAgentOption } from './create-team-form'
 import {
   addSlotAction,
   deleteTeamAction,
+  listTeamDeadLettersAction,
   removeSlotAction,
   setLeaderAction,
 } from '@/app/(app)/workspace/[workspaceSlug]/teams/actions'
@@ -27,6 +39,11 @@ import {
  * Adding an agent that is already in the roster is allowed and is not a
  * mistake: it creates a SECOND slot with its own name, colour and thread. The
  * picker therefore never disables an agent already present.
+ *
+ * R6.6 put liveness here rather than on a separate health screen, because this
+ * is the list a person is already looking at when they wonder whether a member
+ * is stuck — and because a lost slot that renders identically to a working one
+ * is bookkeeping, not reliability.
  */
 export function RosterPanel({
   workspaceId,
@@ -34,6 +51,7 @@ export function RosterPanel({
   teamId,
   slots,
   tasks,
+  health,
   agents,
   onSlotsChanged,
 }: {
@@ -42,13 +60,19 @@ export function RosterPanel({
   teamId: number
   slots: TeamSlotView[]
   tasks: TeamTask[]
+  health: TeamSlotHealth[]
   agents: TeamAgentOption[]
   onSlotsChanged: (slots: TeamSlotView[]) => void
 }) {
   const router = useRouter()
+  const healthOf = healthBySlot(health)
   const [addingAgentId, setAddingAgentId] = useState<number | null>(null)
   const [displayName, setDisplayName] = useState('')
   const [busy, setBusy] = useState(false)
+  // Fetched on demand, not with every poll. Undeliverable mail only changes
+  // when somebody removes a slot, so shipping the list on a six-second cadence
+  // would be a payload that is almost always empty and always identical.
+  const [deadLetters, setDeadLetters] = useState<TeamRoomMessage[] | null>(null)
 
   async function run(work: () => Promise<void>, failure: string) {
     setBusy(true)
@@ -74,10 +98,16 @@ export function RosterPanel({
         <ul className="space-y-1">
           {slots.map((slot) => {
             const owned = tasksForSlot(tasks, slot.id)
+            const state = healthOf.get(slot.id)
             return (
               <li
                 key={slot.id}
-                className="flex items-center gap-1.5 rounded-lg border border-black/10 px-2 py-1.5 dark:border-white/10"
+                className={cn(
+                  'flex items-center gap-1.5 rounded-lg border px-2 py-1.5',
+                  state?.state === 'lost'
+                    ? 'border-red-500/40 bg-red-500/[.04]'
+                    : 'border-black/10 dark:border-white/10',
+                )}
               >
                 <span
                   aria-hidden
@@ -90,6 +120,32 @@ export function RosterPanel({
                     {slot.agentName ?? `agent ${slot.agentId}`}
                     {owned.length > 0 ? ` · ${owned.length} assigned` : ''}
                   </span>
+                  {/* The heartbeat, in the row it describes. `silentForMs` is
+                      null when nothing has ever been observed for this slot,
+                      which is genuinely different from "seen just now" and is
+                      printed as such rather than as 0s. */}
+                  {state && (
+                    <span
+                      className={cn('mt-0.5 flex items-center gap-1 text-[11px]', SLOT_STATE_CLASS[state.state])}
+                      title={
+                        state.lostReason ??
+                        (state.lastSeenAt
+                          ? `Last sign of life ${formatSilence(state.silentForMs)} ago.`
+                          : 'Nothing has ever been observed for this slot.')
+                      }
+                    >
+                      <span aria-hidden className={cn('size-1.5 shrink-0 rounded-full', SLOT_STATE_DOT[state.state])} />
+                      {SLOT_STATE_LABEL[state.state]}
+                      {(state.state === 'lost' || state.state === 'silent') && (
+                        <span className="opacity-70">· quiet {formatSilence(state.silentForMs)}</span>
+                      )}
+                      {state.pendingApprovals > 0 && (
+                        <span className="opacity-70">
+                          · {state.pendingApprovals} card{state.pendingApprovals === 1 ? '' : 's'}
+                        </span>
+                      )}
+                    </span>
+                  )}
                 </span>
                 <Button
                   type="button"
@@ -214,6 +270,64 @@ export function RosterPanel({
         )}
       </div>
 
+      <div className="pt-1">
+        {/*
+          The dead-letter queue (R6.6). The feed already strikes through an
+          undelivered message where it sits, but the feed is a capped window;
+          this is how somebody asks "did anything get lost when I removed that
+          member?" months later and gets a real answer.
+        */}
+        {deadLetters == null ? (
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            disabled={busy}
+            onClick={() =>
+              void run(async () => {
+                setDeadLetters(await listTeamDeadLettersAction({ workspaceId, teamId }))
+              }, 'Could not read the dead-letter queue')
+            }
+          >
+            <MailX size={12} />
+            Undelivered mail
+          </Button>
+        ) : (
+          <div className="rounded-lg border border-black/10 p-2 dark:border-white/10">
+            <div className="mb-1 flex items-center gap-1.5">
+              <span className="text-xs font-medium">
+                {deadLetters.length} undelivered
+              </span>
+              <Button
+                type="button"
+                size="xs"
+                variant="ghost"
+                className="ml-auto"
+                onClick={() => setDeadLetters(null)}
+              >
+                Hide
+              </Button>
+            </div>
+            {deadLetters.length === 0 ? (
+              <p className="text-[11px] text-black/40 dark:text-white/40">
+                Nothing was lost. Every directed message reached a slot that still exists.
+              </p>
+            ) : (
+              <ul className="max-h-48 space-y-1.5 overflow-y-auto">
+                {deadLetters.map((message) => (
+                  <li key={message.id} className="text-[11px]">
+                    <p className="text-red-600 dark:text-red-400">{message.undeliverableReason}</p>
+                    <p className="mt-0.5 line-clamp-3 whitespace-pre-wrap break-words text-black/55 dark:text-white/55">
+                      {message.body}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+      </div>
+
       <div className="mt-auto pt-2">
         <Button
           type="button"
@@ -231,6 +345,8 @@ export function RosterPanel({
         </Button>
         <p className="mt-1 text-[11px] text-black/35 dark:text-white/35">
           Deleting a team removes its slots, mailbox and board. The slots&apos; conversations survive in Work.
+          Removing a single slot hands its unfinished tasks back to the board and marks any unread mail addressed
+          to it undeliverable — those messages are not broadcast to the rest of the room.
         </p>
       </div>
     </aside>

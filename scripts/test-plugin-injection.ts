@@ -5,12 +5,22 @@
 // what, and cleans up after itself.
 //
 //   npx tsx scripts/test-plugin-injection.ts
+import { randomUUID } from 'node:crypto'
+
 import nextEnv from '@next/env'
 
 nextEnv.loadEnvConfig(process.cwd())
 
 const { getPayloadClient } = await import('../lib/payload')
 const { resolvePluginsForRun } = await import('../lib/plugins/resolve')
+
+// Fixture names are unique per run. They used to be fixed strings, so a row
+// left behind by an interrupted run (this script cleans up in `finally`, which
+// a killed process never reaches) was indistinguishable from this run's own —
+// and a stale `test-scoped` bound to a different agent failed the single most
+// important assertion here for a reason that had nothing to do with the code.
+const TAG = randomUUID().slice(0, 8)
+const NAME = (base: string) => `test-${base}-${TAG}`
 
 let failures = 0
 function check(label: string, ok: boolean, detail = '') {
@@ -55,7 +65,7 @@ try {
     collection: 'plugins',
     data: {
       workspace: workspace.id,
-      name: 'test-scoped',
+      name: NAME('scoped'),
       transport: 'http',
       url: 'http://localhost:3000/api/mcp',
       headers: [
@@ -73,21 +83,21 @@ try {
 
   const everyone = await payload.create({
     collection: 'plugins',
-    data: { workspace: workspace.id, name: 'test-workspace-wide', transport: 'http', url: 'https://example.com/mcp', enabled: true, scope: 'workspace' },
+    data: { workspace: workspace.id, name: NAME('workspace-wide'), transport: 'http', url: 'https://example.com/mcp', enabled: true, scope: 'workspace' },
     overrideAccess: true,
   })
   created.push(everyone.id)
 
   const disabled = await payload.create({
     collection: 'plugins',
-    data: { workspace: workspace.id, name: 'test-disabled', transport: 'http', url: 'https://example.com/mcp', enabled: false, scope: 'workspace' },
+    data: { workspace: workspace.id, name: NAME('disabled'), transport: 'http', url: 'https://example.com/mcp', enabled: false, scope: 'workspace' },
     overrideAccess: true,
   })
   created.push(disabled.id)
 
   const broken = await payload.create({
     collection: 'plugins',
-    data: { workspace: workspace.id, name: 'test-no-url', transport: 'http', enabled: true, scope: 'workspace' },
+    data: { workspace: workspace.id, name: NAME('no-url'), transport: 'http', enabled: true, scope: 'workspace' },
     overrideAccess: true,
   })
   created.push(broken.id)
@@ -99,16 +109,16 @@ try {
   })
   const names = resolved.servers.map((s) => s.name)
 
-  check('scoped plugin reaches its agent', names.includes('test-scoped'), names.join(', '))
-  check('workspace-wide plugin reaches every agent', names.includes('test-workspace-wide'))
-  check('disabled plugin is absent entirely', !names.includes('test-disabled'))
+  check('scoped plugin reaches its agent', names.includes(NAME('scoped')), names.join(', '))
+  check('workspace-wide plugin reaches every agent', names.includes(NAME('workspace-wide')))
+  check('disabled plugin is absent entirely', !names.includes(NAME('disabled')))
   check(
     'a plugin that cannot load is reported, not dropped',
-    resolved.skipped.some((s) => s.name === 'test-no-url'),
+    resolved.skipped.some((s) => s.name === NAME('no-url')),
     JSON.stringify(resolved.skipped),
   )
 
-  const scopedServer = resolved.servers.find((s) => s.name === 'test-scoped')
+  const scopedServer = resolved.servers.find((s) => s.name === NAME('scoped'))
   const headers = scopedServer && 'headers' in scopedServer ? scopedServer.headers : []
   const auth = headers.find((h) => h.name === 'Authorization')?.value
   const runIdHeader = headers.find((h) => h.name === 'X-Run-Id')?.value
@@ -127,8 +137,8 @@ try {
   if (otherAgent) {
     const forOther = await resolvePluginsForRun({ workspaceId: workspace.id, agentId: otherAgent.id })
     const otherNames = forOther.servers.map((s) => s.name)
-    check('another agent does NOT get the scoped plugin', !otherNames.includes('test-scoped'), otherNames.join(', '))
-    check('another agent DOES get the workspace-wide one', otherNames.includes('test-workspace-wide'))
+    check('another agent does NOT get the scoped plugin', !otherNames.includes(NAME('scoped')), otherNames.join(', '))
+    check('another agent DOES get the workspace-wide one', otherNames.includes(NAME('workspace-wide')))
   } else {
     console.log('SKIP  scoping-against-another-agent (this workspace has only one agent)')
   }
@@ -139,7 +149,7 @@ try {
     collection: 'plugins',
     data: {
       workspace: workspace.id,
-      name: 'test-literal',
+      name: NAME('literal'),
       transport: 'http',
       url: 'https://example.com/mcp',
       headers: [{ name: 'X-Fixed', value: 'plain-value' }, { name: 'X-Typo', value: '{{NOT_A_THING}}' }],
@@ -150,7 +160,7 @@ try {
   })
   created.push(literal.id)
   const again = await resolvePluginsForRun({ workspaceId: workspace.id, agentId: targetAgent.id, substitutions: { RUN_TOKEN: 'x' } })
-  const literalServer = again.servers.find((s) => s.name === 'test-literal')
+  const literalServer = again.servers.find((s) => s.name === NAME('literal'))
   const literalHeaders = literalServer && 'headers' in literalServer ? literalServer.headers : []
   check('a literal header value is untouched', literalHeaders.find((h) => h.name === 'X-Fixed')?.value === 'plain-value')
   check(
