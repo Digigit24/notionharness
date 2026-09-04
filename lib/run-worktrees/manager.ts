@@ -191,6 +191,21 @@ export class RunWorktreeManager {
     const barePath = await this.ensureBareClone(source)
     return withLock(barePath, async () => {
       await mkdir(join(this.options.rootDir, 'runs'), { recursive: true })
+      // P5.6 — this wipes whatever a PRIOR, never-settled attempt at this
+      // same run left behind (lease recovery re-creating after a crash). If
+      // that leftover checkout still holds uncommitted work, name it before
+      // it goes — a re-create silently eating an agent's half-written diff
+      // is exactly the kind of quiet loss this pillar exists to prevent.
+      const leftoverStatus = await git(descriptor.worktreePath, ['status', '--porcelain']).catch(() => null)
+      if (leftoverStatus && leftoverStatus.trim()) {
+        const files = leftoverStatus.trim().split('\n').filter(Boolean)
+        logger.warn('discarding a leftover, never-settled worktree before recreating it', {
+          runId,
+          worktreePath: descriptor.worktreePath,
+          fileCount: files.length,
+          files: files.slice(0, 20),
+        })
+      }
       await rm(descriptor.worktreePath, { recursive: true, force: true })
       // A worker can die after creating the worktree but before settling the
       // run. Prune its missing registration and remove the run-scoped branch

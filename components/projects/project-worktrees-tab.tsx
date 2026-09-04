@@ -58,6 +58,11 @@ export function ProjectWorktreesTab({
     overview.resources.find((r) => r.isRepo)?.id ?? null,
   )
   const [confirmRemove, setConfirmRemove] = useState<number | null>(null)
+  // P5.6 — the confirm affordance below is only useful if it says WHAT will
+  // be discarded, not just that a decision is needed. git's own stderr
+  // (surfaced as the failure's `detail`) names the files; this is what
+  // renders it next to "Discard & remove" instead of a bare pair of buttons.
+  const [dirtyWarning, setDirtyWarning] = useState<string | null>(null)
 
   const repoResources = resources.filter((r) => r.isRepo)
   // Derived rather than stored: the picker's initial value was computed at
@@ -301,6 +306,12 @@ export function ProjectWorktreesTab({
                         </span>
                       )}
                     </p>
+                    {confirmRemove === worktree.id && dirtyWarning && (
+                      <p className="mt-1 flex items-start gap-1 text-[11px] text-amber-600 dark:text-amber-400">
+                        <AlertTriangle size={11} className="mt-0.5 shrink-0" />
+                        <span className="whitespace-pre-wrap">{dirtyWarning}</span>
+                      </p>
+                    )}
                   </div>
 
                   {confirmRemove === worktree.id ? (
@@ -321,12 +332,20 @@ export function ProjectWorktreesTab({
                               }),
                             )
                             setConfirmRemove(null)
+                            setDirtyWarning(null)
                           })
                         }
                       >
                         Discard &amp; remove
                       </Button>
-                      <Button size="sm" variant="ghost" onClick={() => setConfirmRemove(null)}>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          setConfirmRemove(null)
+                          setDirtyWarning(null)
+                        }}
+                      >
                         Cancel
                       </Button>
                     </span>
@@ -350,6 +369,12 @@ export function ProjectWorktreesTab({
                             // is the part that promised not to change.
                             if (err instanceof ClientFailure && err.code === 'worktree_dirty') {
                               setConfirmRemove(worktree.id)
+                              // git's own stderr — it names the actual files —
+                              // rides along as `detail`; fall back to the
+                              // sentence if a future git version phrases the
+                              // refusal differently and `detail` comes back
+                              // empty.
+                              setDirtyWarning(err.detail || err.message)
                               return
                             }
                             throw err
