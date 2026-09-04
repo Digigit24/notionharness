@@ -236,7 +236,7 @@ export function ThreadPane({
       <aside
         ref={pane.paneRef as React.RefObject<HTMLElement>}
         style={{ width: pane.width }}
-        className="flex min-h-0 shrink-0 flex-col rounded-xl border border-black/10 bg-white/40 dark:border-white/10 dark:bg-white/[.02]"
+        className="flex min-h-0 shrink-0 flex-col bg-white/40 dark:bg-white/[.02]"
       >
       {/* R12-P1.2 — the thread is a column BESIDE a live feed, and a
           reply that will not render is not a reason to take the conversation

@@ -250,10 +250,10 @@ export function MessageComposer({
   const busy = sending || disabled
 
   return (
-    <div className="shrink-0 px-3 pb-3">
+    <div className="shrink-0 border-t border-black/10 px-3 pb-3 pt-2 dark:border-white/10">
       <div
         className={cn(
-          'relative rounded-xl border border-black/12 bg-white shadow-sm focus-within:border-black/30 dark:border-white/15 dark:bg-[#202020] dark:focus-within:border-white/35',
+          'relative rounded-lg focus-within:bg-black/[.03] dark:focus-within:bg-white/[.04]',
           busy && 'opacity-70',
         )}
       >

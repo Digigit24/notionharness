@@ -118,7 +118,7 @@ export function CanvasPane({
       <aside
         ref={pane.paneRef as React.RefObject<HTMLElement>}
         style={{ width: pane.width }}
-        className="flex min-h-0 shrink-0 flex-col rounded-xl border border-black/10 dark:border-white/10"
+        className="flex min-h-0 shrink-0 flex-col"
       >
       {/* R12-P1.2 — same reason as the thread beside it: this pane is a
           BlockSuite document inside the channel route, not a route of its own,

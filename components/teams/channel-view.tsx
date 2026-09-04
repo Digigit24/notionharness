@@ -581,7 +581,7 @@ export function ChannelView({
   )
 
   return (
-    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col rounded-xl border border-black/10 dark:border-white/10">
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
       {/*
         THE CATCH-UP STRIP (item 6).
 
@@ -596,7 +596,7 @@ export function ChannelView({
         <button
           type="button"
           onClick={jumpToDivider}
-          className="flex shrink-0 items-center gap-2 rounded-t-xl border-b border-black/10 bg-black/[.03] px-3 py-1.5 text-left text-xs hover:bg-black/[.05] dark:border-white/10 dark:bg-white/[.05] dark:hover:bg-white/[.08]"
+          className="flex shrink-0 items-center gap-2 border-b border-black/10 bg-black/[.03] px-3 py-1.5 text-left text-xs hover:bg-black/[.05] dark:border-white/10 dark:bg-white/[.05] dark:hover:bg-white/[.08]"
         >
           <span className="font-medium">
             {unreadCount} new {unreadCount === 1 ? 'message' : 'messages'}

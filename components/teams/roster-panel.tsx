@@ -238,10 +238,8 @@ export function RosterPanel({
               <li
                 key={slot.id}
                 className={cn(
-                  'flex items-center gap-1.5 rounded-lg border px-2 py-1.5',
-                  state?.state === 'lost'
-                    ? 'border-red-500/40 bg-red-500/[.04]'
-                    : 'border-black/10 dark:border-white/10',
+                  'flex items-center gap-1.5 rounded-lg px-2 py-1.5',
+                  state?.state === 'lost' && 'bg-red-500/[.06] dark:bg-red-400/[.08]',
                 )}
               >
                 <span
