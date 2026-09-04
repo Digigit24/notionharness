@@ -90,6 +90,11 @@ export interface Config {
     'push-subscriptions': PushSubscription;
     'notification-preferences': NotificationPreference;
     'project-resources': ProjectResource;
+    'workspace-members': WorkspaceMember;
+    invitations: Invitation;
+    'access-grants': AccessGrant;
+    connectors: Connector;
+    connections: Connection;
     'payload-kv': PayloadKv;
     'payload-locked-documents': PayloadLockedDocument;
     'payload-preferences': PayloadPreference;
@@ -120,6 +125,11 @@ export interface Config {
     'push-subscriptions': PushSubscriptionsSelect<false> | PushSubscriptionsSelect<true>;
     'notification-preferences': NotificationPreferencesSelect<false> | NotificationPreferencesSelect<true>;
     'project-resources': ProjectResourcesSelect<false> | ProjectResourcesSelect<true>;
+    'workspace-members': WorkspaceMembersSelect<false> | WorkspaceMembersSelect<true>;
+    invitations: InvitationsSelect<false> | InvitationsSelect<true>;
+    'access-grants': AccessGrantsSelect<false> | AccessGrantsSelect<true>;
+    connectors: ConnectorsSelect<false> | ConnectorsSelect<true>;
+    connections: ConnectionsSelect<false> | ConnectionsSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
     'payload-locked-documents': PayloadLockedDocumentsSelect<false> | PayloadLockedDocumentsSelect<true>;
     'payload-preferences': PayloadPreferencesSelect<false> | PayloadPreferencesSelect<true>;
@@ -203,6 +213,10 @@ export interface User {
  */
 export interface Workspace {
   id: number;
+  /**
+   * Never displayed. Presence only.
+   */
+  composioApiKey?: string | null;
   name: string;
   slug: string;
   /**
@@ -915,6 +929,143 @@ export interface ProjectResource {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "workspace-members".
+ */
+export interface WorkspaceMember {
+  id: number;
+  workspace: number | Workspace;
+  user: number | User;
+  role: 'owner' | 'admin' | 'member' | 'viewer';
+  /**
+   * Null for the owner row created with the workspace itself.
+   */
+  invitedBy?: (number | null) | User;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "invitations".
+ */
+export interface Invitation {
+  id: number;
+  workspace: number | Workspace;
+  email: string;
+  role: 'admin' | 'member' | 'viewer';
+  /**
+   * Random, single-use. The link is the credential, so it is never displayed after creation.
+   */
+  token: string;
+  status: 'pending' | 'accepted' | 'revoked';
+  invitedBy: number | User;
+  acceptedBy?: (number | null) | User;
+  expiresAt: string;
+  /**
+   * Optional broker `teams.id` to join on accept. A number rather than a relationship because channels live in the raw-pg broker, not in Payload.
+   */
+  channelId?: number | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "access-grants".
+ */
+export interface AccessGrant {
+  id: number;
+  workspace: number | Workspace;
+  objectType: 'project' | 'agent' | 'channel';
+  /**
+   * Text, because a channel id is a broker bigint and a project id is a Payload integer.
+   */
+  objectId: string;
+  /**
+   * Exactly one of subjectUser / subjectAgent is set.
+   */
+  subjectUser?: (number | null) | User;
+  subjectAgent?: (number | null) | Agent;
+  role: 'viewer' | 'editor' | 'admin';
+  grantedBy?: (number | null) | User;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "connectors".
+ */
+export interface Connector {
+  id: number;
+  workspace: number | Workspace;
+  /**
+   * One value today. It is a column rather than an assumption so that a second broker — or a direct OAuth integration we own — does not need a migration.
+   */
+  provider: 'composio';
+  /**
+   * Composio's own identifier, e.g. `gmail`, `slack`, `github`. Never a display name.
+   */
+  toolkitSlug: string;
+  /**
+   * What a person calls it. Defaults to the toolkit name.
+   */
+  name: string;
+  scopeType: 'workspace' | 'project' | 'agent';
+  /**
+   * The project or agent id. Null when `scopeType` is `workspace`.
+   */
+  scopeId?: string | null;
+  /**
+   * Composio's auth-config id for this toolkit. Created once per toolkit per workspace and reused by every person who connects — it is configuration, not a credential.
+   */
+  authConfigId?: string | null;
+  /**
+   * Tool slugs an agent may call, or empty for all of them. A connector that grants a whole toolkit when the job needs one action is the difference between "read my calendar" and "send mail as me".
+   */
+  allowedTools?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  enabled?: boolean | null;
+  createdBy?: (number | null) | User;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "connections".
+ */
+export interface Connection {
+  id: number;
+  workspace: number | Workspace;
+  user: number | User;
+  toolkitSlug: string;
+  /**
+   * Composio's id for this authorised account. Null while the auth flow is still open.
+   */
+  composioConnectedAccountId?: string | null;
+  status: 'pending' | 'active' | 'failed' | 'revoked';
+  /**
+   * Whatever the provider said when it went wrong. The most useful string on the screen when it does.
+   */
+  statusDetail?: string | null;
+  /**
+   * The URL the person has to visit to authorise. Held while the flow is open so a run parked on a connection can show the same link again rather than starting a second flow.
+   */
+  redirectUrl?: string | null;
+  /**
+   * The broker run id that asked for this connection, when an agent asked mid-turn. A number because runs are raw-pg, not Payload.
+   */
+  requestedByRun?: number | null;
+  lastCheckedAt?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "payload-kv".
  */
 export interface PayloadKv {
@@ -1028,6 +1179,26 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'project-resources';
         value: number | ProjectResource;
+      } | null)
+    | ({
+        relationTo: 'workspace-members';
+        value: number | WorkspaceMember;
+      } | null)
+    | ({
+        relationTo: 'invitations';
+        value: number | Invitation;
+      } | null)
+    | ({
+        relationTo: 'access-grants';
+        value: number | AccessGrant;
+      } | null)
+    | ({
+        relationTo: 'connectors';
+        value: number | Connector;
+      } | null)
+    | ({
+        relationTo: 'connections';
+        value: number | Connection;
       } | null);
   globalSlug?: string | null;
   user: {
@@ -1104,6 +1275,7 @@ export interface UsersSelect<T extends boolean = true> {
  * via the `definition` "workspaces_select".
  */
 export interface WorkspacesSelect<T extends boolean = true> {
+  composioApiKey?: T;
   name?: T;
   slug?: T;
   icon?: T;
@@ -1434,6 +1606,85 @@ export interface ProjectResourcesSelect<T extends boolean = true> {
   position?: T;
   lastVerifiedAt?: T;
   exists?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "workspace-members_select".
+ */
+export interface WorkspaceMembersSelect<T extends boolean = true> {
+  workspace?: T;
+  user?: T;
+  role?: T;
+  invitedBy?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "invitations_select".
+ */
+export interface InvitationsSelect<T extends boolean = true> {
+  workspace?: T;
+  email?: T;
+  role?: T;
+  token?: T;
+  status?: T;
+  invitedBy?: T;
+  acceptedBy?: T;
+  expiresAt?: T;
+  channelId?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "access-grants_select".
+ */
+export interface AccessGrantsSelect<T extends boolean = true> {
+  workspace?: T;
+  objectType?: T;
+  objectId?: T;
+  subjectUser?: T;
+  subjectAgent?: T;
+  role?: T;
+  grantedBy?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "connectors_select".
+ */
+export interface ConnectorsSelect<T extends boolean = true> {
+  workspace?: T;
+  provider?: T;
+  toolkitSlug?: T;
+  name?: T;
+  scopeType?: T;
+  scopeId?: T;
+  authConfigId?: T;
+  allowedTools?: T;
+  enabled?: T;
+  createdBy?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "connections_select".
+ */
+export interface ConnectionsSelect<T extends boolean = true> {
+  workspace?: T;
+  user?: T;
+  toolkitSlug?: T;
+  composioConnectedAccountId?: T;
+  status?: T;
+  statusDetail?: T;
+  redirectUrl?: T;
+  requestedByRun?: T;
+  lastCheckedAt?: T;
   updatedAt?: T;
   createdAt?: T;
 }

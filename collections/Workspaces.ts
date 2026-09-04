@@ -40,6 +40,20 @@ export const Workspaces: CollectionConfig = {
     useAsTitle: 'name',
   },
   fields: [
+    // BYOK. Falls back to `COMPOSIO_API_KEY` in the environment when unset,
+    // which is what lets a single-tenant install work with no setup at all
+    // while a hosted one can hand each workspace its own key and its own bill.
+    //
+    // `hidden` and `read: () => false`: this value must never reach a browser.
+    // Every server path reads it through `lib/connectors/composio.ts`, which is
+    // the only module allowed to touch it, and the UI is told the key's
+    // PRESENCE and never its value.
+    {
+      name: 'composioApiKey',
+      type: 'text',
+      admin: { hidden: true, description: 'Never displayed. Presence only.' },
+      access: { read: () => false },
+    },
     {
       name: 'name',
       type: 'text',

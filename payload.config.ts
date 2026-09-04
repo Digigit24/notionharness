@@ -27,6 +27,11 @@ import { Approvals } from './collections/Approvals'
 import { SavedViews } from './collections/SavedViews'
 import { PushSubscriptions } from './collections/PushSubscriptions'
 import { NotificationPreferences } from './collections/NotificationPreferences'
+import { WorkspaceMembers } from './collections/WorkspaceMembers'
+import { Invitations } from './collections/Invitations'
+import { AccessGrants } from './collections/AccessGrants'
+import { Connectors } from './collections/Connectors'
+import { Connections } from './collections/Connections'
 import { ProjectResources } from './collections/ProjectResources'
 import { HermesConfig } from './globals/HermesConfig'
 
@@ -64,6 +69,15 @@ export default buildConfig({
     PushSubscriptions,
     NotificationPreferences,
     ProjectResources,
+    // Access control and connectors. Order is cosmetic (it drives the admin
+    // sidebar), but members/invitations/grants belong together and the two
+    // connector tables belong together, because reading one without the other
+    // is how the connector-versus-connection distinction gets lost.
+    WorkspaceMembers,
+    Invitations,
+    AccessGrants,
+    Connectors,
+    Connections,
   ],
   globals: [HermesConfig],
   editor: lexicalEditor(),
