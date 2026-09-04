@@ -29,9 +29,16 @@ import {
  * stays mounted while the panel beside it swaps: it behaves as tabs, and each
  * section keeps its own URL (so it is linkable and the back button works).
  *
- * Grouped the way the questions are actually asked: what answers (models,
- * providers, profiles), what it can do (skills, connectors, runtimes), what
- * it is allowed to do (safety), and how it is behaving (health, audit).
+ * Grouped the way the questions are actually asked: what runs agents and what
+ * they can reach (runtimes, providers, plugins), what a specific runtime needs
+ * that nothing else does (the Hermes group, shown only when a Hermes runtime
+ * is enabled here), what agents are allowed to do (safety), and how things are
+ * behaving (health, audit).
+ *
+ * The Hermes group is not tidiness. Those screens edit a Hermes install: a
+ * profile is a whole alternate HERMES_HOME, the skill editor writes files into
+ * it, the MCP screens edit its `config.yaml`. In a workspace running only
+ * Claude Code they would be controls that write nowhere.
  */
 interface RailItem {
   segment: string
@@ -43,6 +50,17 @@ interface RailItem {
 interface RailGroup {
   title: string
   items: RailItem[]
+  /**
+   * Shown only when this workspace has an enabled Hermes runtime.
+   *
+   * Some screens here are not "settings that happen to be implemented against
+   * Hermes" — they are Hermes features with no equivalent anywhere else. A
+   * Hermes profile is a whole alternate HERMES_HOME; the skill editor writes
+   * files into it; the MCP screens edit Hermes's own `config.yaml`. Offering
+   * them to a workspace running only Claude Code would be offering controls
+   * that write nowhere, which is worse than not offering them at all.
+   */
+  hermesOnly?: boolean
 }
 
 const GROUPS: RailGroup[] = [
@@ -57,26 +75,24 @@ const GROUPS: RailGroup[] = [
     ],
   },
   {
-    title: 'Model',
+    title: 'Capabilities',
     items: [
-      { segment: 'model', label: 'Model & fallbacks', icon: Cpu, hint: 'Active model, priority order' },
-      { segment: 'providers', label: 'Providers', icon: KeyRound, hint: 'Keys and endpoints' },
-      { segment: 'personality', label: 'Profiles', icon: Sparkles, hint: 'Hermes identities' },
+      { segment: 'runtimes', label: 'Runtimes', icon: Server, hint: 'Agent binaries' },
+      // Runtime-aware: it tabs per runtime and shows each one's own models, so
+      // it belongs to every workspace rather than to the Hermes group below.
+      { segment: 'providers', label: 'Providers', icon: KeyRound, hint: 'Where each runtime gets its model' },
+      { segment: 'plugins', label: 'Plugins', icon: Puzzle, hint: 'Our tools, scoped per agent' },
     ],
   },
   {
-    title: 'Capabilities',
+    title: 'Hermes',
+    hermesOnly: true,
     items: [
+      { segment: 'model', label: 'Model & fallbacks', icon: Cpu, hint: 'Active model, priority order' },
+      { segment: 'personality', label: 'Profiles', icon: Sparkles, hint: 'Hermes identities' },
       { segment: 'skills', label: 'Skills', icon: Wrench, hint: 'Enable, edit, install' },
-      // Ours versus theirs, adjacent on purpose: 'Plugins' are tools this
-      // product owns and scopes per agent; 'MCP servers' are whatever the
-      // runtime already has in its own config. Confusing the two is the most
-      // likely mistake here, so they sit together with hints that say which
-      // is which.
-      { segment: 'plugins', label: 'Plugins', icon: Puzzle, hint: 'Our tools, scoped per agent' },
-      { segment: 'mcp', label: 'MCP servers', icon: Blocks, hint: "The runtime's own config" },
+      { segment: 'mcp', label: 'MCP servers', icon: Blocks, hint: "Hermes's own config" },
       { segment: 'mcp-catalog', label: 'MCP catalog', icon: Blocks, hint: 'Browse available presets' },
-      { segment: 'runtimes', label: 'Runtimes', icon: Server, hint: 'Agent binaries' },
     ],
   },
   {
@@ -89,9 +105,18 @@ const GROUPS: RailGroup[] = [
   },
 ]
 
-export function SettingsRail({ workspaceSlug }: { workspaceSlug: string }) {
+export function SettingsRail({
+  workspaceSlug,
+  hasHermesRuntime,
+}: {
+  workspaceSlug: string
+  /** Whether this workspace has an enabled runtime that uses the Hermes home
+   * strategy. Decided on the server, because it is a database question. */
+  hasHermesRuntime: boolean
+}) {
   const pathname = usePathname()
   const base = `/workspace/${workspaceSlug}/settings`
+  const groups = GROUPS.filter((group) => !group.hermesOnly || hasHermesRuntime)
 
   return (
     <nav className="w-56 shrink-0 border-r border-black/10 px-2 py-4 dark:border-white/10">
@@ -99,7 +124,7 @@ export function SettingsRail({ workspaceSlug }: { workspaceSlug: string }) {
         <Gauge size={12} className="mr-1 inline" />
         Settings
       </h2>
-      {GROUPS.map((group) => (
+      {groups.map((group) => (
         <section key={group.title} className="mb-3">
           <h3 className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-black/30 dark:text-white/30">
             {group.title}

@@ -551,23 +551,38 @@ worktrees, message each other through the board, hit an approval gate, be
 reviewed as diffs, and be merged — and the whole thing survives a server
 restart mid-run.
 
-## R7 — Runtime panels and polish
+## R7 — Runtime panels and polish — PARTLY DONE
 
-- **R7.1 Settings gets a Runtimes section**, and each installed runtime
-  contributes its own panel. Hermes contributes model and fallbacks,
-  providers, profiles, skills, MCP servers and safety. A runtime that is not
-  installed does not appear.
-- **R7.2 Two Hermes features stay Hermes-only forever**: crons and the skill
-  hub install flow. Neither has an ACP analogue. Do not try to generalise
-  them.
-- **R7.3 Agent detail completeness**: a Sessions tab filtered to that agent,
-  read-only views of its skills and MCP servers linking to the settings that
-  edit them, spend over seven and thirty days.
-- **R7.4 Remaining page work** from Roadmap A: the record detail header, page
-  provenance, the persistent re-runnable block, suggest-edits page writes, and
-  the projects and tasks list wins.
-
----
+- **R7.1 Per-runtime settings — DONE.** Providers is tabbed per runtime, and
+  the tabs are genuinely different screens because the runtimes differ in kind:
+  Hermes owns providers and credentials in its own config, a protocol-native
+  runtime declares its models over ACP and holds its own credentials. Agent
+  settings likewise render by runtime. Both read the runtime's self-describing
+  `session/new` config options, so a new runtime needs no new screen and a new
+  model needs no release from us.
+- **R7.2 Hermes-only features fenced off — DONE.** Model & fallbacks, Profiles,
+  Skills, MCP servers and MCP catalog now live in a `Hermes` group in the
+  settings rail, shown only when the workspace has an enabled Hermes runtime.
+  This is not tidiness: those screens edit a Hermes install — a profile is a
+  whole alternate HERMES_HOME, the skill editor writes files into it, the MCP
+  screens edit its `config.yaml` — so in a Claude-only workspace they would be
+  controls that write nowhere. A profile predating `homeStrategy` counts as
+  Hermes, so nothing anyone is already using disappears.
+- **Runtime health — FIXED, and the fix had two layers.** Health ran Hermes's
+  dashboard probe for every profile, so a working Claude runtime reported
+  "Hermes responded 502". Fixing only that left the same error one level up:
+  with the dashboard down, a Hermes runtime that demonstrably runs turns was
+  still reported "down". Status now means one thing everywhere — can it
+  complete a handshake, which is to say can it run a turn — and the dashboard
+  is reported as its own fact. "Runs fine, but its Hermes dashboard is
+  unreachable" is a real state worth naming: turns work, the Hermes settings
+  screens do not. Probes are reused for ten minutes so a 30-second health loop
+  does not spawn binaries continuously (D0).
+- **R7.3 Agent detail completeness** — not started. A Sessions tab filtered to
+  that agent, and the rest of that item, remain open.
+- **R7.4 Remaining page work from Roadmap A** — not started: the record detail
+  header, page provenance, the persistent re-runnable block, suggest-edits and
+  the projects/tasks list wins.
 
 ---
 

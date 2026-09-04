@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react'
 import { SettingsRail } from '@/components/settings/settings-rail'
+import { getPayloadClient } from '@/lib/payload'
+import { getWorkspaceBySlug } from '@/lib/pages-cache'
 
 /**
  * The settings shell: one persistent rail, one swapping panel.
@@ -19,9 +21,34 @@ export default async function SettingsLayout({
   params: Promise<{ workspaceSlug: string }>
 }) {
   const { workspaceSlug } = await params
+
+  // Hermes-specific screens are hidden when no Hermes runtime is enabled here.
+  // A count, not a fetch of the rows: the rail only needs to know whether one
+  // exists (D0).
+  const workspace = await getWorkspaceBySlug(workspaceSlug)
+  let hasHermesRuntime = false
+  if (workspace) {
+    const payload = await getPayloadClient()
+    const found = await payload.count({
+      collection: 'runtime-profiles',
+      where: {
+        and: [
+          { workspace: { equals: workspace.id } },
+          { enabled: { equals: true } },
+          // A profile predating `homeStrategy` has no value and is Hermes by
+          // history, so absence counts as Hermes rather than hiding screens
+          // someone is already using.
+          { or: [{ homeStrategy: { equals: 'hermes' } }, { homeStrategy: { exists: false } }] },
+        ],
+      },
+      overrideAccess: true,
+    })
+    hasHermesRuntime = found.totalDocs > 0
+  }
+
   return (
     <div className="flex h-full w-full overflow-hidden">
-      <SettingsRail workspaceSlug={workspaceSlug} />
+      <SettingsRail workspaceSlug={workspaceSlug} hasHermesRuntime={hasHermesRuntime} />
       <div className="min-w-0 flex-1 overflow-y-auto">{children}</div>
     </div>
   )
