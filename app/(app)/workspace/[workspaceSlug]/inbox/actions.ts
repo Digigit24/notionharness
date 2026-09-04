@@ -11,14 +11,16 @@ import { revalidatePath } from 'next/cache'
 import { getCurrentPayloadUser } from '@/lib/current-user'
 import { getWorkspaceBySlug } from '@/lib/pages-cache'
 import { getApproval, resolveApproval } from '@/lib/hermes/approval-helpers'
-import { getChannelMessage, getRun, enqueueRun, dismissRun, markChannelRead, type Run } from '@/lib/broker'
+import type { ApprovalStatus } from '@/collections/Approvals'
+import { getChannelMessage, listThread, getRun, enqueueRun, dismissRun, markChannelRead, type Run } from '@/lib/broker'
 import { markNotificationsRead } from '@/app/(app)/notifications/actions'
 import { guard, raise, type WithFailure } from '@/lib/failures'
 // Read-only server helpers, deliberately NOT actions — see that file's header
 // note on why an exported async function in a `'use server'` module is a public
 // endpoint. Imported rather than re-implemented so there is exactly one way a
 // slot id is ever chosen for a write.
-import { getChannel, resolveMySlot } from '../teams/data'
+import { getChannel, resolveMySlot, loadSlots } from '../teams/data'
+import type { RoomFeedMessage, TeamSlotView } from '@/components/teams/shared'
 
 function revalidateInbox(workspaceSlug: string) {
   revalidatePath(`/workspace/${workspaceSlug}/inbox`)
@@ -165,5 +167,113 @@ export async function markChannelMentionRead(workspaceSlug: string, messageId: n
 
     await markChannelRead(slot.id, message.id)
     revalidateInbox(workspaceSlug)
+  })
+}
+
+/**
+ * The Inbox's own right-pane thread preview — R14-P0.9.
+ *
+ * `components/inbox/inbox-thread-preview.tsx` reuses `MessageRow` (the same
+ * renderer `components/teams/thread-pane.tsx` uses) but that pane's own data
+ * flow is channel-room-specific (live SSE state, the room's full roster,
+ * run/task maps) and does not exist on this route. This is the "focused
+ * equivalent" the roadmap asks for: one thread's root + replies, the caller's
+ * own slot (so "mine" reactions render correctly) and the channel's roster for
+ * names — nothing the room's live wiring would otherwise supply.
+ *
+ * Deliberately does NOT call `mergeReliability`/`listTeamRoomMessages`: that
+ * query scans up to 1000 room-system rows per channel to resolve `systemKind`/
+ * `undeliverableAt` for messages that, in a MENTION preview, are essentially
+ * never system rows. Paying for it here would be a query this surface does not
+ * need (D0) for cosmetic fields defaulted to their empty state below.
+ */
+export interface InboxThreadPreview {
+  workspaceId: number
+  teamId: number
+  channelName: string
+  rootId: number
+  messages: RoomFeedMessage[]
+  slots: TeamSlotView[]
+  mySlotId: number | null
+}
+
+export async function getInboxThreadPreview(
+  workspaceSlug: string,
+  messageId: number,
+): Promise<WithFailure<InboxThreadPreview>> {
+  return guard(async () => {
+    const user = await getCurrentPayloadUser()
+    if (!user) raise('unauthenticated', 'You must be logged in.')
+    if (!Number.isSafeInteger(messageId) || messageId <= 0) raise('invalid_input', 'Invalid message.')
+
+    const workspace = await getWorkspaceBySlug(workspaceSlug)
+    if (!workspace) raise('not_found', 'Workspace not found.')
+
+    const message = await getChannelMessage(messageId)
+    if (!message) raise('not_found', 'Message not found.')
+
+    const channel = await getChannel(message.teamId)
+    if (!channel || channel.workspaceId !== workspace.id) raise('forbidden', 'You do not have access to this channel.')
+
+    // Same authorization as `markChannelMentionRead`: a non-null slot IS
+    // membership in this schema, so this is both the identity check and the
+    // access check in one query.
+    const slot = await resolveMySlot(channel.id, user.id)
+    if (!slot) raise('forbidden', 'You are not a member of this channel.')
+
+    const rootId = message.threadRootId ?? message.id
+    const [thread, slots] = await Promise.all([listThread(rootId), loadSlots(channel.id)])
+    if (thread.length === 0) raise('not_found', 'That thread is no longer in this channel.')
+
+    const messages: RoomFeedMessage[] = thread.map((m) => ({
+      ...m,
+      systemKind: null,
+      undeliverableAt: null,
+      addresseeMissing: false,
+    }))
+
+    return {
+      workspaceId: workspace.id,
+      teamId: channel.id,
+      channelName: channel.name,
+      rootId,
+      messages,
+      slots,
+      mySlotId: slot.id,
+    }
+  })
+}
+
+/**
+ * A bounded, one-shot follow-up — NOT a poll. `components/thread/PermissionCard`
+ * (reused wholesale for the approval preview, per this unit's brief) owns its
+ * own decision POST to `/api/approvals` and exposes no callback, so this Inbox
+ * pane cannot learn synchronously that a decision landed. Rather than build a
+ * second decision control beside it (the exact duplication the brief says to
+ * avoid) or poll on an interval (D0 forbids that), the preview calls this ONCE,
+ * a short delay after it observes a click inside the card — see
+ * `inbox-approval-preview.tsx`. `status !== 'pending'` is the caller's signal
+ * to remove the row locally, the same way every other resolved action here
+ * does.
+ */
+export async function getApprovalStatusInbox(
+  workspaceSlug: string,
+  approvalId: number,
+): Promise<WithFailure<{ status: ApprovalStatus }>> {
+  return guard(async () => {
+    const user = await getCurrentPayloadUser()
+    if (!user) raise('unauthenticated', 'You must be logged in.')
+
+    const approval = await getApproval(approvalId)
+    if (!approval) raise('not_found', 'Approval not found.')
+    if (approval.requestedUser !== user.id) raise('forbidden', 'You do not have access to this approval.')
+
+    // The decision travelled through a different endpoint (`/api/approvals`),
+    // which has no reason to know this route exists and does not revalidate
+    // it. Doing that here, once, is what lets the bell and a future visit to
+    // this page agree with what the card already shows.
+    if (approval.status !== 'pending') revalidateInbox(workspaceSlug)
+
+    return { status: approval.status }
   })
 }
