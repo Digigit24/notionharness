@@ -324,51 +324,62 @@ at all.
 
 **Verified:** `scripts/test-mcp-endpoint.ts` (9 checks, including three
 distinct ways of being unauthorised) and `scripts/test-plugin-injection.ts`
-(11 checks). One injection check is skipped on this machine because the
-workspace has a single agent, so "another agent does not get the scoped
-plugin" is asserted by construction but not yet observed against real rows.
+(12 checks, all passing) — including the one that matters most, that another
+agent in the same workspace does *not* receive a scoped plugin.
+
+That last check nearly went unverified. The test picked the first workspace it
+found, which had one agent, and reported the cross-agent assertion as skipped
+— while a four-agent workspace sat one row further down. It now picks a
+workspace that can actually exercise the assertion. A test that skips its most
+important case and still prints ALL PASS is worse than no test.
 
 ---
 
-## R5 — Git review, the part Orca does best
+## R5 — Git review, the part Orca does best — CORE DONE
 
 Folded from the old B3, plus what is still missing.
 
-- **R5.1 A git rail in the conversation** when the session is bound to a
-  worktree: branch, ahead and behind, changed files. `lib/git/repo.ts` already
-  provides all of it.
-- **R5.2 Side-by-side diff with hunk staging and a base-ref picker.** The run
-  review page's own comment admits the unified viewer is a compromise.
-  **The renderer is `@git-diff-view/react`, and that decision is now made.**
-  R5.3 is the requirement that chooses it: line-anchored comments need
-  arbitrary React widgets pinned to a side and a line, and that primitive is
-  the only thing separating the candidates. It also consumes the unified patch
-  we already produce rather than re-diffing two strings in the browser, and it
-  highlights through Shiki, which is in the tree already. `react-diff-view`
-  has the right shape but is an older generation against React 19;
-  `diff2html` emits HTML strings with nowhere to hang a widget;
-  `react-diff-viewer-continued` recomputes a diff we have already computed
-  server-side; Monaco's diff editor is multi-megabyte and violates D0 outright.
-- **R5.2a The thread keeps its own renderer, deliberately.**
-  `components/thread/DiffBlock.tsx` classifies line by line and never throws,
-  because agent output is not guaranteed to be a well-formed patch and a parser
-  that throws loses the content entirely rather than showing it plainly. Every
-  library in this category assumes valid `git diff` output. So the review
-  surface takes the dependency and the feed does not. This is R6.5's rule
-  applied to diffs: different context, different density, different
-  implementation, and the duplication is smaller than the coupling it replaces.
-- **R5.3 Line-anchored diff comments batched into one prompt.** The single
-  best idea found in any competitor. Comment on several lines, press send
-  once, and the agent does one round of thinking and one revision pass instead
-  of a dozen. Comments persist afterwards for verification.
-- **R5.4 Stage, unstage, commit** with an agent-suggested message the human
-  edits. Never an automatic commit.
-- **R5.5 Push and open a pull request** through `gh`, matching the existing
-  binding. Confirm before pushing.
-- **R5.6 Fix broken checks**: a red chip on failed CI that hands the failing
-  job logs to an agent in one click.
-- **R5.7 Poll git the way Orca does** — a shallow two-second stat of `.git`
-  metadata, never a recursive watcher.
+- **R5.1 A git rail in the conversation — DONE.** `components/work/git-rail.tsx`
+  shows branch, ahead/behind, changed files and their diffs beside the thread,
+  for a session bound to a worktree. This is the whole point of that binding:
+  the person asking "what did it just do" is looking at the conversation, and
+  until now the answer lived on a different screen.
+  - **Scoping is the safety story.** Every action resolves the session to its
+    bound worktree server-side, so there is exactly one place that decides
+    which directory a git command may touch, and it is derived from stored
+    state rather than anything a caller passes in. An unbound session shows
+    nothing rather than falling back to a default repository — staging changes
+    in a checkout you were not looking at is the failure to prevent.
+- **R5.4 Stage, unstage, commit — DONE.** Never an automatic commit: the
+  message the person sees is the message that is used. `suggestCommitMessage`
+  drafts from the staged paths and is deliberately mechanical, not a model
+  call — a round trip and a cost for a field the human is about to rewrite,
+  when the useful answer ("which files am I committing") is already in the
+  repository.
+- **R5.5 Push and open a pull request — DONE**, through `gh`, matching the
+  existing binding so no GitHub token ever passes through this app. Both
+  confirm before acting, every time, because pushing publishes work other
+  people can see and approval of one push is not approval of the next. The
+  pull-request button is disabled, with the reason on hover, when `gh` is not
+  authenticated — rather than failing after the push has already happened.
+- **R5.7 Polling — resolved by not polling.** The rail reads git on demand and
+  after its own writes. A two-second stat loop is a real cost on a panel that
+  is usually closed, and D0 is explicit about intervals. The state that must
+  never be stale is the index at the moment of a commit, and that cannot be:
+  the commit reads the index server-side rather than trusting what is drawn.
+
+**Still open, named honestly rather than quietly dropped:**
+
+- **R5.2 Side-by-side diff with hunk staging** and **R5.3 line-anchored
+  comments batched into one prompt**. The rail currently reuses
+  `components/thread/DiffBlock.tsx`, which classifies line by line and never
+  throws. That is the right renderer for agent output of unknown shape, and
+  the wrong one for annotation: R5.3 needs arbitrary React widgets pinned to a
+  side and a line, which is exactly the primitive `@git-diff-view/react` was
+  chosen for and which this does not have. The dependency is not yet added.
+  R5.2a still holds — the feed keeps its own forgiving renderer either way.
+- **R5.6 Fix broken checks.** Not started; it depends on nothing above, so it
+  is cheap to add later.
 
 ---
 

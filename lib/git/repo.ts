@@ -409,6 +409,25 @@ export async function readGhStatus(): Promise<GhStatus> {
   }
 }
 
+/**
+ * Runs one `gh` command in a repository and returns its stdout.
+ *
+ * The same reasoning as `readGhStatus`: `gh` owns the credential, so this app
+ * never holds a GitHub token. Arguments are passed as an array to `execFile`,
+ * never interpolated into a shell string — a branch name is user-controlled
+ * and a shell here would be a command-injection seam.
+ */
+export async function runGh(cwd: string, args: string[], timeoutMs = 60_000): Promise<string> {
+  const { stdout } = await exec('gh', args, {
+    cwd,
+    timeout: timeoutMs,
+    windowsHide: true,
+    // Never let a credential prompt block a server-side call forever.
+    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+  })
+  return stdout
+}
+
 /** Clones with `gh` so the user's existing GitHub credential is used, with no
  * token ever passing through this app. */
 export async function ghClone(repo: string, targetDir: string): Promise<void> {

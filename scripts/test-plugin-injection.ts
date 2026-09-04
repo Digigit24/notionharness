@@ -19,12 +19,32 @@ function check(label: string, ok: boolean, detail = '') {
 }
 
 const payload = await getPayloadClient()
-const workspace = (await payload.find({ collection: 'workspaces', limit: 1, depth: 0, overrideAccess: true })).docs[0]
-if (!workspace) throw new Error('No workspace exists.')
-const agents = (
-  await payload.find({ collection: 'agents', where: { workspace: { equals: workspace.id } }, limit: 2, depth: 0, overrideAccess: true })
-).docs
-if (agents.length < 1) throw new Error('This workspace has no agents.')
+// Pick the workspace that can actually exercise cross-agent scoping. Taking
+// the first workspace silently skipped the most important assertion here --
+// "another agent does NOT get this plugin" -- on a machine that had a
+// perfectly good four-agent workspace one row further down.
+const workspaces = (await payload.find({ collection: 'workspaces', limit: 50, depth: 0, overrideAccess: true })).docs
+if (workspaces.length === 0) throw new Error('No workspace exists.')
+let workspace = workspaces[0]
+let agents: Array<{ id: number; name: string }> = []
+for (const candidate of workspaces) {
+  const found = (
+    await payload.find({
+      collection: 'agents',
+      where: { workspace: { equals: candidate.id } },
+      limit: 2,
+      depth: 0,
+      overrideAccess: true,
+    })
+  ).docs
+  if (found.length > agents.length) {
+    workspace = candidate
+    agents = found
+  }
+  if (agents.length >= 2) break
+}
+if (agents.length < 1) throw new Error('No workspace has any agents.')
+console.log(`workspace: ${workspace.name} (${agents.length} agent(s) available)`)
 
 const targetAgent = agents[0]
 const otherAgent = agents[1] ?? null

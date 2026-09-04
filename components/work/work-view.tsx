@@ -14,6 +14,7 @@ import { adaptRunSnapshotsToThread, type ChatMessage, type ChatThread } from '@/
 import type { SessionListItem } from '@/lib/broker'
 import type { ActiveModelConfig } from '@/lib/runtimes/hermes/providers'
 import { SessionRail } from './session-rail'
+import { GitRail } from './git-rail'
 import {
   convertReplyToPage,
   createWorkSession,
@@ -80,6 +81,9 @@ export function WorkView({
   const router = useRouter()
   const [sessions, setSessions] = useState(initialSessions)
   const [activeSessionId, setActiveSessionId] = useState<number | null>(initialSessionId)
+  // R5.1 — the changes rail, collapsed by default. Closed it costs nothing,
+  // which is what lets it read git on demand instead of polling.
+  const [gitRailOpen, setGitRailOpen] = useState(false)
   const [prompt, setPrompt] = useState('')
   const [sending, setSending] = useState(false)
   const [stopping, setStopping] = useState(false)
@@ -546,6 +550,17 @@ export function WorkView({
           </div>
         </div>
       </div>
+
+      {/* Only for a session bound to a checkout. Without one there is no
+          repository to show, and guessing at a default would let someone
+          stage changes in a tree they were not looking at. */}
+      {activeSessionId != null && activeSession?.worktreeId != null && (
+        <GitRail
+          sessionId={activeSessionId}
+          open={gitRailOpen}
+          onToggle={() => setGitRailOpen((current) => !current)}
+        />
+      )}
     </div>
   )
 }
