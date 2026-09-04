@@ -22,6 +22,8 @@ import {
   listChannelUnread,
   listPendingChannelApprovals,
   listRunEvents,
+  listSessions,
+  listTeamMembers,
   listTeamTasks,
   listThread,
   markChannelRead,
@@ -36,6 +38,7 @@ import {
   type ChannelApproval,
   type Run,
   type RunMessageRow,
+  type SessionListItem,
   type Team,
   type TeamMember,
   type TeamMessageKind,
@@ -1259,6 +1262,28 @@ export async function loadChannelRunSnapshotAction(input: {
     if (!rows[0]?.ok) raise('forbidden', 'That run did not come from this channel.')
     const events = await listRunEvents(input.runId)
     return [{ run, events }]
+  })
+}
+
+/**
+ * R14-P0.3 — the channel's History tab.
+ *
+ * Scoped to sessions THIS channel's slots are bound to, not every session in
+ * the workspace: a slot binds one agent to one `chat_sessions` row
+ * (`requireAgent`'s own comment above), so the roster IS the channel's set of
+ * conversations. Reuses `listSessions` (Work's own rail query) with its new
+ * `sessionIds` filter rather than a second query shape for the same table.
+ */
+export async function listChannelHistorySessionsAction(input: {
+  workspaceId: number
+  teamId: number
+}): Promise<WithFailure<SessionListItem[]>> {
+  return guard(async () => {
+    await requireAccess(input.workspaceId, input.teamId)
+    const slots = await listTeamMembers(input.teamId)
+    const sessionIds = [...new Set(slots.map((slot) => slot.sessionId).filter((id): id is number => id != null))]
+    if (sessionIds.length === 0) return []
+    return listSessions({ workspaceId: input.workspaceId, sessionIds, includeArchived: true })
   })
 }
 

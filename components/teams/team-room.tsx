@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Columns3, Hash, Loader2, Lock, MessageSquare, Network, NotebookPen, OctagonX } from 'lucide-react'
+import { Clock, Columns3, Hash, Loader2, Lock, MessageSquare, Network, NotebookPen, OctagonX } from 'lucide-react'
 import type { ChannelApproval, TeamTask } from '@/lib/broker'
 import type { TeamRoomMessage, TeamSlotHealth, TeamStopState } from '@/lib/teams/reliability'
 import { unwrap } from '@/lib/failures'
@@ -43,11 +43,28 @@ import { LanesView } from './lanes-view'
 import { BoardView } from './board-view'
 import { RosterPanel } from './roster-panel'
 import { RunDetailSheet } from '@/components/runs/run-detail-sheet'
+import { ChannelHistoryTab } from './channel-history-tab'
 
-type RoomView = 'channel' | 'lanes' | 'board'
+/**
+ * R14-P0.2 — ONE tab bar, not two disagreeing mechanisms.
+ *
+ * Before this, `Channel | Lanes | Board` was a segmented control here and
+ * Canvas was a completely separate boolean toggle that opened a fourth
+ * sibling pane beside the feed rather than occupying this same switcher.
+ * Folding Canvas and History into `RoomView` itself — same tab bar, same
+ * `history.replaceState` mechanism `selectView` already implements below —
+ * is what actually closes that gap, not a second, bespoke tab component:
+ * `DetailLayout`'s fixed-width `rightRail` (built for a page with no docked,
+ * user-resizable side pane) would collide with the thread pane's own
+ * resizable divider from R12-P3.4, so this reuses DetailLayout's TECHNIQUE
+ * rather than the component itself.
+ */
+type RoomView = 'channel' | 'lanes' | 'board' | 'canvas' | 'history'
 
 const VIEWS: Array<{ id: RoomView; label: string; icon: typeof MessageSquare }> = [
-  { id: 'channel', label: 'Channel', icon: MessageSquare },
+  { id: 'channel', label: 'Messages', icon: MessageSquare },
+  { id: 'canvas', label: 'Canvas', icon: NotebookPen },
+  { id: 'history', label: 'History', icon: Clock },
   { id: 'lanes', label: 'Lanes', icon: Columns3 },
   { id: 'board', label: 'Board', icon: Network },
 ]
@@ -171,7 +188,6 @@ export function TeamRoom({
   const [joining, setJoining] = useState(false)
   const [threadRootId, setThreadRootId] = useState<number | null>(null)
   const [thread, setThread] = useState<RoomFeedMessage[]>([])
-  const [canvasOpen, setCanvasOpen] = useState(false)
   const [runs, setRuns] = useState<Map<number, ChannelRunLink>>(
     () => new Map(Object.entries(initialRuns).map(([id, link]) => [Number(id), link])),
   )
@@ -869,7 +885,7 @@ export function TeamRoom({
       const rest = command.rest.trim()
 
       if (command.name === 'canvas') {
-        setCanvasOpen(true)
+        selectView('canvas')
         return null
       }
 
@@ -950,7 +966,7 @@ export function TeamRoom({
       // without a branch fails loudly instead of silently doing nothing.
       return `/${command.name} is listed but not wired up yet.`
     },
-    [workspaceId, channel.id, channel.name, slots, health, claimableIds, stop.inFlightRunIds.length],
+    [workspaceId, channel.id, channel.name, slots, health, claimableIds, stop.inFlightRunIds.length, selectView],
   )
 
   const leader = useMemo(() => slots.find((s) => s.role === 'leader') ?? null, [slots])
@@ -1051,17 +1067,6 @@ export function TeamRoom({
             </button>
           </span>
         )}
-
-        <Button
-          type="button"
-          size="sm"
-          variant={canvasOpen ? 'default' : 'outline'}
-          onClick={() => setCanvasOpen((open) => !open)}
-          title="The channel's document — a real page, created the first time you open it"
-        >
-          <NotebookPen size={14} />
-          Canvas
-        </Button>
 
         {/*
           Stop is a header control, not a per-lane one, because the thing it
@@ -1307,14 +1312,20 @@ export function TeamRoom({
             onOpenTask={openTask}
           />
         )}
-        {canvasOpen && (
-          <CanvasPane
-            workspaceId={workspaceId}
-            workspaceSlug={workspaceSlug}
-            teamId={channel.id}
-            channelName={channel.name}
-            onClose={() => setCanvasOpen(false)}
-          />
+        {view === 'canvas' && (
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <CanvasPane
+              workspaceId={workspaceId}
+              workspaceSlug={workspaceSlug}
+              teamId={channel.id}
+              channelName={channel.name}
+            />
+          </div>
+        )}
+        {view === 'history' && (
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <ChannelHistoryTab workspaceId={workspaceId} teamId={channel.id} onOpenRun={openRunSheet} />
+          </div>
         )}
 
         <RosterPanel

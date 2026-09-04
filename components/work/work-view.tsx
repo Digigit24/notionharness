@@ -303,6 +303,7 @@ export function WorkView({
             runCount: 0,
             isRunning: true,
             preview: text,
+            latestRunId: null,
           },
           ...current,
         ])

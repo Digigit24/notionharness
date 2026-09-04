@@ -109,6 +109,10 @@ export interface SessionListItem extends ChatSession {
   isRunning: boolean
   /** First words of the most recent user prompt — the rail's subtitle. */
   preview: string | null
+  /** The session's own most recent run, so a caller with no run id of its own
+   * (R14-P0.3's channel History tab) has something to open in the run-detail
+   * sheet without a second query. Null only for a session with zero runs. */
+  latestRunId: number | null
 }
 
 /**
@@ -120,6 +124,10 @@ export async function listSessions(options: {
   workspaceId: number
   agentId?: number | null
   projectId?: number | null
+  /** Restricts to specific sessions — R14-P0.3's channel History tab, which
+   * has no agent/project axis to filter on, only the set of session ids its
+   * channel's slots are bound to. */
+  sessionIds?: number[]
   includeArchived?: boolean
   limit?: number
 }): Promise<SessionListItem[]> {
@@ -134,6 +142,11 @@ export async function listSessions(options: {
     params.push(options.projectId)
     conditions.push(`s.project_id = $${params.length}`)
   }
+  if (options.sessionIds != null) {
+    if (options.sessionIds.length === 0) return []
+    params.push(options.sessionIds)
+    conditions.push(`s.id = ANY($${params.length})`)
+  }
   if (!options.includeArchived) conditions.push('s.archived_at IS NULL')
   params.push(options.limit ?? 200)
 
@@ -143,14 +156,16 @@ export async function listSessions(options: {
             p.name AS project_name,
             COALESCE(r.run_count, 0)::int AS run_count,
             COALESCE(r.is_running, false) AS is_running,
-            r.preview
+            r.preview,
+            r.latest_run_id
        FROM chat_sessions s
        LEFT JOIN agents a ON a.id = s.agent_id
        LEFT JOIN projects p ON p.id = s.project_id
        LEFT JOIN LATERAL (
          SELECT count(*)::int AS run_count,
                 bool_or(status NOT IN ('completed', 'failed', 'cancelled')) AS is_running,
-                (ARRAY_AGG(prompt ORDER BY id DESC) FILTER (WHERE prompt IS NOT NULL))[1] AS preview
+                (ARRAY_AGG(prompt ORDER BY id DESC) FILTER (WHERE prompt IS NOT NULL))[1] AS preview,
+                (ARRAY_AGG(id ORDER BY id DESC))[1] AS latest_run_id
            FROM runs
           WHERE runs.session_id = s.id
        ) r ON true
@@ -166,6 +181,10 @@ export async function listSessions(options: {
     runCount: (row as { run_count: number }).run_count,
     isRunning: (row as { is_running: boolean }).is_running,
     preview: (row as { preview: string | null }).preview,
+    latestRunId:
+      (row as { latest_run_id: string | number | null }).latest_run_id == null
+        ? null
+        : Number((row as { latest_run_id: string | number | null }).latest_run_id),
   }))
 }
 

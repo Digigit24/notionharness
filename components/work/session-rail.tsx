@@ -18,11 +18,14 @@ import { formatRelativeTime } from '@/lib/relative-time'
  * question in a chat list is "how fresh is this", not "what was the date".
  * Pinned sessions ignore the bands entirely and sit at the top.
  */
-type Band = 'Pinned' | 'Today' | 'Yesterday' | 'Previous 7 days' | 'Older'
+export type Band = 'Pinned' | 'Today' | 'Yesterday' | 'Previous 7 days' | 'Older'
 
-const BAND_ORDER: Band[] = ['Pinned', 'Today', 'Yesterday', 'Previous 7 days', 'Older']
+export const BAND_ORDER: Band[] = ['Pinned', 'Today', 'Yesterday', 'Previous 7 days', 'Older']
 
-function bandFor(session: SessionListItem, now: number): Band {
+/** Exported so R14-P0.3's channel History tab groups by the same bands as
+ * Work's own rail, rather than a second recency scheme drifting from this
+ * one. */
+export function bandFor(session: SessionListItem, now: number): Band {
   if (session.pinned) return 'Pinned'
   const age = now - new Date(session.lastActivityAt).getTime()
   const day = 24 * 60 * 60 * 1000
