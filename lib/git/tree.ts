@@ -31,7 +31,7 @@ import { readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { AppFailure, isAppFailure, raise, type FailureCode } from '@/lib/failures'
-import { git, gitFailureFor, pathIsInside } from './repo'
+import { git, gitFailureFor, pathIsInside, GIT_ENV } from './repo'
 
 const exec = promisify(execFile)
 
@@ -55,15 +55,6 @@ const MAX_UNTRACKED_ENTRIES = 200
  * text whatever its name, and extension lists are wrong about exactly the
  * files people care about. */
 const BINARY_SNIFF_BYTES = 8192
-
-/** Same hardening as `git()` in ./repo: no credential prompt, no index lock,
- * because a git that blocks inside a request is indistinguishable from a
- * hang. */
-const GIT_ENV: NodeJS.ProcessEnv = {
-  ...process.env,
-  GIT_TERMINAL_PROMPT: '0',
-  GIT_OPTIONAL_LOCKS: '0',
-}
 
 /**
  * A path or ref this module refused to hand to git.

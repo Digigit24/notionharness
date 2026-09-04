@@ -1,10 +1,19 @@
-/** Shared bare clone + isolated per-run worktrees. The mutex is in-process by design. */
-import { execFile } from 'node:child_process'
+/**
+ * Shared bare clone + isolated per-run worktrees. The mutex is in-process by
+ * design.
+ *
+ * R12-P5.1 — every git invocation here goes through `lib/git/repo.ts`'s
+ * hardened `git()`/`gitBare()` (explicit cwd, a timeout, `windowsHide`,
+ * captured stderr, a capped buffer, typed failures) rather than a fourth
+ * bespoke `execFile` wrapper. `create()` and `remove()` now surface typed
+ * failures (`git_missing`, `not_a_repository`, `bad_ref`, `worktree_dirty`,
+ * `timeout`, …) instead of whatever raw string `execFile`'s "Command failed"
+ * message produced.
+ */
 import { access, mkdir, rm } from 'node:fs/promises'
-import { promisify } from 'node:util'
 import { join, resolve } from 'node:path'
+import { git, gitBare } from '@/lib/git/repo'
 
-const exec = promisify(execFile)
 const RUN_ID_RE = /^[A-Za-z0-9_-]+$/
 
 export interface RunWorktree {
@@ -63,10 +72,6 @@ async function withLock<T>(key: string, operation: () => Promise<T>): Promise<T>
   }
 }
 
-async function git(barePath: string, args: string[]) {
-  return exec('git', ['--git-dir', barePath, ...args], { windowsHide: true })
-}
-
 export class RunWorktreeManager {
   constructor(private readonly options: RunWorktreeManagerOptions) {}
 
@@ -76,9 +81,9 @@ export class RunWorktreeManager {
       await mkdir(this.options.rootDir, { recursive: true })
       try {
         await access(join(barePath, 'HEAD'))
-        await git(barePath, ['fetch', '--prune', 'origin'])
+        await gitBare(barePath, ['fetch', '--prune', 'origin'])
       } catch {
-        await exec('git', ['clone', '--bare', source, barePath], { windowsHide: true })
+        await git(this.options.rootDir, ['clone', '--bare', source, barePath])
       }
       return barePath
     })
@@ -93,10 +98,10 @@ export class RunWorktreeManager {
       // A worker can die after creating the worktree but before settling the
       // run. Prune its missing registration and remove the run-scoped branch
       // so lease recovery can recreate the isolated checkout cleanly.
-      await git(barePath, ['worktree', 'prune'])
-      const existingBranch = await git(barePath, ['branch', '--list', descriptor.branch])
-      if (existingBranch.stdout.trim()) await git(barePath, ['branch', '--delete', '--force', descriptor.branch])
-      await git(barePath, ['worktree', 'add', '-b', descriptor.branch, descriptor.worktreePath, ref])
+      await gitBare(barePath, ['worktree', 'prune'])
+      const existingBranch = await gitBare(barePath, ['branch', '--list', descriptor.branch])
+      if (existingBranch.trim()) await gitBare(barePath, ['branch', '--delete', '--force', descriptor.branch])
+      await gitBare(barePath, ['worktree', 'add', '-b', descriptor.branch, descriptor.worktreePath, ref])
       return descriptor
     })
   }
@@ -104,9 +109,14 @@ export class RunWorktreeManager {
   async remove(worktree: RunWorktree, options: RemoveWorktreeOptions = {}): Promise<void> {
     return withLock(worktree.barePath, async () => {
       if (options.preserveChanges) return
-      if (options.discardChanges) await exec('git', ['-C', worktree.worktreePath, 'reset', '--hard', 'HEAD'], { windowsHide: true })
-      await git(worktree.barePath, ['worktree', 'remove', worktree.worktreePath])
-      await git(worktree.barePath, ['worktree', 'prune'])
+      if (options.discardChanges) await git(worktree.worktreePath, ['reset', '--hard', 'HEAD'])
+      // Deliberately no `--force` unless discarding was explicitly asked for
+      // (above): a dirty worktree then makes git itself refuse, and that
+      // refusal now arrives as a typed `worktree_dirty` failure (P5.1 —
+      // `lib/git/repo.ts`'s `classifyGitFailure`) rather than a silent
+      // `--force` or an unclassified string.
+      await gitBare(worktree.barePath, ['worktree', 'remove', worktree.worktreePath])
+      await gitBare(worktree.barePath, ['worktree', 'prune'])
     })
   }
 }

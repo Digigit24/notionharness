@@ -16,23 +16,12 @@
 // = refuse`) safely REJECTS a push that would move a currently checked-out
 // branch — so the worst-case failure mode here is a clean, surfaced error
 // ("couldn't push — sync manually"), never a corrupted working tree.
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
 import { mkdir, rm } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import type { RunWorktree } from './manager'
 import { bestEffort } from '@/lib/failures'
-
-const exec = promisify(execFile)
-
-async function run(cwd: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
-  return exec('git', args, { cwd, windowsHide: true })
-}
-
-async function gitBare(barePath: string, args: string[]) {
-  return exec('git', ['--git-dir', barePath, ...args], { windowsHide: true })
-}
+import { git, gitBare } from '@/lib/git/repo'
 
 export interface MergeRunBranchOptions {
   /** The live repository the merge is ultimately delivered to. */
@@ -77,14 +66,14 @@ export async function mergeRunBranch(worktree: RunWorktree, opts: MergeRunBranch
   try {
     let fastForward = true
     try {
-      await run(integrationPath, ['merge', '--ff-only', branch])
+      await git(integrationPath, ['merge', '--ff-only', branch])
     } catch {
       fastForward = false
       try {
-        await run(integrationPath, ['merge', '--no-edit', branch])
+        await git(integrationPath, ['merge', '--no-edit', branch])
       } catch (mergeErr) {
         await bestEffort(
-          run(integrationPath, ['merge', '--abort']),
+          git(integrationPath, ['merge', '--abort']),
           'the conflict below is what the caller is told about; a failed abort in a throwaway worktree must not replace it',
           { branch },
         )
@@ -97,7 +86,7 @@ export async function mergeRunBranch(worktree: RunWorktree, opts: MergeRunBranch
       }
     }
 
-    const mergeCommit = (await run(integrationPath, ['rev-parse', 'HEAD'])).stdout.trim()
+    const mergeCommit = (await git(integrationPath, ['rev-parse', 'HEAD'])).trim()
 
     // 3. Deliver the merge to sourceRepo.
     //
@@ -117,8 +106,8 @@ export async function mergeRunBranch(worktree: RunWorktree, opts: MergeRunBranch
       await gitBare(barePath, ['push', sourceRepo, `${baseBranch}:${baseBranch}`])
     } catch {
       try {
-        await run(sourceRepo, ['fetch', barePath, baseBranch])
-        await run(sourceRepo, ['merge', '--ff-only', 'FETCH_HEAD'])
+        await git(sourceRepo, ['fetch', barePath, baseBranch])
+        await git(sourceRepo, ['merge', '--ff-only', 'FETCH_HEAD'])
       } catch (err) {
         return {
           merged: false,

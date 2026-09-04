@@ -321,26 +321,17 @@ export async function removeProjectWorktree(input: {
     const resource = resources.find((entry) => entry.id === worktree.resourceId)
 
     if (resource?.exists && (await directoryExists(worktree.path))) {
-      try {
-        await removeWorktree(resource.path, {
-          path: worktree.path,
-          branch: worktree.branch,
-          force: input.force,
-          deleteBranch: input.deleteBranch,
-        })
-      } catch (err) {
-        // git refuses to remove a dirty worktree without --force, and saying so
-        // is far better than a silent failure that leaves the row behind.
-        const message = err instanceof Error ? err.message : String(err)
-        if (/contains modified or untracked files/i.test(message) && !input.force) {
-          // git's own stderr rides along as `detail` — it names the files, which
-          // is the one thing the person deciding whether to force actually wants.
-          raise('worktree_dirty', 'This worktree has uncommitted changes. Remove it with force to discard them.', {
-            detail: message,
-          })
-        }
-        throw err
-      }
+      // `lib/git/repo.ts`'s `git()` now classifies git's own "contains
+      // modified or untracked files" refusal as `worktree_dirty` directly
+      // (P5.1) — no regex over the sentence needed here any more; it just
+      // propagates, with git's own stderr riding along as `.detail`, the way
+      // `classifyRunFailure` already treats the dispatcher's own git errors.
+      await removeWorktree(resource.path, {
+        path: worktree.path,
+        branch: worktree.branch,
+        force: input.force,
+        deleteBranch: input.deleteBranch,
+      })
     }
 
     await detachSessionsFromWorktree(worktree.id)
