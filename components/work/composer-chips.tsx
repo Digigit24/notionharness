@@ -40,18 +40,37 @@ export function ComposerChips({
   values,
   onChange,
   disabled,
+  isAnswering,
 }: {
   options: SessionConfigOption[]
   /** `{ [optionId]: value }` for the next message. */
   values: Record<string, unknown>
   onChange: (next: Record<string, unknown>) => void
   disabled?: boolean
+  /**
+   * True while THIS session's current turn is still running.
+   *
+   * This harness spawns one process per turn (see `work-view.tsx`'s own
+   * comment on `messageConfig`) — there is no live session to steer mid-turn,
+   * so a chip changed here never reaches the answer already in flight. It
+   * only takes effect on the NEXT message sent, and only for that one
+   * message. Left `undefined` (no notice) by a caller with no such turn to
+   * be mid of — the hero composer, which only ever runs before any session
+   * exists.
+   */
+  isAnswering?: boolean
 }) {
   const [openId, setOpenId] = useState<string | null>(null)
   if (options.length === 0) return null
 
+  // Only worth saying once there is BOTH a turn in flight and an override
+  // actually set — changing nothing has nothing to apply "next" that differs
+  // from what already happened, and the notice would be true but pointless.
+  const hasOverride = Object.keys(values).length > 0
+
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
+    <div className="flex flex-col items-end gap-1">
+      <div className="flex flex-wrap items-center gap-1.5">
       {options.map((option) => {
         const current = values[option.id]
         const selected = (option.options ?? []).find((choice) => choice.value === current)
@@ -115,6 +134,14 @@ export function ComposerChips({
           </div>
         )
       })}
+      </div>
+      {/* Honest, not alarming — a caption beside the chips rather than a
+          toast, since it fires on every mid-turn chip change and a popup for
+          each would be noise. See this prop's own comment for why the effect
+          really is delayed, not a bug. */}
+      {isAnswering && hasOverride && (
+        <span className="text-[10px] text-black/40 dark:text-white/40">Applies to your next message</span>
+      )}
     </div>
   )
 }

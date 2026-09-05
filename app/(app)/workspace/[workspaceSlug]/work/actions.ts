@@ -24,6 +24,7 @@ import { listRunEventsForRuns } from '@/lib/broker/messages'
 import { requestRunCancel } from '@/lib/dispatcher/worker'
 import { appendMessageToPage } from '@/lib/transcript/to-page'
 import type { ChatContent } from '@/lib/hermes/runEvent-adapter'
+import { formatAttachmentsForPrompt } from '@/lib/work/attachment-prompt'
 
 /**
  * Server actions for the Work view — the successor to Ask.
@@ -122,6 +123,14 @@ export async function sendSessionMessage(input: {
    * persisted on the agent: "answer this one harder" is a property of the
    * question, not a change to who is answering it. */
   runtimeConfig?: Record<string, unknown> | null
+  /** Media ids the Work hero composer already uploaded before Send was
+   * pressed. See `lib/work/attachment-prompt.ts`'s header for why these are
+   * resolved into a filename/URL line appended to the RUNTIME prompt only —
+   * never mixed into the `text` this function stores as the visible chat
+   * message, which has to stay byte-identical to what the composer's
+   * optimistic bubble already painted (`work-view.tsx`'s `pendingSend`
+   * match), or that bubble never clears. */
+  attachments?: number[] | null
 }): Promise<{ runId: number }> {
   const user = await requireUser()
   const text = typeof input.prompt === 'string' ? input.prompt.trim() : ''
@@ -132,6 +141,29 @@ export async function sendSessionMessage(input: {
     await updateSession(session.id, { projectId: input.projectId })
   }
 
+  // Resolved server-side from the id alone, never trusting a client-supplied
+  // filename/URL — the same instinct `postChannelMessage` applies by storing
+  // only ids and letting the reader resolve display info. Scoped to THIS
+  // workspace so an id from somewhere else can never smuggle another
+  // workspace's file name into a prompt.
+  const attachmentIds = (input.attachments ?? []).filter((id) => Number.isFinite(id))
+  let promptForAgent = text
+  if (attachmentIds.length > 0) {
+    const payload = await getPayloadClient()
+    const found = await payload.find({
+      collection: 'media',
+      where: { id: { in: attachmentIds }, workspace: { equals: input.workspaceId } },
+      limit: attachmentIds.length,
+      depth: 0,
+      overrideAccess: true,
+    })
+    const files = found.docs.map((doc) => ({
+      filename: doc.filename ?? 'file',
+      url: `/api/media/${doc.id}/file`,
+    }))
+    promptForAgent = text + formatAttachmentsForPrompt(files)
+  }
+
   let run
   try {
     run = await enqueueRun({
@@ -139,9 +171,12 @@ export async function sendSessionMessage(input: {
       sessionId: session.id,
       originatorUser: user.id,
       accountableUser: user.id,
-      // The raw message, with no context prefix. See this file's header.
-      prompt: text,
+      // The raw message plus, when there are attachments, the resolved
+      // filename/URL list appended above. See this file's header for why no
+      // OTHER context is ever prefixed in.
+      prompt: promptForAgent,
       runtimeConfig: input.runtimeConfig ?? null,
+      attachments: attachmentIds,
     })
   } catch (err) {
     // The active-run index now includes the session, so this can only mean a

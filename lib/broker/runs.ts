@@ -24,6 +24,7 @@ interface RunRow {
   prompt: string | null
   runtime_config?: Record<string, unknown> | null
   channel_message_id?: string | number | null
+  attachments?: unknown
   next_seq: string | number
   // node-postgres's default type parser returns `timestamp`/`timestamptz`
   // columns as `Date` objects, not strings — this pool has no custom OID
@@ -76,6 +77,7 @@ export function rowToRun(row: RunRow): Run {
       row.channel_message_id === null || row.channel_message_id === undefined
         ? null
         : Number(row.channel_message_id),
+    attachments: Array.isArray(row.attachments) ? row.attachments.map(Number) : [],
     nextSeq: Number(row.next_seq),
     leaseExpiresAt: toISOStringOrNull(row.lease_expires_at),
     startedAt: toISOStringOrNull(row.started_at),
@@ -116,11 +118,14 @@ export async function enqueueRun(input: {
   /** The channel message this run answers, when it was started by a mention.
    * Lets the settle path put the reply in that message's thread. */
   channelMessageId?: number | null
+  /** Media ids the Work hero composer attached to this turn's prompt. See
+   * `Run['attachments']`'s own comment. */
+  attachments?: number[] | null
 }): Promise<Run> {
   const pool = getBrokerPool()
   const res = await pool.query<RunRow>(
-    `INSERT INTO runs (task_id, agent_id, status, originator_user, accountable_user, priority, max_attempts, prompt, page_id, session_id, runtime_config, channel_message_id)
-     VALUES ($1, $2, 'queued', $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    `INSERT INTO runs (task_id, agent_id, status, originator_user, accountable_user, priority, max_attempts, prompt, page_id, session_id, runtime_config, channel_message_id, attachments)
+     VALUES ($1, $2, 'queued', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
      RETURNING *`,
     [
       input.taskId ?? null,
@@ -136,6 +141,7 @@ export async function enqueueRun(input: {
         ? JSON.stringify(input.runtimeConfig)
         : null,
       input.channelMessageId ?? null,
+      JSON.stringify(input.attachments ?? []),
     ],
   )
   return rowToRun(res.rows[0])

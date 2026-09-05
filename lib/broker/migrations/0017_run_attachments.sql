@@ -1,0 +1,18 @@
+-- Work hero composer — file attachments on a run.
+--
+-- A JSONB array of MEDIA IDS, exactly the same shape and reasoning as
+-- `team_messages.attachments` (migration 0016): `runs` is a raw-pg broker
+-- table (AGENTS.md D5), so there is no `relationTo` to point at `media` from
+-- here, and the Media collection itself remains the one place that owns the
+-- workspace check. This column only remembers WHICH files a turn carried.
+--
+-- Unlike a channel message, a run's prompt is also TEXT the agent reads, so
+-- `sendSessionMessage` (app/(app)/workspace/[workspaceSlug]/work/actions.ts)
+-- resolves these ids into a filename/URL line appended to the prompt itself
+-- at enqueue time — the column is the durable record of what was attached,
+-- the prompt text is what the agent actually sees.
+--
+-- Defaulted to '[]'::jsonb rather than nullable, matching `attachments` on
+-- `team_messages` and `mentions` before it: every reader can assume an array
+-- and never has to branch on NULL.
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS attachments JSONB NOT NULL DEFAULT '[]'::jsonb;
