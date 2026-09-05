@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Card, CardContent } from '@/components/ui/card'
 import { toast } from '@/hooks/use-toast'
 import { unwrap } from '@/lib/failures'
+import { formatRelativeTime } from '@/lib/relative-time'
 
 export interface MachineSummary {
   id: number
@@ -18,6 +19,30 @@ export interface MachineSummary {
    * from the same profile list it renders below, so this costs no extra
    * query. */
   profileCount: number
+  /**
+   * B9.3 — this machine's dispatcher heartbeat (B9.1), or null when no
+   * dispatcher has ever ticked from it. Not the same fact as "has runtime
+   * profiles": a machine can be fully configured and simply asleep right
+   * now, which `stale: true` says plainly instead of the count alone
+   * implying it's ready to run something.
+   */
+  heartbeat: { lastTickAt: string; stale: boolean } | null
+}
+
+/** Green while the dispatcher ticked recently, red once it's gone stale
+ * (B9.1's own threshold), grey when nothing has ever ticked from this
+ * machine at all — three states, because "never configured" and "was
+ * running, now isn't" are different facts a person acts on differently. */
+function LiveDot({ heartbeat }: { heartbeat: MachineSummary['heartbeat'] }) {
+  const color = !heartbeat
+    ? 'bg-black/20 dark:bg-white/20'
+    : heartbeat.stale
+      ? 'bg-red-500'
+      : 'bg-emerald-500'
+  const label = !heartbeat
+    ? 'No dispatcher has ever ticked from this machine'
+    : `${heartbeat.stale ? 'Offline' : 'Online'} — last tick ${formatRelativeTime(heartbeat.lastTickAt)}`
+  return <span aria-hidden="true" title={label} className={`size-2 shrink-0 rounded-full ${color}`} />
 }
 
 /**
@@ -98,7 +123,8 @@ export function MachinesSection({
         </div>
 
         {thisMachine && !editing ? (
-          <p className="text-xs text-faint">
+          <p className="flex items-center gap-1.5 text-xs text-faint">
+            <LiveDot heartbeat={thisMachine.heartbeat} />
             This machine is <span className="font-medium text-foreground">{thisMachine.displayName}</span>, with{' '}
             {thisMachine.profileCount} runtime{thisMachine.profileCount === 1 ? '' : 's'} scoped to it.
           </p>
@@ -140,10 +166,14 @@ export function MachinesSection({
           <ul className="flex flex-col gap-1 border-t border-black/5 pt-2 text-xs text-faint dark:border-white/10">
             {otherMachines.map((machine) => (
               <li key={machine.id} className="flex items-center gap-1.5">
+                <LiveDot heartbeat={machine.heartbeat} />
                 <Laptop size={11} className="shrink-0" />
                 <span className="font-medium text-foreground">{machine.displayName}</span>
                 <span>
                   — {machine.profileCount} runtime{machine.profileCount === 1 ? '' : 's'}
+                  {machine.heartbeat && !machine.heartbeat.stale ? ' · online' : ''}
+                  {machine.heartbeat === null ? ' · never seen' : ''}
+                  {machine.heartbeat?.stale ? ` · last seen ${formatRelativeTime(machine.heartbeat.lastTickAt)}` : ''}
                 </span>
               </li>
             ))}

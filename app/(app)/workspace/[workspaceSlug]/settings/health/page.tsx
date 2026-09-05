@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation'
 import { Activity, Clock, Gauge, CircleDollarSign, ListChecks, Radio, Server } from 'lucide-react'
 import { getWorkspaceBySlug } from '@/lib/pages-cache'
 import { getDispatcherHealth, getWorkspaceHealthMetrics, getWorkspaceUsageRollup } from '@/lib/broker'
+import { currentHostId } from '@/lib/runtimes/host-id'
 import { getPayloadClient } from '@/lib/payload'
 import { formatRelativeTime } from '@/lib/relative-time'
 import { Card, CardContent } from '@/components/ui/card'
@@ -48,7 +49,11 @@ export default async function WorkspaceHealthPage({
       depth: 0,
       overrideAccess: true,
     }),
-    getDispatcherHealth(),
+    // Scoped to THIS server's own machine (B9.1) — with more than one
+    // machine able to dispatch now, "is the dispatcher running" has to name
+    // which one it means. A cross-machine view is B9.3, on the Runtimes
+    // page's Machines section, not this workspace-wide health summary.
+    getDispatcherHealth(currentHostId()),
   ])
 
   const spendPerDay = usage.totalCostTicks / 100 / WINDOW_DAYS
@@ -73,17 +78,24 @@ export default async function WorkspaceHealthPage({
         {/* Loud on purpose, and only when it is actually true. A stopped
             dispatcher with queued work is the one failure that looks like
             nothing at all: runs stay queued, the composer waits forever, and
-            every other number on this page stays reassuringly green. */}
+            every other number on this page stays reassuringly green.
+            `dispatcher` is scoped to THIS machine (B9.1); `queueDepth` is
+            global (a run has no host until it's claimed) — so this banner
+            says "this machine's" rather than claiming no machine anywhere
+            is dispatching, which a different machine's live heartbeat could
+            make false. Whether every machine is down is B9.3's question,
+            on the Runtimes page's Machines section, not this one. */}
         {dispatcher.stalled && (
           <div className="rounded-md border border-red-500/40 bg-red-500/10 px-4 py-3">
             <p className="text-sm font-medium text-red-700 dark:text-red-300">
-              The dispatcher is not running. {dispatcher.queueDepth}{' '}
-              {dispatcher.queueDepth === 1 ? 'run is' : 'runs are'} queued and nothing is picking them up.
+              This machine&apos;s dispatcher is not running. {dispatcher.queueDepth}{' '}
+              {dispatcher.queueDepth === 1 ? 'run is' : 'runs are'} queued workspace-wide — check the Machines
+              section on the Runtimes page if another machine should be picking them up instead.
             </p>
             <p className="mt-1 text-xs text-red-700/80 dark:text-red-300/80">
               {dispatcher.lastTickAt
                 ? `Last tick ${formatRelativeTime(dispatcher.lastTickAt.toISOString())}.`
-                : 'No tick has ever been recorded.'}{' '}
+                : 'No tick has ever been recorded on this machine.'}{' '}
               Start it with <code className="font-mono">npx tsx scripts/run-dispatcher-loop.ts</code>. Nothing
               here starts it for you — a page render that silently spawned workers would hide this very failure.
             </p>
@@ -93,12 +105,12 @@ export default async function WorkspaceHealthPage({
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <HealthTile
             icon={<Radio size={16} />}
-            label="Dispatcher"
+            label="Dispatcher (this machine)"
             value={dispatcher.stale ? 'Not running' : 'Running'}
             detail={
               dispatcher.lastTickAt
-                ? `Last tick ${formatRelativeTime(dispatcher.lastTickAt.toISOString())}${dispatcher.lastWorkerId ? ` from ${dispatcher.lastWorkerId}` : ''}. Nothing executes while this is stopped.`
-                : 'No tick has ever been recorded on this database. Queued runs will sit untouched until a dispatcher loop is started.'
+                ? `Last tick ${formatRelativeTime(dispatcher.lastTickAt.toISOString())}${dispatcher.lastWorkerId ? ` from ${dispatcher.lastWorkerId}` : ''}. Nothing executes on this machine while this is stopped — see the Machines section on the Runtimes page for others.`
+                : 'No tick has ever been recorded from this machine. Queued runs it should claim will sit untouched until a dispatcher loop is started here.'
             }
           />
           <HealthTile

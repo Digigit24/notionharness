@@ -135,14 +135,18 @@ export async function POST(request: Request) {
   const refusal = await requireInternalCaller(request, 'dispatcher/tick')
   if (refusal) return refusal
   const workerId = `server-${process.pid}`
+  const hostId = currentHostId()
   // Recorded before any work, so a tick that then fails still proves the
   // loop is alive — the heartbeat answers "is anything polling", which is a
   // different question from "did this tick succeed". Fire-and-forget: a
-  // heartbeat write must never be the thing that stops dispatching.
+  // heartbeat write must never be the thing that stops dispatching. Keyed by
+  // hostId (B9.1) so a second machine's heartbeat can never overwrite this
+  // one's row — see dispatcher-health.ts's own header for why a single
+  // shared row stopped being enough the moment host-scoped claiming existed.
   void bestEffort(
-    recordDispatcherTick(workerId),
+    recordDispatcherTick(workerId, hostId),
     'a heartbeat write must never be the thing that stops dispatching',
-    { workerId },
+    { workerId, hostId },
   )
   maybeReapOrphanedWorktrees()
   maybeReclaimWorktrees()
@@ -152,6 +156,6 @@ export async function POST(request: Request) {
     ticksSinceSweep = 0
     recovered = await sweepExpiredLeases()
   }
-  const outcome = await dispatchNextRun(workerId, currentHostId())
+  const outcome = await dispatchNextRun(workerId, hostId)
   return NextResponse.json({ ...outcome, recovered })
 }

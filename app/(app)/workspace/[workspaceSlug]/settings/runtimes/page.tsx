@@ -14,6 +14,7 @@ import { RuntimeProbeButton } from '@/components/runtimes/probe-button'
 import { explainProbeCode } from '@/lib/runtimes/probe-codes'
 import { catalogEntryForCommand, catalogEntryForHomeStrategy } from '@/lib/runtimes/catalog'
 import { currentHostId } from '@/lib/runtimes/host-id'
+import { listDispatcherHeartbeats } from '@/lib/broker'
 import { HostScopeControl } from '@/components/runtimes/host-scope-control'
 import { MachinesSection } from '@/components/runtimes/machines-section'
 import { RuntimeProfileTabs, type RuntimeProfileTab } from '@/components/runtimes/runtime-profile-tabs'
@@ -37,7 +38,7 @@ export default async function RuntimesPage({ params }: { params: Promise<{ works
   if (!workspace) notFound()
 
   const payload = await getPayloadClient()
-  const [profiles, runtimes, agents, hosts] = await Promise.all([
+  const [profiles, runtimes, agents, hosts, heartbeats] = await Promise.all([
     payload.find({
       collection: 'runtime-profiles',
       where: { workspace: { equals: workspace.id } },
@@ -68,6 +69,13 @@ export default async function RuntimesPage({ params }: { params: Promise<{ works
       depth: 0,
       overrideAccess: true,
     }),
+    // B9.3 — every machine's heartbeat in one query (`lib/broker/
+    // dispatcher-health.ts`), not one per row on the Machines section below.
+    // Not scoped to this workspace: heartbeats are per-host, not per-
+    // workspace, and a host can serve more than one — filtered down to
+    // `runtime-hosts` docs that actually belong here when building the
+    // lookup map.
+    listDispatcherHeartbeats().catch(() => []),
   ])
 
   const runtimeByProfileId = new Map<number, Runtime>()
@@ -88,12 +96,17 @@ export default async function RuntimesPage({ params }: { params: Promise<{ works
     if (!profile.hostId) continue
     profileCountByHostKey.set(profile.hostId, (profileCountByHostKey.get(profile.hostId) ?? 0) + 1)
   }
-  const machines = hosts.docs.map((host) => ({
-    id: host.id,
-    displayName: host.displayName,
-    hostKey: host.hostKey,
-    profileCount: profileCountByHostKey.get(host.hostKey) ?? 0,
-  }))
+  const heartbeatByHostKey = new Map(heartbeats.map((beat) => [beat.hostId, beat]))
+  const machines = hosts.docs.map((host) => {
+    const beat = heartbeatByHostKey.get(host.hostKey)
+    return {
+      id: host.id,
+      displayName: host.displayName,
+      hostKey: host.hostKey,
+      profileCount: profileCountByHostKey.get(host.hostKey) ?? 0,
+      heartbeat: beat ? { lastTickAt: beat.lastTickAt.toISOString(), stale: beat.stale } : null,
+    }
+  })
   const hostNameByKey = new Map(hosts.docs.map((host) => [host.hostKey, host.displayName]))
 
   // Grouped by machine for the tab strip below — '' is the "Any machine"

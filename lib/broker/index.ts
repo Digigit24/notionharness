@@ -52,7 +52,7 @@ export {
 } from './usage'
 export type { UsageInput, RunUsageTotals, TaskUsageTotals, WorkspaceUsageRollup } from './usage'
 export { getWorkspaceHealthMetrics } from './health'
-export { getDispatcherHealth, recordDispatcherTick } from './dispatcher-health'
+export { getDispatcherHealth, recordDispatcherTick, listDispatcherHeartbeats } from './dispatcher-health'
 export {
   addTeamMember,
   claimTeamTask,
@@ -116,7 +116,7 @@ export type {
   TeamTaskStatus,
   TeamWorkspaceMode,
 } from './teams'
-export type { DispatcherHealth } from './dispatcher-health'
+export type { DispatcherHealth, HostHeartbeat } from './dispatcher-health'
 export type { WorkspaceHealthMetrics } from './health'
 
 // Chat sessions — the durable Work thread (see `sessions.ts`).
