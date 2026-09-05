@@ -50,9 +50,23 @@ B6.1 Sessions tab on the agent detail page: the same rail filtered to that agent
 B6.2 Show the agent's Hermes profile skills and MCP servers read-only, linking to the settings sections that edit them.
 B6.3 Per-agent spend and run counts over 7 and 30 days, from the rollups that already exist.
 
+## Pillar B9 — Runtime machines: liveness, status, and background start
+
+Host-scoped claiming (`runtime_profiles.host_id`, `lib/broker/runs.ts`'s `claimNextRun`) and the `runtime-hosts` registry (name a machine, one click detects and adds every ACP CLI on its PATH) already ship. Both are claiming discipline: they stop the wrong machine from grabbing work it cannot run. Neither says anything about *state*. This pillar is what closes that gap — three small, additive layers plus one that cannot be automated away.
+
+B9.1 Per-machine heartbeat. `dispatcher_heartbeat` today is a single row keyed to a fixed id — it answers "is *a* dispatcher alive," never "is *this named machine's* dispatcher alive." Change it to one row per `host_id`, written on every tick alongside the claim call that already knows its own host (`currentHostId()`, `app/api/dispatcher/tick/route.ts`). A machine is "online" if its row updated within the last ~60s. This is the one piece everything below depends on — build it first.
+
+B9.2 Agent and profile status derives from the heartbeat, not new bookkeeping. Once B9.1 exists, a runtime profile's status is a lookup: join `host_id` against the heartbeat table's freshness. An agent bound to that profile inherits it automatically. "Machine B went to sleep → its agents show offline" becomes true with no per-agent state to keep in sync — derive it at read time, the same lesson `workspaces.owner`/`members` already taught this codebase once about storing the same fact twice.
+
+B9.3 A Machines status view. The registry (`runtime-hosts`) already has a name and a host key; add the heartbeat freshness as a column — a green or grey dot, "last seen 3m ago" — on the Machines section already shipped on the Runtimes page. This is the "which is mine, which are others, which are actually up right now" view, sitting entirely on top of B9.1/B9.2 with no new concepts.
+
+B9.4 Easy background start, documented rather than automated. This is an OS-level problem, not an app one, and the one item here with no shortcut: a dispatcher kept alive by a foreground terminal dies the moment that terminal closes or the machine sleeps, and there is no single cross-machine "start everywhere" button possible when each machine is a physically separate computer someone has to configure once. What IS buildable: a guided help page (linked from the Machines section) that documents, per OS, exactly how to run the dispatcher as a background service that survives a closed terminal and restarts on crash or reboot (Windows Task Scheduler / `nssm`, `pm2` elsewhere) — copy-pasteable commands, not just prose — plus, where the OS permission model actually allows a web page to ask for it, a toggle to request the machine stay awake (e.g. the Screen Wake Lock API, which keeps the *display* from sleeping and is the closest a browser can get — it cannot prevent OS-level sleep/hibernate, and the page must say that plainly rather than implying a guarantee it can't back). Ship the documented manual path unconditionally; ship the toggle only where the underlying permission genuinely exists, and never let its absence block the page from being useful.
+
 ## Ordering
 
-B1 and B2 first: correctness and honesty before features. B3 next, because git in the conversation is the thing that makes a worktree binding worth having. B4 only after measurement. B5 and B6 last.
+B1 and B2 first: correctness and honesty before features. B3 next, because git in the conversation is the thing that makes a worktree binding worth having. B4 only after measurement. B5 and B6 last. B9 is independent of B1–B6 (it touches the dispatcher's heartbeat and the Runtimes page, not the Work view) and can start anytime — internally, B9.1 before B9.2 before B9.3, since each is a small layer on the last and none of it touches the claiming logic already shipped; B9.4 can happen first of all, since a heartbeat is only interesting once the process sending it can survive someone closing a terminal.
+
+**What not to build for B9:** no polling-based scheme that tries to reach INTO another machine to ask if it's alive — there is no way to contact a machine that isn't the one currently answering requests, and a heartbeat written FROM that machine into the shared database is the only honest signal that exists. No second "status" collection separate from the heartbeat table — derive status at read time from B9.1's freshness, don't store it twice.
 
 ## What the competition proves is worth building
 
