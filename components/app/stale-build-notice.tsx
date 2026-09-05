@@ -2,14 +2,16 @@
 
 import { useEffect, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
+import { toast } from '@/hooks/use-toast'
+import { ToastAction } from '@/components/ui/toast'
 
 /**
  * Detects the one failure this app produces most often in normal use: a tab
  * left open across a deploy or a rebuild-and-restart, still running the
  * previous build's client bundle against a server that no longer has it.
  *
- * It shows up three ways, all of which look like unrelated bugs to whoever
- * is sitting in front of it:
+ * It shows up two ways, both of which look like unrelated bugs to whoever is
+ * sitting in front of it:
  *
  *   - `Failed to find Server Action "40977c84…"` — every Server Action call
  *     fails, so a cover you just picked paints optimistically and then
@@ -17,12 +19,23 @@ import { RefreshCw } from 'lucide-react'
  *     background polls break silently and all at once
  *   - `ChunkLoadError: Loading chunk 326 failed` — a lazily-loaded chunk
  *     whose content-hashed filename no longer exists
- *   - `Failed to construct 'HTMLElement': Illegal constructor` — the subtle
- *     one: a client-side navigation pulled a NEW build's BlockSuite chunk
- *     into a document that already registered the OLD build's custom
- *     elements. A custom-element registry cannot be redefined, so every
- *     editor mount throws from then until the document is reloaded
  *
+ * `Failed to construct 'HTMLElement': Illegal constructor` USED TO be listed
+ * here as a third stale-build signature and is deliberately no longer one —
+ * diagnosed live, it turned out to be a genuinely different bug (BlockSuite's
+ * custom elements re-registering because `BlockSuiteEditor.tsx` has five
+ * separate import sites webpack can split into separate chunks, each with
+ * its own copy of the "register once" guard — see that file's own long
+ * comment on `ensureBlockSuiteEffects`, which fixes it at the root with a
+ * `window`-scoped singleton). Matching it here was actively harmful: it
+ * reloaded the tab, which incidentally cleared the corrupted registry and
+ * made the symptom go away, while mislabelling the cause as a stale build
+ * every time — exactly the kind of thing that would send a future
+ * investigation chasing the wrong fix if the underlying bug ever came back
+ * for an unrelated reason. `lib/blocksuite-duplicate-registration.ts` now
+ * watches for it on its own, separately, and does NOT auto-reload.
+ *
+
  * WHY THIS IS NOW PROACTIVE, NOT JUST A BANNER. The listener-only version
  * had two blind spots, both hit for real: (1) it only saw UNHANDLED
  * rejections, and the code paths that matter most — the cover/icon
@@ -52,7 +65,6 @@ const STALE_PATTERNS = [
   /ChunkLoadError/i,
   /Loading chunk .* failed/i,
   /Loading CSS chunk .* failed/i,
-  /Illegal constructor/i,
 ]
 
 const POLL_MS = 30_000
@@ -60,7 +72,9 @@ const INITIAL_CHECK_MS = 5_000
 const RELOAD_GUARD_KEY = 'nf:stale-build-reloaded-at'
 const RELOAD_GUARD_MS = 90_000
 
-function looksStale(value: unknown): boolean {
+/** Returns the matched text (for the toast's description) when `value` looks
+ * like a stale-build failure, `null` otherwise. */
+function looksStale(value: unknown): string | null {
   const text =
     value instanceof Error
       ? `${value.name}: ${value.message}`
@@ -69,18 +83,60 @@ function looksStale(value: unknown): boolean {
         : value && typeof value === 'object' && 'message' in value
           ? String((value as { message: unknown }).message)
           : ''
-  if (!text) return false
-  return STALE_PATTERNS.some((pattern) => pattern.test(text))
+  if (!text) return null
+  return STALE_PATTERNS.some((pattern) => pattern.test(text)) ? text : null
 }
 
 const listeners = new Set<() => void>()
+const TOAST_GUARD_KEY = 'nf:stale-build-toast-shown-at'
+const TOAST_GUARD_MS = 15_000
+
+/**
+ * Immediate, visible feedback the instant a stale-build signature is
+ * recognised — separate from whether the auto-reload below actually fires.
+ * Without this, the FIRST occurrence reloads the tab almost silently (by
+ * design — D0 says fix it, don't make someone read about it first), which
+ * from the outside looks identical to nothing having happened; and every
+ * occurrence AFTER the reload guard kicks in used to surface only as the
+ * bottom-of-screen pill, easy to miss next to a page that is otherwise
+ * failing in three different ways at once. A toast — the same surface every
+ * other action failure in this app already uses (see page-canvas.tsx's
+ * cover/icon updaters) — says what is happening on sight, whether or not the
+ * page reloads a moment later on its own.
+ *
+ * Deliberately rate-limited per tab: the failures this recognises tend to
+ * arrive in a burst (a poll retrying every few seconds, several Server
+ * Actions in flight at once), and a toast per occurrence would be the exact
+ * noise a person already frustrated by a broken tab does not need.
+ */
+function announce(text: string) {
+  try {
+    const last = Number(window.sessionStorage.getItem(TOAST_GUARD_KEY) ?? 0)
+    if (Date.now() - last < TOAST_GUARD_MS) return
+    window.sessionStorage.setItem(TOAST_GUARD_KEY, String(Date.now()))
+  } catch {
+    // Storage blocked — show it anyway; the worst case is one extra toast.
+  }
+  toast({
+    title: 'This tab is running an older version of the app',
+    description: text,
+    variant: 'destructive',
+    action: (
+      <ToastAction altText="Reload" onClick={() => window.location.replace(window.location.href)}>
+        Reload
+      </ToastAction>
+    ),
+  })
+}
 
 /** For catch blocks that would otherwise swallow the evidence: pass the
  * caught error here and, if it is one of the stale-build signatures, the
  * mounted notice reacts exactly as it would to an unhandled one. Anything
  * else is ignored, so this is safe to call from every catch. */
 export function noteStaleBuildError(reason: unknown): void {
-  if (!looksStale(reason)) return
+  const text = looksStale(reason)
+  if (!text) return
+  announce(text)
   for (const listener of listeners) listener()
 }
 
@@ -120,10 +176,18 @@ export function StaleBuildNotice({ buildId }: { buildId: string }) {
 
     listeners.add(trigger)
     const onRejection = (event: PromiseRejectionEvent) => {
-      if (looksStale(event.reason)) trigger()
+      const text = looksStale(event.reason)
+      if (text) {
+        announce(text)
+        trigger()
+      }
     }
     const onError = (event: ErrorEvent) => {
-      if (looksStale(event.error) || looksStale(event.message)) trigger()
+      const text = looksStale(event.error) ?? looksStale(event.message)
+      if (text) {
+        announce(text)
+        trigger()
+      }
     }
     window.addEventListener('unhandledrejection', onRejection)
     window.addEventListener('error', onError)

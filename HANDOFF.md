@@ -125,4 +125,33 @@ destructive-op confirmations) is done or undone.
 - `npx payload migrate` hangs here. Apply DDL via a tsx script through
   `lib/broker/db.ts`; still write the migration file. `generate:types` works.
 - This Postgres caps at 15 connections and the app's pools sum to it — test
-  scripts fail with `EMAXCONNSESSION` while the server is up.
+  scripts fail with `EMAXCONNSESSION` while the server is up. Every leftover
+  process holding a broker/payload/auth pool open counts against this,
+  including orphaned one-off scripts (`tsx scripts/foo.ts`) nobody stopped —
+  confirmed live 2026-09-06: three stray `run-dispatcher-loop.ts` copies (over
+  a day old) plus two `_probe-cover.ts` debug runs were alone enough to push a
+  different machine's `npm start` into `EMAXCONNSESSION`. Kill orphaned node
+  processes before assuming the pool code itself is wrong.
+- `next build` fails on this Windows host (confirmed 2026-09-06, Next.js
+  15.4.11, better-auth 1.4.22): `EPERM: operation not permitted, scandir
+  'C:\Users\<user>\Application Data'` (or `\Cookies` — which legacy per-user
+  junction fails varies run to run), followed by `Cannot read properties of
+  undefined (reading 'server')` in `FlightClientEntryPlugin.createActionAssets`
+  and `Build failed because of webpack errors`. Reproduces on a clean,
+  fully-committed tree with zero uncommitted changes — NOT caused by any
+  application code change. Isolated to `better-auth`'s Next.js integration
+  (`app/api/auth/[...all]/route.ts`'s `toNextJsHandler`): Next's build-time
+  dependency tracer walks that route's module graph and, on this Windows
+  install specifically, ends up enumerating the user's home directory,
+  hitting a legacy XP-era junction (`Application Data`, `Cookies`, etc.)
+  Windows refuses to list. Confirmed via
+  https://github.com/better-auth/better-auth/issues/3626 (identical symptom,
+  same root cause, no upstream fix as of that issue's closure). Ruled out:
+  `withPayload` (fails identically with it removed), webpack's persistent
+  cache (fails identically with `config.cache = false`), and
+  `outputFileTracingRoot` (correctly resolves to the project directory,
+  verified live). `next dev` is unaffected — the trace-collection step this
+  hits is build-only — so use `npm run dev` for local verification until this
+  has a real fix or workaround. Do not re-diagnose this as a code regression
+  without first checking whether it reproduces on a clean `main` with no
+  uncommitted changes, which it does.

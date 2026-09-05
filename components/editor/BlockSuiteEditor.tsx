@@ -23,6 +23,7 @@ import '@/components/editor/agent-thread/block-anchored-thread'
 import type { AffineEditorContainer } from '@/lib/blocksuite-presets'
 import type { Doc } from '@/lib/blocksuite-store'
 import { ensureBlockSuiteEffects as loadBlockSuiteEffects } from '@/lib/blocksuite-effects'
+import { watchForDuplicateBlockSuiteRegistration } from '@/lib/blocksuite-duplicate-registration'
 import { loadBlockSuiteRuntime } from '@/lib/blocksuite-runtime'
 import type { PageProvenanceMap } from '@/lib/provenance'
 import { useBlockProvenanceHover, BlockProvenanceChip } from '@/components/editor/provenance/use-block-provenance-hover'
@@ -40,27 +41,98 @@ const EMPTY_PROVENANCE: PageProvenanceMap = {}
 // own status poll; cheap (one small indexed query) even when nothing is pending.
 const SUGGESTIONS_POLL_MS = 4000
 
-let blockSuiteEffectsReady: Promise<void> | null = null
+/**
+ * BlockSuite's custom elements can only be registered once per page, in the
+ * browser — `customElements.define(tag, Class)` throws `NotSupportedError`
+ * on a second call for the same tag, and every one of the vendored `effects()`
+ * functions this calls into (`@blocksuite/blocks/effects`,
+ * `@blocksuite/presets/effects`, and this app's own five block-level
+ * `effects.ts` files) calls `customElements.define` unconditionally, with no
+ * `customElements.get(tag)` guard of its own.
+ *
+ * WHY A MODULE-LEVEL GUARD WAS NOT ENOUGH — diagnosed live, not theorised:
+ * this component has FIVE separate import sites (`page-canvas.tsx` and
+ * `canvas-pane.tsx` via `next/dynamic`, plus static imports in
+ * `artifact-panel.tsx`, `task-work-tab.tsx`, and
+ * `native-database/record-detail-note.tsx`). Webpack is free to place each
+ * one in its OWN chunk rather than sharing one — confirmed by two crash
+ * reports naming DIFFERENT top-level chunk hashes for the exact same stack
+ * shape. Each chunk that contains a copy of this module gets its OWN copy of
+ * a module-level `let`, so a session that opens the editor via a second entry
+ * point (e.g. a regular page, then a row's record-detail note) loads a
+ * SECOND, independent copy that has never heard of the first — and calls
+ * `effects()` again.
+ *
+ * THE ACTUAL FAILURE SHAPE THIS PRODUCES, which is why it looked unrelated to
+ * "an editor mounted twice": `customElements.define` calls inside a vendored
+ * `effects()` run sequentially with no try/catch between them. The first
+ * duplicate tag name throws and aborts that call, so every tag AFTER it in
+ * that function's list never gets defined at all. Minutes later, when
+ * BlockSuite tries to construct ONE OF THOSE never-registered classes (e.g.
+ * opening a different block type, or a property's config popup), the browser
+ * refuses to run a bare `new` on an HTMLElement subclass that was never
+ * upgraded through the custom-elements registry — `TypeError: Failed to
+ * construct 'HTMLElement': Illegal constructor`, thrown deep inside Lit's own
+ * render path, uncaught by anything this component's own try/catch can see
+ * (that surrounds the FIRST `ensureBlockSuiteEffects()` call, which already
+ * resolved successfully — this failure happens later, from unrelated code).
+ *
+ * THE FIX: a `window`-scoped singleton, checked and diagnosed at every call
+ * site's request rather than assumed. `window` is the one thing every chunk
+ * copy of this module actually shares.
+ */
+declare global {
+  interface Window {
+    __blockSuiteEffectsPromise?: Promise<void>
+  }
+}
 
-// BlockSuite's custom elements can only be registered once per page, in the browser.
-function ensureBlockSuiteEffects() {
-  if (!blockSuiteEffectsReady) {
-    blockSuiteEffectsReady = Promise.all([
-      loadBlockSuiteEffects(),
-      import('@/components/editor/blocks/native-database/effects'),
-      import('@/components/editor/blocks/run-card/effects'),
-      import('@/components/editor/blocks/task/effects'),
-      import('@/components/editor/blocks/agent-session/effects'),
-      import('@/components/editor/mentions/effects'),
-    ]).then(([, nativeDatabaseModule, runCardModule, taskModule, agentSessionModule, mentionsModule]) => {
+function ensureBlockSuiteEffects(): Promise<void> {
+  if (typeof window === 'undefined') {
+    // SSR guard only — this function is only ever called from the mount
+    // effect below, which never runs on the server, but the module itself
+    // can still be evaluated there.
+    return Promise.resolve()
+  }
+  watchForDuplicateBlockSuiteRegistration()
+  if (window.__blockSuiteEffectsPromise) {
+    console.info('[BlockSuiteEditor] custom elements already registered by an earlier mount (or another chunk copy of this module) — reusing the same promise, not re-registering.')
+    return window.__blockSuiteEffectsPromise
+  }
+  console.info('[BlockSuiteEditor] registering BlockSuite custom elements for the first time this page load.')
+  window.__blockSuiteEffectsPromise = Promise.all([
+    loadBlockSuiteEffects(),
+    import('@/components/editor/blocks/native-database/effects'),
+    import('@/components/editor/blocks/run-card/effects'),
+    import('@/components/editor/blocks/task/effects'),
+    import('@/components/editor/blocks/agent-session/effects'),
+    import('@/components/editor/mentions/effects'),
+  ])
+    .then(([, nativeDatabaseModule, runCardModule, taskModule, agentSessionModule, mentionsModule]) => {
       nativeDatabaseModule.effects()
       runCardModule.effects()
       taskModule.effects()
       agentSessionModule.effects()
       mentionsModule.effects()
+      console.info('[BlockSuiteEditor] custom element registration complete.')
     })
-  }
-  return blockSuiteEffectsReady
+    .catch((err) => {
+      // Reset the singleton on failure — an early return here would
+      // otherwise leave every later mount permanently believing
+      // registration is "in flight" against a promise that already
+      // rejected, silently breaking the editor for the rest of the tab's
+      // life with no further attempt and no visible reason why.
+      window.__blockSuiteEffectsPromise = undefined
+      console.error(
+        '[BlockSuiteEditor] custom element registration failed. If this names a specific tag as already defined, ' +
+          'a duplicate registration slipped past the window-level guard above — that is this exact bug, not a ' +
+          'stale build. Every block type registered AFTER the failing line in whichever effects() call threw is ' +
+          'now missing from the custom-elements registry; constructing one later will throw "Illegal constructor".',
+        err,
+      )
+      throw err
+    })
+  return window.__blockSuiteEffectsPromise
 }
 
 function base64ToUpdate(base64: string): Uint8Array {
