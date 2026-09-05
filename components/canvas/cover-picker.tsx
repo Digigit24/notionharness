@@ -4,6 +4,7 @@ import { useRef, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { PopoverMenu } from '@/components/ui/popover-menu'
 import { toast } from '@/hooks/use-toast'
+import { noteStaleBuildError } from '@/components/app/stale-build-notice'
 import { unwrap } from '@/lib/failures'
 import { uploadMediaAction } from '@/app/api/media/actions'
 
@@ -59,6 +60,7 @@ export function CoverPicker({
       const uploaded = unwrap(await uploadMediaAction(formData))
       onSelect(`media:${uploaded.id}`)
     } catch (err) {
+      noteStaleBuildError(err)
       toast({
         title: "Couldn't upload that image",
         description: err instanceof Error ? err.message : undefined,

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Check, X } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { noteStaleBuildError } from '@/components/app/stale-build-notice'
 import { acceptSuggestionRun, listPendingSuggestionsForPage, rejectSuggestionRun } from '@/app/(app)/actions'
 
 const POLL_MS = 4000
@@ -33,8 +34,13 @@ export function SuggestionBar({ pageId }: { pageId: number }) {
     try {
       const next = await listPendingSuggestionsForPage(pageId)
       setSuggestions(next)
-    } catch {
-      // A later poll retries; a transient failure here must never break editing.
+    } catch (err) {
+      // A later poll retries; a transient failure here must never break
+      // editing. But a STALE-BUILD failure is not transient — this poll fires
+      // every four seconds with no user action, which makes it the earliest
+      // and most reliable witness a tab has outlived its build; reported so
+      // the notice can act on it instead of it dying quietly here.
+      noteStaleBuildError(err)
     }
   }, [pageId])
 

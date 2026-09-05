@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Lock, LockOpen, Maximize2, Minimize2, MoreHorizontal, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { toast } from '@/hooks/use-toast'
+import { noteStaleBuildError } from '@/components/app/stale-build-notice'
 import { PopoverMenu } from '@/components/ui/popover-menu'
 import { PaneBoundary } from '@/components/ui/pane-boundary'
 import { Breadcrumbs } from '@/components/nav/breadcrumbs'
@@ -128,6 +129,7 @@ export function PageCanvas({
     try {
       await setPageIcon(page.id, workspace.slug, next)
     } catch (err) {
+      noteStaleBuildError(err)
       setIcon(previous)
       // A silent revert here is indistinguishable from "nothing happened" —
       // the exact failure a person watching their own icon flash and vanish
@@ -150,6 +152,7 @@ export function PageCanvas({
     try {
       await setPageCover(page.id, workspace.slug, next)
     } catch (err) {
+      noteStaleBuildError(err)
       setCoverImage(previous)
       toast({
         title: "Couldn't update the cover",
