@@ -6,6 +6,9 @@
 // Teable-connected alternative with the same native look exists, offering
 // the disconnected stock ones just re-creates the original confusion.
 
+import type { TemplateResult } from 'lit'
+import { databaseIcon, tableIcon } from '../../slash-commands/slash-icons'
+
 // User-facing name deliberately avoids "Teable" — the backing engine is an
 // implementation detail (Notion never exposes its own backing store's name
 // either). Code-level identifiers (flavour, file names) keep it for clarity.
@@ -35,6 +38,7 @@ interface SlashMenuActionItem {
   name: string
   description?: string
   alias?: string[]
+  icon?: TemplateResult
   action: (ctx: SlashMenuActionContext) => void
 }
 
@@ -53,6 +57,7 @@ function pushItem(widget: SlashMenuWidgetLike) {
     const item: SlashMenuActionItem = {
       name: ITEM_NAME,
       description: 'Add a database with table and board views',
+      icon: databaseIcon,
       action: ({ rootComponent, model }) => {
         const parentModel = rootComponent.doc.getParent(model)
         if (!parentModel) return
@@ -81,6 +86,7 @@ function pushItem(widget: SlashMenuWidgetLike) {
     const item: SlashMenuActionItem = {
       name: TABLE_ITEM_NAME,
       description: "Insert a live view of this workspace's tasks",
+      icon: tableIcon,
       alias: ['table', 'tasks table'],
       action: ({ rootComponent, model }) => {
         const parentModel = rootComponent.doc.getParent(model)

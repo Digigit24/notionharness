@@ -2,7 +2,9 @@
 // file's comment for why: no clean extension point for the slash menu in
 // this BlockSuite version).
 
+import type { TemplateResult } from 'lit'
 import { createQuickTask } from '@/app/(app)/workspace/[workspaceSlug]/tasks/actions'
+import { taskIcon } from '../../slash-commands/slash-icons'
 
 const ITEM_NAME = 'Task'
 
@@ -23,6 +25,7 @@ interface SlashMenuActionItem {
   name: string
   description?: string
   alias?: string[]
+  icon?: TemplateResult
   action: (ctx: SlashMenuActionContext) => void | Promise<void>
 }
 
@@ -52,6 +55,7 @@ function pushItem(widget: SlashMenuWidgetLike) {
     name: ITEM_NAME,
     description: 'Track work with a real task — assignee, status, linked to the tasks board',
     alias: ['todo', 'to-do'],
+    icon: taskIcon,
     action: async ({ rootComponent, model }) => {
       const parentModel = rootComponent.doc.getParent(model)
       if (!parentModel) return

@@ -11,6 +11,7 @@
 // block: `/ask`, `/run`, `/summarise` (all page-scoped agent actions) and
 // `/agent` (a mention shortcut).
 
+import type { TemplateResult } from 'lit'
 import { enqueuePageRun } from '@/app/(app)/actions'
 import { insertContent, getInlineEditorByModel } from '@/lib/blocksuite-affine-components'
 import type { EditorHost } from '@/lib/blocksuite-block-std'
@@ -18,6 +19,7 @@ import type { BlockModel, Doc } from '@/lib/blocksuite-store'
 import { pageIdFromDoc } from '../agent-thread/page-context'
 import { resolveAgent } from '../agent-thread/resolve-agent'
 import { getPagePanelOpener } from '../agent-thread/registry'
+import { askAgentIcon, runAgentIcon, summariseIcon, mentionAgentIcon } from './slash-icons'
 
 interface SlashMenuActionContext {
   rootComponent: {
@@ -41,6 +43,7 @@ interface SlashMenuActionItem {
   name: string
   description?: string
   alias?: string[]
+  icon?: TemplateResult
   action: (ctx: SlashMenuActionContext) => void | Promise<void>
 }
 
@@ -93,6 +96,7 @@ function pushItems(widget: SlashMenuWidgetLike) {
     widget.config.items.push({
       name: 'Ask agent',
       description: 'Open the agent panel for this page',
+      icon: askAgentIcon,
       action: (ctx) => {
         const { rootComponent } = ctx
         const { doc } = rootComponent
@@ -123,6 +127,7 @@ function pushItems(widget: SlashMenuWidgetLike) {
       name: 'Run agent',
       description: 'Start an agent run on this page',
       alias: ['run'],
+      icon: runAgentIcon,
       action: (ctx) => startPageRun(ctx, 'Continue working on this page based on its current content.'),
     } satisfies SlashMenuActionItem)
   }
@@ -132,6 +137,7 @@ function pushItems(widget: SlashMenuWidgetLike) {
       name: 'Summarise page',
       description: 'Start an agent run that summarises this page',
       alias: ['summarize', 'summarise', 'summary'],
+      icon: summariseIcon,
       action: (ctx) => startPageRun(ctx, 'Summarise this page.'),
     } satisfies SlashMenuActionItem)
   }
@@ -141,6 +147,7 @@ function pushItems(widget: SlashMenuWidgetLike) {
       name: 'Mention agent',
       description: 'Mention a person or agent — reuses the @ menu',
       alias: ['agent'],
+      icon: mentionAgentIcon,
       // Exactly BlockSuite's own "Linked Doc" slash item's trick (see
       // `@blocksuite/blocks`'s `slash-menu/config.js`): insert the `@`
       // trigger character at the cursor, then open the widget it triggers.
