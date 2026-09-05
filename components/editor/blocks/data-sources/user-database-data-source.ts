@@ -35,6 +35,26 @@ async function userDbFetch(path: string, init?: RequestInit) {
 }
 
 /**
+ * A locally-unique field id — never a security-sensitive value, just a key
+ * BlockSuite uses to address a property. `crypto.randomUUID()` throws
+ * "crypto.randomUUID is not a function" outside a secure context (HTTPS or
+ * localhost) — reproduced live over a plain-HTTP Tailscale address, where
+ * `window.crypto` exists but lacks the `randomUUID` method the spec only
+ * exposes to secure contexts. The fallback below is an ordinary RFC-4122-
+ * shaped v4 UUID built from `Math.random()`, which is exactly as suitable
+ * here as the real thing — this app never uses these ids for anything that
+ * needs cryptographic unpredictability.
+ */
+function randomFieldSuffix(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0
+    const v = c === 'x' ? r : (r & 0x3) | 0x8
+    return v.toString(16)
+  })
+}
+
+/**
  * Defensive normalization for a legacy field shape found live in the shared
  * dev DB (database id 5's "QA2 Database"): a relation field stored its
  * config under a `data` key instead of `options` — `{id, data: {...},
@@ -139,7 +159,7 @@ export class UserDatabaseDataSource extends GenericDataSource {
     const source = new UserDatabaseDataSource(null, workspaceId)
     source._databaseName = name
     source._creating$.value = true
-    const primaryFieldId = `field-${crypto.randomUUID()}`
+    const primaryFieldId = `field-${randomFieldSuffix()}`
     source._fields.value = [{ id: primaryFieldId, name: 'Name', type: 'text', isPrimary: true }]
     source._records.value = []
     // This data source deliberately never calls `refresh()` (the whole point
@@ -726,7 +746,7 @@ export class UserDatabaseDataSource extends GenericDataSource {
     const targetDatabaseId = field.options.targetDatabaseId
 
     if (enabled && !field.options.mirrorFieldId) {
-      const mirrorFieldId = `field-${crypto.randomUUID()}`
+      const mirrorFieldId = `field-${randomFieldSuffix()}`
       const target = new UserDatabaseDataSource(targetDatabaseId, this._workspaceId)
       await target.refresh()
       const mirrorField: GenericField = {
@@ -852,7 +872,7 @@ export class UserDatabaseDataSource extends GenericDataSource {
   }
 
   propertyAdd(_insertToPosition: InsertToPosition, type?: string): string {
-    const id = `field-${crypto.randomUUID()}`
+    const id = `field-${randomFieldSuffix()}`
     const newField: GenericField = { id, name: this._newPropertyName(), type: type ?? 'text' }
     this._fields.value = [...this._fields.value, newField]
     this._persistFields()
@@ -877,7 +897,7 @@ export class UserDatabaseDataSource extends GenericDataSource {
   propertyDuplicate(propertyId: string): string {
     const field = this._fieldById(propertyId)
     if (!field) throw new Error(`Property ${propertyId} not found`)
-    const id = `field-${crypto.randomUUID()}`
+    const id = `field-${randomFieldSuffix()}`
     const index = this._fields.value.findIndex((f) => f.id === propertyId)
     const copy: GenericField = { ...field, id, name: `${field.name} copy` }
     const list = [...this._fields.value]

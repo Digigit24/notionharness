@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Lock, LockOpen, Maximize2, Minimize2, MoreHorizontal, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/cn'
+import { toast } from '@/hooks/use-toast'
 import { PopoverMenu } from '@/components/ui/popover-menu'
 import { PaneBoundary } from '@/components/ui/pane-boundary'
 import { Breadcrumbs } from '@/components/nav/breadcrumbs'
@@ -126,8 +127,20 @@ export function PageCanvas({
     setIcon(next)
     try {
       await setPageIcon(page.id, workspace.slug, next)
-    } catch {
+    } catch (err) {
       setIcon(previous)
+      // A silent revert here is indistinguishable from "nothing happened" —
+      // the exact failure a person watching their own icon flash and vanish
+      // needs to see, not swallow. A thrown Next.js server-action error has
+      // no readable `.message` in production (only a `digest`), so the
+      // fallback line names the one cause that produces exactly that: this
+      // page was open in a tab from before the last deploy/restart.
+      toast({
+        title: "Couldn't update the icon",
+        description:
+          err instanceof Error && err.message ? err.message : 'Try reloading the page — it may be running an older version of the app.',
+        variant: 'destructive',
+      })
     }
   }
 
@@ -136,8 +149,14 @@ export function PageCanvas({
     setCoverImage(next)
     try {
       await setPageCover(page.id, workspace.slug, next)
-    } catch {
+    } catch (err) {
       setCoverImage(previous)
+      toast({
+        title: "Couldn't update the cover",
+        description:
+          err instanceof Error && err.message ? err.message : 'Try reloading the page — it may be running an older version of the app.',
+        variant: 'destructive',
+      })
     }
   }
 
