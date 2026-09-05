@@ -139,19 +139,48 @@ destructive-op confirmations) is done or undone.
   undefined (reading 'server')` in `FlightClientEntryPlugin.createActionAssets`
   and `Build failed because of webpack errors`. Reproduces on a clean,
   fully-committed tree with zero uncommitted changes — NOT caused by any
-  application code change. Isolated to `better-auth`'s Next.js integration
-  (`app/api/auth/[...all]/route.ts`'s `toNextJsHandler`): Next's build-time
-  dependency tracer walks that route's module graph and, on this Windows
-  install specifically, ends up enumerating the user's home directory,
-  hitting a legacy XP-era junction (`Application Data`, `Cookies`, etc.)
-  Windows refuses to list. Confirmed via
-  https://github.com/better-auth/better-auth/issues/3626 (identical symptom,
-  same root cause, no upstream fix as of that issue's closure). Ruled out:
-  `withPayload` (fails identically with it removed), webpack's persistent
-  cache (fails identically with `config.cache = false`), and
-  `outputFileTracingRoot` (correctly resolves to the project directory,
-  verified live). `next dev` is unaffected — the trace-collection step this
-  hits is build-only — so use `npm run dev` for local verification until this
-  has a real fix or workaround. Do not re-diagnose this as a code regression
-  without first checking whether it reproduces on a clean `main` with no
-  uncommitted changes, which it does.
+  application code change. `next dev` is unaffected, so use `npm run dev` for
+  local verification until this has a real fix or workaround. Do not
+  re-diagnose this as a code regression without first checking whether it
+  reproduces on a clean `main` with no uncommitted changes, which it does.
+  **The crash is inside webpack's own compilation** (`FlightClientEntryPlugin`
+  runs in `Compilation.hooks.processAssets`, before any output-file-tracing
+  step), not in a separate tracing pass — confirmed 2026-09-08 by testing
+  `output: 'standalone'` (a different post-compilation tracing code path in
+  some Next versions), which changed nothing.
+
+  **CORRECTION (2026-09-08): better-auth is NOT the cause — the entry below
+  this line, from 2026-09-06, was wrong.** It matched the symptom in
+  https://github.com/better-auth/better-auth/issues/3626 and reasoned by
+  analogy rather than testing the actual claim on this repo. Direct test: with
+  `lib/auth.ts` replaced by a stub with zero `better-auth` import anywhere
+  reachable in the build (not just the one route — `lib/session.ts` and
+  `app/api/users/route.ts` also import it, so the route alone wasn't a valid
+  test the first time), `next build` still fails with the byte-identical
+  error. Also ruled out this session: better-auth bumped to the latest 1.7.2
+  (needs a one-line type-only fix to `lib/auth.ts`'s global-cache declaration
+  for its stricter generics — `ReturnType<typeof betterAuth>` →
+  `ReturnType<typeof betterAuth<any>>` — unrelated to the build bug, not
+  applied, since the upgrade didn't fix anything and isn't worth the API
+  churn alone); Next.js bumped to the latest stable 15.x (15.5.25) — same
+  failure, reverted. Next 16.1.0+ would unlock Turbopack production builds
+  (a different, non-webpack action-manifest mechanism that might sidestep
+  this specific bug entirely) but `@payloadcms/next/withPayload` itself
+  refuses `next build --turbopack` below Next 16.1.0, and jumping two major
+  Next versions to test a hypothesis is out of scope for a build-environment
+  fix — worth trying deliberately later as its own task, not stumbled into.
+
+  **What this means:** the real trigger is something else in this build's
+  dependency graph, or a Windows/user-profile-specific bug independent of
+  this codebase's choices entirely (every experiment that removes a specific
+  suspect — Payload, better-auth, the webpack cache — leaves the identical
+  crash behind). The next real diagnostic step, not yet done: scaffold a
+  fresh, minimal Next.js 15.4.11 app on this same machine/user profile and
+  see if it alone reproduces the crash — that would tell us definitively
+  whether this is a property of the Windows environment/user profile or of
+  something still present in this specific app's dependency tree.
+  **Recommendation until a real fix lands: ship via `next dev`-based
+  packaging (a process manager wrapping `npm run dev`, not a production
+  build) for any Windows-hosted deployment on this profile** — the earlier
+  entry's "use `npm run dev` for local verification" undersold this; right
+  now it's the only thing that reliably runs at all on this host.
