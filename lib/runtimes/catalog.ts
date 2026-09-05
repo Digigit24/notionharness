@@ -143,11 +143,11 @@ export const RUNTIME_CATALOG: readonly RuntimeCatalogEntry[] = [
     acpVia: 'adapter',
     commandConfidence: 'documented',
     source:
-      "Zed's adapter package, @zed-industries/claude-agent-acp: installed and its bin resolved on PATH on the dev machine. No turn has been run through it from this codebase yet — probe after adding.",
-    installCommand: 'npm install -g @zed-industries/claude-agent-acp',
+      "@agentclientprotocol/claude-agent-acp — the adapter now lives under the protocol's own org, like Codex's; the installed bin identified itself by that name in a live probe on the dev machine (R15, version 0.73.0). No turn has been run through it from this codebase yet — probe after adding.",
+    installCommand: 'npm install -g @agentclientprotocol/claude-agent-acp',
     signInCommand: 'claude login',
     apiKeyEnvVar: 'ANTHROPIC_API_KEY',
-    docsUrl: 'https://github.com/zed-industries/claude-code-acp',
+    docsUrl: 'https://www.npmjs.com/package/@agentclientprotocol/claude-agent-acp',
     home: RUNTIME_HOME_LAYOUTS['claude-home'].layout,
   },
   {
