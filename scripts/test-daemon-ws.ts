@@ -29,8 +29,10 @@ const channel = new ControlChannel({
   heartbeatMs: 1_000,
 })
 channel.start()
-await new Promise(resolve => setTimeout(resolve, 100))
+await new Promise(resolve => setTimeout(resolve, 200))
 channel.sendRunEvent({ runId: 'run-1', seq: 1, event: { type: 'terminal', id: 'term-1', chunk: 'hello' } } satisfies RunEventEnvelope)
+// WebSocket send is asynchronous; wait a bit for the message to be transmitted
+await new Promise(resolve => setTimeout(resolve, 50))
 await Promise.race([reconnected, new Promise((_, reject) => setTimeout(() => reject(new Error('reconnect timeout')), 2_000))])
 if (!sawEvent) throw new Error('RunEvent was not framed and received')
 channel.stop()
