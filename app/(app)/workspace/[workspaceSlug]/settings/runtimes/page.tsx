@@ -16,6 +16,7 @@ import { catalogEntryForCommand, catalogEntryForHomeStrategy } from '@/lib/runti
 import { currentHostId } from '@/lib/runtimes/host-id'
 import { HostScopeControl } from '@/components/runtimes/host-scope-control'
 import { MachinesSection } from '@/components/runtimes/machines-section'
+import { RuntimeProfileTabs, type RuntimeProfileTab } from '@/components/runtimes/runtime-profile-tabs'
 import { formatRelativeTime } from '@/lib/relative-time'
 import type { Agent, Runtime, RuntimeProfile } from '@/payload-types'
 
@@ -95,6 +96,42 @@ export default async function RuntimesPage({ params }: { params: Promise<{ works
   }))
   const hostNameByKey = new Map(hosts.docs.map((host) => [host.hostKey, host.displayName]))
 
+  // Grouped by machine for the tab strip below — '' is the "Any machine"
+  // group (host_id NULL: every profile from before machines existed, or one
+  // deliberately widened via HostScopeControl). Only rendered as tabs at all
+  // when there is more than one group; a single machine (or nothing
+  // registered yet) keeps the plain list it always had.
+  const profilesByGroupKey = new Map<string, RuntimeProfile[]>()
+  for (const profile of profiles.docs) {
+    const key = profile.hostId ?? ''
+    const list = profilesByGroupKey.get(key) ?? []
+    list.push(profile)
+    profilesByGroupKey.set(key, list)
+  }
+  const thisHostId = currentHostId()
+  const profileTabs: RuntimeProfileTab[] = [
+    ...machines.map((m) => ({
+      key: m.hostKey,
+      label: m.displayName,
+      count: profilesByGroupKey.get(m.hostKey)?.length ?? 0,
+      isThisMachine: m.hostKey === thisHostId,
+    })),
+    // "Any machine" only shown as its own tab when something actually lives
+    // there — an empty tab nobody can ever populate (this widening only
+    // happens per-profile, from a row that already has a host) is noise.
+    ...(profilesByGroupKey.get('')?.length
+      ? [{ key: '', label: 'Any machine', count: profilesByGroupKey.get('')!.length, isThisMachine: false }]
+      : []),
+  ]
+  // This machine's own tab wins when it has one; otherwise "Any machine" —
+  // NOT an arbitrary other machine's tab, which would hide profiles nobody
+  // on this browser can act on behind a tab that looks selected by chance.
+  const defaultTabKey = profileTabs.some((t) => t.key === thisHostId)
+    ? thisHostId
+    : profileTabs.some((t) => t.key === '')
+      ? ''
+      : (profileTabs[0]?.key ?? '')
+
   return (
     <main className="w-full px-5 py-8">
       <div className="mb-6 flex items-start justify-between gap-4">
@@ -132,6 +169,29 @@ export default async function RuntimesPage({ params }: { params: Promise<{ works
 
       {profiles.docs.length === 0 ? (
         <EmptyState icon={<Server />} title="No runtime profiles yet" description="Add one above to get started." />
+      ) : profileTabs.length > 1 ? (
+        <RuntimeProfileTabs
+          tabs={profileTabs}
+          defaultTabKey={defaultTabKey}
+          panels={Object.fromEntries(
+            profileTabs.map((tab) => [
+              tab.key,
+              <ul key={tab.key} className="flex flex-col gap-3">
+                {(profilesByGroupKey.get(tab.key) ?? []).map((profile) => (
+                  <RuntimeRow
+                    key={profile.id}
+                    workspaceSlug={workspace.slug}
+                    profile={profile}
+                    runtime={runtimeByProfileId.get(profile.id) ?? null}
+                    agents={agentsByProfileId.get(profile.id) ?? []}
+                    thisHostId={thisHostId}
+                    otherHostName={profile.hostId ? (hostNameByKey.get(profile.hostId) ?? null) : null}
+                  />
+                ))}
+              </ul>,
+            ]),
+          )}
+        />
       ) : (
         <ul className="flex flex-col gap-3">
           {profiles.docs.map((profile) => (
@@ -141,7 +201,7 @@ export default async function RuntimesPage({ params }: { params: Promise<{ works
               profile={profile}
               runtime={runtimeByProfileId.get(profile.id) ?? null}
               agents={agentsByProfileId.get(profile.id) ?? []}
-              thisHostId={currentHostId()}
+              thisHostId={thisHostId}
               otherHostName={profile.hostId ? (hostNameByKey.get(profile.hostId) ?? null) : null}
             />
           ))}
