@@ -4,8 +4,9 @@ import { revalidatePath } from 'next/cache'
 import { getPayloadClient } from '@/lib/payload'
 import type { RuntimeProfile } from '@/payload-types'
 import { probeAcpRuntime, resolveCommandPath } from '@/lib/runtimes/detect'
-import { CATALOG_HOME_STRATEGIES, RUNTIME_CATALOG, type RuntimeCatalogId } from '@/lib/runtimes/catalog'
+import { CATALOG_HOME_STRATEGIES, RUNTIME_CATALOG, catalogEntryCommandLine, type RuntimeCatalogId } from '@/lib/runtimes/catalog'
 import { currentHostId } from '@/lib/runtimes/host-id'
+import type { RuntimeHost } from '@/payload-types'
 import { getCurrentPayloadUser } from '@/lib/current-user'
 import { guard, raise, type WithFailure } from '@/lib/failures'
 
@@ -111,6 +112,111 @@ export async function detectCatalogRuntimes(): Promise<WithFailure<DetectedRunti
         return { id: entry.id, installed: path !== null, path }
       }),
     )
+  })
+}
+
+/** What "Add this machine" actually did, for the confirmation toast. */
+export interface AddMachineResult {
+  host: RuntimeHost
+  addedCount: number
+  skippedCount: number
+}
+
+/**
+ * The one-click multi-machine onboarding step: name this machine, and give
+ * it a profile for every catalog CLI actually on its PATH.
+ *
+ * Runs entirely against the machine THIS Server Action executes on — there
+ * is no other machine it could mean. `hostKey` is never taken from the
+ * client for the same reason `setRuntimeProfileHost` above refuses one: a
+ * person typing a name for a machine they are not looking at would silently
+ * create profiles nothing can ever claim.
+ *
+ * Upserts the `runtime-hosts` row by `(workspace, hostKey)` rather than
+ * always inserting, so running this again after a rename updates the
+ * existing row instead of creating a duplicate "machine" for the same
+ * physical computer.
+ *
+ * Profile creation is additive and idempotent by command line: a catalog CLI
+ * this host already has a profile for (matched on the exact command string
+ * `createRuntimeProfile` would have stored) is skipped rather than
+ * duplicated, so re-running this after installing one more CLI only adds
+ * that one.
+ */
+export async function addMachine({
+  workspaceId,
+  workspaceSlug,
+  displayName,
+}: {
+  workspaceId: number
+  workspaceSlug: string
+  displayName: string
+}): Promise<WithFailure<AddMachineResult>> {
+  return guard(async () => {
+    const user = await getCurrentPayloadUser()
+    if (!user) raise('unauthenticated', 'You must be logged in.')
+    const trimmedName = displayName.trim()
+    if (!trimmedName) raise('invalid_input', 'Name is required.')
+
+    const hostKey = currentHostId()
+    const payload = await getPayloadClient()
+
+    const existingHost = await payload.find({
+      collection: 'runtime-hosts',
+      where: { workspace: { equals: workspaceId }, hostKey: { equals: hostKey } },
+      limit: 1,
+      overrideAccess: true,
+    })
+    const host = existingHost.docs[0]
+      ? await payload.update({
+          collection: 'runtime-hosts',
+          id: existingHost.docs[0].id,
+          data: { displayName: trimmedName },
+          overrideAccess: true,
+        })
+      : await payload.create({
+          collection: 'runtime-hosts',
+          data: { workspace: workspaceId, displayName: trimmedName, hostKey, addedBy: user.id },
+          overrideAccess: true,
+        })
+
+    const existingProfiles = await payload.find({
+      collection: 'runtime-profiles',
+      where: { workspace: { equals: workspaceId }, hostId: { equals: hostKey } },
+      limit: 200,
+      depth: 0,
+      overrideAccess: true,
+    })
+    const alreadyHave = new Set(existingProfiles.docs.map((p) => p.commandName.trim()))
+
+    let addedCount = 0
+    let skippedCount = 0
+    for (const entry of RUNTIME_CATALOG) {
+      const path = await resolveCommandPath(entry.detectCommand)
+      if (!path) continue
+      const commandLine = catalogEntryCommandLine(entry)
+      if (alreadyHave.has(commandLine.trim())) {
+        skippedCount += 1
+        continue
+      }
+      await payload.create({
+        collection: 'runtime-profiles',
+        data: {
+          workspace: workspaceId,
+          name: `${entry.displayName} (${trimmedName})`,
+          protocolFamily: entry.protocolFamily,
+          commandName: commandLine,
+          homeStrategy: entry.homeStrategy as RuntimeProfile['homeStrategy'],
+          hostId: hostKey,
+          enabled: true,
+        },
+        overrideAccess: true,
+      })
+      addedCount += 1
+    }
+
+    revalidatePath(`/workspace/${workspaceSlug}/settings/runtimes`)
+    return { host, addedCount, skippedCount }
   })
 }
 
@@ -253,6 +359,36 @@ export async function probeRuntimeProfile({
       .findByID({ collection: 'runtime-profiles', id, depth: 0, overrideAccess: true, disableErrors: true })
       .catch(() => null)
     if (!profile) raise('not_found', 'That runtime profile no longer exists.')
+
+    // A profile scoped to a different machine (`lib/broker/runs.ts`'s
+    // `claimNextRun` reads the same `hostId`) has nothing real to spawn from
+    // HERE — the binary this Server Action would try to run only exists on
+    // the machine that profile names. Without this check that spawn attempt
+    // fails ENOENT and reports `command_not_found`, which reads as "go
+    // install it" when the true answer is "you're asking the wrong
+    // computer." Deliberately not persisted to `lastProbeCode` — this is a
+    // fact about who clicked the button just now, not about the runtime
+    // itself, and writing it would clobber the real last-probe result every
+    // other machine's page reads.
+    if (profile.hostId && profile.hostId !== currentHostId()) {
+      const hostRow = await payload.find({
+        collection: 'runtime-hosts',
+        where: {
+          workspace: { equals: typeof profile.workspace === 'number' ? profile.workspace : profile.workspace.id },
+          hostKey: { equals: profile.hostId },
+        },
+        limit: 1,
+        depth: 0,
+        overrideAccess: true,
+      })
+      const hostName = hostRow.docs[0]?.displayName ?? profile.hostId
+      return {
+        code: 'wrong_host',
+        ok: false,
+        detail: `This profile is scoped to "${hostName}". Open the Runtimes page on that machine and probe it from there.`,
+        agentName: null,
+      }
+    }
 
     const args = Array.isArray(profile.fixedArgs)
       ? profile.fixedArgs.filter((a): a is string => typeof a === 'string')

@@ -65,6 +65,12 @@ const EXPLANATIONS: Record<RuntimeProbeCode, ProbeExplanation> = {
     whatToDo:
       'Check that this command supports ACP mode, and that its credentials are already set up so it has nothing to ask for on startup — 20 seconds is well past a cold Node or Python start.',
   },
+  wrong_host: {
+    title: "This machine isn't the one to ask",
+    whatItMeans:
+      "This profile is scoped to a different machine (see the Runtimes page's machine badge on its row), so probing it from here would spawn nothing real and report a false \"not installed\" — not because the binary is missing, but because you're asking the wrong computer.",
+    whatToDo: 'Open the Runtimes page on that machine and probe it from there.',
+  },
 }
 
 /**

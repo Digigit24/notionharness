@@ -23,12 +23,17 @@ export function HostScopeControl({
   profileId,
   hostId: initialHostId,
   thisHostId,
+  otherHostName,
 }: {
   workspaceSlug: string
   profileId: number
   hostId: string | null | undefined
   /** This server's own id (`currentHostId()`), resolved once by the page. */
   thisHostId: string
+  /** The `runtime-hosts` display name for `hostId`, when it names a
+   * different machine that has one — falls back to the raw id (a hostname)
+   * for a profile scoped before that machine was ever named. */
+  otherHostName?: string | null
 }) {
   const [hostId, setHostId] = useState(initialHostId ?? null)
   const { run, pending } = useOptimisticAction<void>()
@@ -48,7 +53,7 @@ export function HostScopeControl({
     return (
       <Badge variant="outline" className="gap-1 text-faint" title="Open the Runtimes page on that machine to change this.">
         <Laptop size={11} />
-        {hostId} only
+        {otherHostName ?? hostId} only
       </Badge>
     )
   }

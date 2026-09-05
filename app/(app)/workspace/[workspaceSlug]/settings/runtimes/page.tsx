@@ -15,6 +15,7 @@ import { explainProbeCode } from '@/lib/runtimes/probe-codes'
 import { catalogEntryForCommand, catalogEntryForHomeStrategy } from '@/lib/runtimes/catalog'
 import { currentHostId } from '@/lib/runtimes/host-id'
 import { HostScopeControl } from '@/components/runtimes/host-scope-control'
+import { MachinesSection } from '@/components/runtimes/machines-section'
 import { formatRelativeTime } from '@/lib/relative-time'
 import type { Agent, Runtime, RuntimeProfile } from '@/payload-types'
 
@@ -35,7 +36,7 @@ export default async function RuntimesPage({ params }: { params: Promise<{ works
   if (!workspace) notFound()
 
   const payload = await getPayloadClient()
-  const [profiles, runtimes, agents] = await Promise.all([
+  const [profiles, runtimes, agents, hosts] = await Promise.all([
     payload.find({
       collection: 'runtime-profiles',
       where: { workspace: { equals: workspace.id } },
@@ -58,6 +59,14 @@ export default async function RuntimesPage({ params }: { params: Promise<{ works
       depth: 0,
       overrideAccess: true,
     }),
+    payload.find({
+      collection: 'runtime-hosts',
+      where: { workspace: { equals: workspace.id } },
+      sort: 'displayName',
+      limit: 100,
+      depth: 0,
+      overrideAccess: true,
+    }),
   ])
 
   const runtimeByProfileId = new Map<number, Runtime>()
@@ -72,6 +81,19 @@ export default async function RuntimesPage({ params }: { params: Promise<{ works
     list.push(agent)
     agentsByProfileId.set(profileId, list)
   }
+
+  const profileCountByHostKey = new Map<string, number>()
+  for (const profile of profiles.docs) {
+    if (!profile.hostId) continue
+    profileCountByHostKey.set(profile.hostId, (profileCountByHostKey.get(profile.hostId) ?? 0) + 1)
+  }
+  const machines = hosts.docs.map((host) => ({
+    id: host.id,
+    displayName: host.displayName,
+    hostKey: host.hostKey,
+    profileCount: profileCountByHostKey.get(host.hostKey) ?? 0,
+  }))
+  const hostNameByKey = new Map(hosts.docs.map((host) => [host.hostKey, host.displayName]))
 
   return (
     <main className="w-full px-5 py-8">
@@ -97,6 +119,13 @@ export default async function RuntimesPage({ params }: { params: Promise<{ works
         </div>
       </div>
 
+      <MachinesSection
+        workspaceId={workspace.id}
+        workspaceSlug={workspace.slug}
+        machines={machines}
+        thisHostKey={currentHostId()}
+      />
+
       <div className="mb-4">
         <AddRuntimeProfileForm workspaceId={workspace.id} workspaceSlug={workspace.slug} existingProfiles={profiles.docs} />
       </div>
@@ -113,6 +142,7 @@ export default async function RuntimesPage({ params }: { params: Promise<{ works
               runtime={runtimeByProfileId.get(profile.id) ?? null}
               agents={agentsByProfileId.get(profile.id) ?? []}
               thisHostId={currentHostId()}
+              otherHostName={profile.hostId ? (hostNameByKey.get(profile.hostId) ?? null) : null}
             />
           ))}
         </ul>
@@ -127,12 +157,14 @@ function RuntimeRow({
   runtime,
   agents,
   thisHostId,
+  otherHostName,
 }: {
   workspaceSlug: string
   profile: RuntimeProfile
   runtime: Runtime | null
   agents: Agent[]
   thisHostId: string
+  otherHostName: string | null
 }) {
   const status = runtime?.status ?? 'unknown'
   const handshake = (profile.handshake as AgentHandshake | null) ?? null
@@ -180,6 +212,7 @@ function RuntimeRow({
               profileId={profile.id}
               hostId={profile.hostId}
               thisHostId={thisHostId}
+              otherHostName={otherHostName}
             />
           </div>
           <span className="text-xs text-faint">

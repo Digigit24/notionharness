@@ -21,6 +21,7 @@ import { Notifications } from './collections/Notifications'
 import { Artifacts } from './collections/Artifacts'
 import { Plugins } from './collections/Plugins'
 import { RuntimeProfiles } from './collections/RuntimeProfiles'
+import { RuntimeHosts } from './collections/RuntimeHosts'
 import { Runtimes } from './collections/Runtimes'
 import { Agents } from './collections/Agents'
 import { Approvals } from './collections/Approvals'
@@ -63,6 +64,7 @@ export default buildConfig({
     Artifacts,
     Plugins,
     RuntimeProfiles,
+    RuntimeHosts,
     Runtimes,
     Agents,
     Approvals,

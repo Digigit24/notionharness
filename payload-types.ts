@@ -83,6 +83,7 @@ export interface Config {
     artifacts: Artifact;
     plugins: Plugin;
     'runtime-profiles': RuntimeProfile;
+    'runtime-hosts': RuntimeHost;
     runtimes: Runtime;
     agents: Agent;
     approvals: Approval;
@@ -119,6 +120,7 @@ export interface Config {
     artifacts: ArtifactsSelect<false> | ArtifactsSelect<true>;
     plugins: PluginsSelect<false> | PluginsSelect<true>;
     'runtime-profiles': RuntimeProfilesSelect<false> | RuntimeProfilesSelect<true>;
+    'runtime-hosts': RuntimeHostsSelect<false> | RuntimeHostsSelect<true>;
     runtimes: RuntimesSelect<false> | RuntimesSelect<true>;
     agents: AgentsSelect<false> | AgentsSelect<true>;
     approvals: ApprovalsSelect<false> | ApprovalsSelect<true>;
@@ -747,6 +749,19 @@ export interface Plugin {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "runtime-hosts".
+ */
+export interface RuntimeHost {
+  id: number;
+  workspace: number | Workspace;
+  displayName: string;
+  hostKey: string;
+  addedBy?: (number | null) | User;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "runtimes".
  */
 export interface Runtime {
@@ -1200,6 +1215,10 @@ export interface PayloadLockedDocument {
         value: number | RuntimeProfile;
       } | null)
     | ({
+        relationTo: 'runtime-hosts';
+        value: number | RuntimeHost;
+      } | null)
+    | ({
         relationTo: 'runtimes';
         value: number | Runtime;
       } | null)
@@ -1546,6 +1565,18 @@ export interface RuntimeProfilesSelect<T extends boolean = true> {
   lastProbeCode?: T;
   lastProbeDetail?: T;
   lastProbedAt?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "runtime-hosts_select".
+ */
+export interface RuntimeHostsSelect<T extends boolean = true> {
+  workspace?: T;
+  displayName?: T;
+  hostKey?: T;
+  addedBy?: T;
   updatedAt?: T;
   createdAt?: T;
 }

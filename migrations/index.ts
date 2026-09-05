@@ -3,6 +3,7 @@ import * as migration_20260904_215000_activity_access_entity_types from './20260
 import * as migration_20260905_020000_tasks_channel_thread_root_id from './20260905_020000_tasks_channel_thread_root_id';
 import * as migration_20260906_100000_notification_sound_on_approvals from './20260906_100000_notification_sound_on_approvals';
 import * as migration_20260906_120000_runtime_profiles_host_id from './20260906_120000_runtime_profiles_host_id';
+import * as migration_20260906_130000_runtime_hosts from './20260906_130000_runtime_hosts';
 import * as migration_20260904_200000_access_and_connectors from './20260904_200000_access_and_connectors';
 import * as migration_20260904_210000_activity_workspace_entity_type from './20260904_210000_activity_workspace_entity_type';
 import * as migration_20260904_190000_runtime_default_session_config from './20260904_190000_runtime_default_session_config';
@@ -173,5 +174,10 @@ export const migrations = [
     up: migration_20260906_120000_runtime_profiles_host_id.up,
     down: migration_20260906_120000_runtime_profiles_host_id.down,
     name: '20260906_120000_runtime_profiles_host_id'
+  },
+  {
+    up: migration_20260906_130000_runtime_hosts.up,
+    down: migration_20260906_130000_runtime_hosts.down,
+    name: '20260906_130000_runtime_hosts'
   },
 ];

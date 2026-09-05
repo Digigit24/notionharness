@@ -44,6 +44,15 @@ export type RuntimeProbeCode =
   | 'spawn_failed'
   | 'acp_init_failed'
   | 'acp_init_timeout'
+  // Never produced by `probeAcpRuntime` itself — the machine-mismatch check
+  // in `probeRuntimeProfile` (settings/runtimes/actions.ts) short-circuits
+  // before this function is ever called, precisely so a profile scoped to a
+  // different machine (`lib/runtimes/host-id.ts`) never gets a real spawn
+  // attempt made against it from the wrong one. Without that check this
+  // would come back `command_not_found` — true in the narrowest sense (the
+  // binary is not on THIS machine) and actively misleading, since it reads
+  // like "go install it" rather than "you're looking at the wrong computer".
+  | 'wrong_host'
 
 export interface RuntimeProbeResult {
   code: RuntimeProbeCode
