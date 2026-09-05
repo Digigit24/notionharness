@@ -1,11 +1,61 @@
 'use client'
 
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { CircleDollarSign, PlayCircle, ShieldAlert, Server } from 'lucide-react'
 import { getAmbientStatus, type AmbientStatus } from '@/app/(app)/workspace/[workspaceSlug]/actions'
+import { getNotificationPreferences } from '@/app/(app)/settings/notifications/actions'
+import {
+  APPROVAL_BELL_PREFERENCE_EVENT,
+  installAudioUnlock,
+  playApprovalBell,
+  shouldRingForApprovals,
+} from '@/lib/notifications/approval-bell'
 
 const POLL_INTERVAL_MS = 12_000
+
+/**
+ * Rings once for every new approval the poll brings in, when the person has
+ * the chime turned on.
+ *
+ * Lives here and not in its own poller because the numbers are already
+ * arriving every twelve seconds for the sidebar; a second request for the
+ * same rows would be a D0 violation to answer a question this one already
+ * answers. The preference is read once per mount — one query for the life
+ * of the shell — and updated in place when the settings page changes it,
+ * so flipping the toggle takes effect without a reload.
+ */
+function useApprovalBell(status: AmbientStatus) {
+  const enabled = useRef(true)
+  const previous = useRef(status)
+
+  useEffect(() => {
+    installAudioUnlock()
+    let cancelled = false
+    // A missing preferences table (not migrated yet) reads as "on", the same
+    // default every other notification event has until the row exists.
+    getNotificationPreferences()
+      .then((prefs) => {
+        if (!cancelled) enabled.current = prefs.soundOnApprovals
+      })
+      .catch(() => undefined)
+    const onChange = (event: Event) => {
+      const detail = (event as CustomEvent<{ enabled?: boolean }>).detail
+      if (typeof detail?.enabled === 'boolean') enabled.current = detail.enabled
+    }
+    window.addEventListener(APPROVAL_BELL_PREFERENCE_EVENT, onChange)
+    return () => {
+      cancelled = true
+      window.removeEventListener(APPROVAL_BELL_PREFERENCE_EVENT, onChange)
+    }
+  }, [])
+
+  useEffect(() => {
+    const before = previous.current
+    previous.current = status
+    if (enabled.current && shouldRingForApprovals(before, status)) void playApprovalBell()
+  }, [status])
+}
 
 /**
  * ROADMAP B1.5 — "persistently in the shell: runs in flight, approvals
@@ -37,6 +87,7 @@ export function AmbientStatus({
   initialStatus: AmbientStatus
 }) {
   const [status, setStatus] = useState<AmbientStatus>(initialStatus)
+  useApprovalBell(status)
 
   useEffect(() => {
     let cancelled = false

@@ -8,7 +8,7 @@ import { unwrap } from '@/lib/failures'
 import type { Agent } from '@/components/agents/agent-editor'
 import type { ActiveModelConfig } from '@/lib/runtimes/hermes/providers'
 import type { HermesProfileSummary } from '@/lib/runtimes/hermes/profiles'
-import { sessionConfigOptions, type AgentHandshake, type SessionConfigOption } from '@/lib/runtimes/handshake'
+import { effectiveSessionConfigOptions, type AgentHandshake, type SessionConfigOption } from '@/lib/runtimes/handshake'
 import { RuntimeConfigFields } from '@/components/runtimes/runtime-config-fields'
 import { normalizeSkillNames } from '@/components/agents/agent-skills-field'
 
@@ -103,7 +103,7 @@ export function AgentSettingsForm({
   // model the runtime genuinely does offer.
   const selectedRuntime = profiles.find((entry) => entry.id === draft.runtimeProfile) ?? null
   const usesHermesHome = (selectedRuntime?.homeStrategy ?? 'hermes') === 'hermes'
-  const runtimeOptions = sessionConfigOptions(selectedRuntime?.handshake ?? null)
+  const runtimeOptions = effectiveSessionConfigOptions(selectedRuntime?.handshake ?? null)
 
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')

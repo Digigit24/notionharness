@@ -54,6 +54,15 @@ export const NotificationPreferences: CollectionConfig = {
       admin: { description: 'Push a browser notification when this user is @mentioned.' },
     },
     {
+      name: 'soundOnApprovals',
+      type: 'checkbox',
+      defaultValue: true,
+      admin: {
+        description:
+          'Play a short chime in the open app when an agent asks this user for a decision or a permission. Per user, honoured on every device where the app is open.',
+      },
+    },
+    {
       name: 'emailDigestEnabled',
       type: 'checkbox',
       defaultValue: false,

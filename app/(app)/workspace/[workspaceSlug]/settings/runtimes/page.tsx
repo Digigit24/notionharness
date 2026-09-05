@@ -12,6 +12,7 @@ import { AddRuntimeProfileForm } from '@/components/runtimes/add-profile-form'
 import { ToggleRuntimeProfileEnabledButton } from '@/components/runtimes/toggle-enabled-button'
 import { RuntimeProbeButton } from '@/components/runtimes/probe-button'
 import { explainProbeCode } from '@/lib/runtimes/probe-codes'
+import { catalogEntryForCommand, catalogEntryForHomeStrategy } from '@/lib/runtimes/catalog'
 import { formatRelativeTime } from '@/lib/relative-time'
 import type { Agent, Runtime, RuntimeProfile } from '@/payload-types'
 
@@ -83,9 +84,9 @@ export default async function RuntimesPage({ params }: { params: Promise<{ works
             Runtimes
           </h1>
           <p className="mt-1 text-sm text-faint">
-            Every runtime profile this workspace can dispatch to, and whether Hermes actually reached it the last
-            time anyone checked. This installation talks to one Hermes (Phase C, C1) — per-machine runtimes are a
-            later milestone.
+            Every runtime profile this workspace can dispatch to — Hermes, Claude Code, Codex, OpenCode or any other
+            ACP command — and whether it answered the last time anyone checked. Runtimes run on the machine hosting
+            this server; per-machine runtimes are a later milestone.
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -128,6 +129,12 @@ function RuntimeRow({
   agents: Agent[]
 }) {
   const status = runtime?.status ?? 'unknown'
+  const handshake = (profile.handshake as AgentHandshake | null) ?? null
+  // Matched from the command, because a profile stores no catalog id and a
+  // person may have typed the command by hand. A miss costs a hint, nothing
+  // more.
+  const catalog = catalogEntryForCommand(profile.commandName)
+  const homeStrategyLabel = describeHomeStrategy(profile.homeStrategy)
   const info = (runtime?.connectionInfo ?? null) as {
     error?: string
     profilesAvailable?: number
@@ -172,11 +179,37 @@ function RuntimeRow({
           <span>
             {profile.protocolFamily.toUpperCase()} · <code>{profile.commandName}</code>
           </span>
+          {catalog && <span>{catalog.displayName}</span>}
+          {homeStrategyLabel && <span>Identity: {homeStrategyLabel}</span>}
           {runtime?.host && <span>Host: {runtime.host}</span>}
           {info?.profilesAvailable != null && <span>{info.profilesAvailable} Hermes profile(s) available</span>}
         </div>
 
         {status === 'down' && info?.error && <DownReason error={info.error} />}
+
+        {/* The probe completed a handshake and was then refused a session
+            for want of a sign-in. The binary is fine; the fix is one command
+            on this machine, and the catalog knows which. */}
+        {handshake?.authRequired && (
+          <p className="text-xs text-amber-600 dark:text-amber-400">
+            Installed and speaking ACP, but not signed in on this machine.
+            {catalog ? (
+              <>
+                {' '}
+                Run <code>{catalog.signInCommand}</code>
+                {catalog.apiKeyEnvVar ? (
+                  <>
+                    {' '}
+                    or set <code>{catalog.apiKeyEnvVar}</code> for the server
+                  </>
+                ) : null}
+                , then probe again.
+              </>
+            ) : (
+              ' Sign the CLI in, then probe again.'
+            )}
+          </p>
+        )}
 
         {/* A specific, real state worth naming: the runtime runs, but the
             Hermes-only settings screens (profiles, memories, MCP config) have
@@ -198,7 +231,7 @@ function RuntimeRow({
         <RuntimeDefaultsForm
           workspaceSlug={workspaceSlug}
           profileId={profile.id}
-          handshake={(profile.handshake as AgentHandshake | null) ?? null}
+          handshake={handshake}
           initialValues={
             profile.defaultSessionConfig && typeof profile.defaultSessionConfig === 'object'
               ? (profile.defaultSessionConfig as Record<string, unknown>)
@@ -234,6 +267,20 @@ function DownReason({ error }: { error: string }) {
       {explanation.title}. {explanation.whatItMeans} <span className="font-medium">{explanation.whatToDo}</span>
     </p>
   )
+}
+
+/**
+ * The stored strategy id as a phrase. `hermes` and `none` are the two the
+ * app defines itself; every other value comes from a catalog entry's home
+ * layout. Null for the absent-by-history case, which the row does not label
+ * because it means Hermes and the Hermes label already covers it.
+ */
+function describeHomeStrategy(id: string | null | undefined): string | null {
+  if (!id) return null
+  if (id === 'hermes') return 'Hermes home'
+  if (id === 'none') return 'prompt only, no home'
+  const entry = catalogEntryForHomeStrategy(id)
+  return entry?.home ? `${entry.displayName} home via ${entry.home.envVar}` : id
 }
 
 function PresenceDot({ status }: { status: 'up' | 'down' | 'unknown' }) {

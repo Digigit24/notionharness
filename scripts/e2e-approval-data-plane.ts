@@ -37,10 +37,10 @@ if (!process.env.PAYLOAD_SECRET) throw new Error('PAYLOAD_SECRET unset — .env.
 const { Pool } = await import('pg')
 const { getPayloadClient } = await import('@/lib/payload')
 const approvalHelpers = await import('@/lib/hermes/approval-helpers')
-const acpTypes = await import('@/lib/hermes/acp-client')
+const acpTypes = await import('@/lib/acp/client')
 
 const { createPendingApproval, waitForApproval, resolveApproval, listPendingApprovalsForUser } = approvalHelpers
-type ApprovalOutcome = import('@/lib/hermes/acp-client').ApprovalOutcome
+type ApprovalOutcome = import('@/lib/acp/client').ApprovalOutcome
 
 const TS = Date.now()
 const FAKE_RUN_ID = 999_999 // ad-hoc; approvals.run_id has no FK

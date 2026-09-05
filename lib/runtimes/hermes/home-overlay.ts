@@ -41,9 +41,12 @@
 // override is not guaranteed to be, so `path.resolve()` runs unconditionally
 // rather than trusting the input.
 import { existsSync, type Dirent } from 'node:fs'
-import { link, mkdir, readdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, rm, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+// Shared with the generic linked-home strategy (`lib/runtimes/linked-home.ts`)
+// so the Windows junction/hardlink rules documented above live in one place.
+import { linkDir, linkFile, normalizeSkillNames } from '@/lib/runtimes/fs-links'
 
 export interface BuildHermesHomeOverlayOptions {
   /** Stable identifier for this run — the overlay directory's own name. */
@@ -103,41 +106,6 @@ function defaultConversationStateRoot(): string {
 
 function defaultTaskRoot(): string {
   return process.env.HERMES_TASK_ROOT || join(tmpdir(), 'notionforge-hermes-runs')
-}
-
-// `Agents.skills` is an untyped Payload `json` field (defaultValue `[]`) —
-// accept whatever shape it turns out to hold rather than assuming. The real
-// on-disk skill pool is one subdirectory per skill name (confirmed:
-// `skills/devops/`, `skills/email/`, etc.), so a bare string name is the
-// only shape actually usable here.
-function normalizeSkillNames(raw: unknown): string[] {
-  if (!Array.isArray(raw)) return []
-  const names: string[] = []
-  for (const entry of raw) {
-    if (typeof entry === 'string') names.push(entry)
-    else if (entry && typeof entry === 'object' && typeof (entry as { name?: unknown }).name === 'string') {
-      names.push((entry as { name: string }).name)
-    }
-  }
-  return names
-}
-
-async function linkDir(target: string, dest: string): Promise<void> {
-  await symlink(target, dest, process.platform === 'win32' ? 'junction' : 'dir')
-}
-
-async function linkFile(target: string, dest: string, hardlinkFallbackFor: string[]): Promise<void> {
-  try {
-    await symlink(target, dest, 'file')
-  } catch {
-    // See module comment: unprivileged Windows can't make file symlinks but
-    // can make hardlinks. A hardlink behaves identically for in-place writes
-    // (how SQLite normally journals) but — unlike a symlink — would go stale
-    // if the target were ever replaced via delete-and-recreate rather than
-    // written in place. Recorded, not hidden.
-    await link(target, dest)
-    hardlinkFallbackFor.push(dest)
-  }
 }
 
 /** Throws a clear, actionable error rather than silently guessing a path that only exists on one machine. */

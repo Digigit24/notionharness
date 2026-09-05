@@ -35,9 +35,9 @@ export function FirstRunChecklist({
     {
       key: 'provider',
       label: 'Connect a provider',
-      description: 'Add a runtime profile pointing at a real ACP or MCP command, and enable it.',
+      description: 'Add a runtime profile — Hermes, Claude Code, Codex or OpenCode — and enable it.',
       done: status.hasEnabledRuntimeProfile,
-      href: `/workspace/${workspaceSlug}/agents`,
+      href: `/workspace/${workspaceSlug}/settings/runtimes`,
     },
     {
       key: 'agent',

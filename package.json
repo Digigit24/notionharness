@@ -21,6 +21,7 @@
     "dispatcher:loop": "tsx scripts/run-dispatcher-loop.ts",
     "runtimes:health-loop": "tsx scripts/run-runtime-health-loop.ts",
     "test:transcript": "tsx scripts/test-transcript-pipeline.ts",
+    "smoke:acp": "tsx scripts/acp-smoke.ts",
     "test": "vitest run",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",

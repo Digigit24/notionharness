@@ -1,4 +1,5 @@
 import type { CollectionConfig } from 'payload'
+import { CATALOG_HOME_STRATEGIES } from '../lib/runtimes/home-layouts'
 import { inMyAdministeredWorkspaces, inMyWorkspaces } from './access'
 
 export const RuntimeProfiles: CollectionConfig = {
@@ -32,12 +33,19 @@ export const RuntimeProfiles: CollectionConfig = {
     // handshake is exactly the kind of rule that rots on someone else's
     // release. 'none' is honest for a runtime with no relocatable home — the
     // agent still gets its instructions, because those go in the prompt.
+    //
+    // The catalog entries (`lib/runtimes/catalog.ts`) contribute one value
+    // each for every CLI that relocates its home through an environment
+    // variable; those all share one implementation (`lib/runtimes/linked-
+    // home.ts`). Stored as varchar, not a Postgres enum (see the plugins
+    // migration's note), so adding a value here needs no migration.
     {
       name: 'homeStrategy',
       type: 'select',
       defaultValue: 'hermes',
       options: [
         { label: 'Hermes agent home', value: 'hermes' },
+        ...CATALOG_HOME_STRATEGIES.map((option) => ({ label: option.label, value: option.value })),
         { label: 'No agent home', value: 'none' },
       ],
     },

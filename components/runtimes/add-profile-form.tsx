@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/hooks/use-toast'
 import { useOptimisticAction } from '@/lib/optimistic'
+import { catalogEntryForCommand } from '@/lib/runtimes/catalog'
 import { RuntimeCatalogPicker } from '@/components/runtimes/runtime-catalog-picker'
 import type { RuntimeProfile } from '@/payload-types'
 
@@ -42,6 +43,9 @@ export function AddRuntimeProfileForm({
   const [protocolFamily, setProtocolFamily] = useState<RuntimeProfile['protocolFamily']>('acp')
   const [commandName, setCommandName] = useState('')
   const [commandArgs, setCommandArgs] = useState('')
+  // Set when the editor was opened from the catalog; a manually typed
+  // command infers its strategy from the command itself at submit time.
+  const [pickedHomeStrategy, setPickedHomeStrategy] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
   const [pendingProfiles, setPendingProfiles] = useState<PendingProfile[]>([])
   const optimistic = useOptimisticAction<RuntimeProfile>()
@@ -57,7 +61,13 @@ export function AddRuntimeProfileForm({
     [existingProfiles],
   )
 
-  function openManual(prefill?: { name: string; protocolFamily: RuntimeProfile['protocolFamily']; commandLine: string }) {
+  function openManual(prefill?: {
+    name: string
+    protocolFamily: RuntimeProfile['protocolFamily']
+    commandLine: string
+    homeStrategy?: string
+  }) {
+    setPickedHomeStrategy(prefill?.homeStrategy ?? null)
     if (prefill) {
       setName(prefill.name)
       setProtocolFamily(prefill.protocolFamily)
@@ -81,6 +91,14 @@ export function AddRuntimeProfileForm({
       return
     }
     const commandLine = trimmedArgs ? `${trimmedCommand} ${trimmedArgs}` : trimmedCommand
+    // The identity strategy the run path will use. From the catalog when the
+    // editor was opened from it; otherwise inferred from the command, so a
+    // hand-typed `hermes-acp` still gets the Hermes home and a hand-typed
+    // `opencode acp` gets its linked home. A command the catalog does not
+    // recognise gets 'none' — the honest default for a CLI we know nothing
+    // about, rather than the collection's Hermes default sending it a
+    // HERMES_HOME it cannot use.
+    const homeStrategy = pickedHomeStrategy ?? catalogEntryForCommand(commandLine)?.homeStrategy ?? 'none'
 
     // Paint the row immediately, THEN close and clear the editor — a person
     // who just typed a command should see it land before the inputs blank
@@ -98,7 +116,14 @@ export function AddRuntimeProfileForm({
       },
       rollback: () => setPendingProfiles((current) => current.filter((p) => p.tempId !== tempId)),
       work: () =>
-        createRuntimeProfile({ workspaceId, workspaceSlug, name: trimmedName, protocolFamily, commandName: commandLine }),
+        createRuntimeProfile({
+          workspaceId,
+          workspaceSlug,
+          name: trimmedName,
+          protocolFamily,
+          commandName: commandLine,
+          homeStrategy,
+        }),
       failureTitle: 'Could not add runtime profile',
       onSettled: (created) => {
         toast({ title: `Added runtime profile "${created.name}"` })
@@ -166,7 +191,7 @@ export function AddRuntimeProfileForm({
             <Input
               value={commandName}
               onChange={(e) => setCommandName(e.target.value)}
-              placeholder="Command (e.g. hermes-acp)"
+              placeholder="Command (e.g. hermes-acp, codex-acp, opencode)"
               disabled={optimistic.pending || isPending}
               className="flex-1"
             />

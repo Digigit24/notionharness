@@ -24,6 +24,8 @@ export interface NotificationPreferencesView {
   pushApprovals: boolean
   pushCompletions: boolean
   pushMentions: boolean
+  /** A chime in the open app when an agent needs this user's decision. */
+  soundOnApprovals: boolean
   emailDigestEnabled: boolean
 }
 
@@ -31,6 +33,7 @@ const DEFAULTS: NotificationPreferencesView = {
   pushApprovals: true,
   pushCompletions: true,
   pushMentions: true,
+  soundOnApprovals: true,
   emailDigestEnabled: false,
 }
 
@@ -40,6 +43,7 @@ function toView(doc: NotificationPreference | undefined): NotificationPreference
     pushApprovals: doc.pushApprovals ?? true,
     pushCompletions: doc.pushCompletions ?? true,
     pushMentions: doc.pushMentions ?? true,
+    soundOnApprovals: doc.soundOnApprovals ?? true,
     emailDigestEnabled: doc.emailDigestEnabled ?? false,
   }
 }

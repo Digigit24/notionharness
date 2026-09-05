@@ -3,7 +3,8 @@
 import { revalidatePath } from 'next/cache'
 import { getPayloadClient } from '@/lib/payload'
 import type { RuntimeProfile } from '@/payload-types'
-import { probeAcpRuntime } from '@/lib/runtimes/detect'
+import { probeAcpRuntime, resolveCommandPath } from '@/lib/runtimes/detect'
+import { CATALOG_HOME_STRATEGIES, RUNTIME_CATALOG, type RuntimeCatalogId } from '@/lib/runtimes/catalog'
 import { getCurrentPayloadUser } from '@/lib/current-user'
 import { guard, raise, type WithFailure } from '@/lib/failures'
 
@@ -25,18 +26,32 @@ export async function createRuntimeProfile({
   name,
   protocolFamily,
   commandName,
+  fixedArgs,
+  homeStrategy,
 }: {
   workspaceId: number
   workspaceSlug: string
   name: string
   protocolFamily: RuntimeProfile['protocolFamily']
   commandName: string
+  /** From a catalog preset. A hand-typed profile leaves these unset. */
+  fixedArgs?: string[]
+  homeStrategy?: string
 }): Promise<WithFailure<RuntimeProfile>> {
   return guard(async () => {
     const trimmedName = name.trim()
     const trimmedCommand = commandName.trim()
     if (!trimmedName) raise('invalid_input', 'Name is required.')
     if (!trimmedCommand) raise('invalid_input', 'Command is required.')
+
+    // A strategy the app has never heard of would be stored, resolve to
+    // 'none' at run time, and quietly drop every skill. Refuse it here, where
+    // the person can still see the message.
+    const knownStrategies = new Set(['hermes', 'none', ...CATALOG_HOME_STRATEGIES.map((s) => s.value)])
+    if (homeStrategy !== undefined && !knownStrategies.has(homeStrategy)) {
+      raise('invalid_input', `"${homeStrategy}" is not a home strategy this app knows.`)
+    }
+    const args = Array.isArray(fixedArgs) ? fixedArgs.filter((a) => typeof a === 'string' && a.length > 0) : []
 
     const payload = await getPayloadClient()
     const created = await payload.create({
@@ -46,12 +61,49 @@ export async function createRuntimeProfile({
         name: trimmedName,
         protocolFamily,
         commandName: trimmedCommand,
+        fixedArgs: args,
+        // A profile that names no strategy is Hermes by history (see the
+        // collection), which is wrong for a hand-typed `opencode acp` but
+        // was the behaviour before the catalog existed; the presets set it
+        // explicitly and a custom profile that is not Hermes gets 'none' —
+        // the honest default for a CLI we know nothing about.
+        ...(homeStrategy !== undefined ? { homeStrategy: homeStrategy as RuntimeProfile['homeStrategy'] } : {}),
         enabled: true,
       },
       overrideAccess: true,
     })
     revalidatePath(`/workspace/${workspaceSlug}/settings/runtimes`)
     return created
+  })
+}
+
+/** One catalog entry, and whether its CLI was found on this machine. */
+export interface DetectedRuntime {
+  id: RuntimeCatalogId
+  installed: boolean
+  /** The executable that answered, when one did. */
+  path: string | null
+}
+
+/**
+ * Which catalog CLIs are installed on the machine running this server.
+ *
+ * A PATH lookup per entry, on demand — behind a button rather than on page
+ * load, because four process spawns per render of the Runtimes page would be
+ * a D0 violation for a question that changes once a month. Detection is
+ * "the executable exists", nothing more: whether it speaks ACP and whether
+ * it is signed in are the probe's questions, asked after the profile exists.
+ */
+export async function detectCatalogRuntimes(): Promise<WithFailure<DetectedRuntime[]>> {
+  return guard(async () => {
+    const user = await getCurrentPayloadUser()
+    if (!user) raise('unauthenticated', 'You must be logged in.')
+    return Promise.all(
+      RUNTIME_CATALOG.map(async (entry) => {
+        const path = await resolveCommandPath(entry.detectCommand)
+        return { id: entry.id, installed: path !== null, path }
+      }),
+    )
   })
 }
 

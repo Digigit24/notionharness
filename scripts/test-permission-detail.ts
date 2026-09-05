@@ -24,7 +24,7 @@ for (const file of ['.env', '.env.local']) {
   }
 }
 
-import { sendTurn } from '../lib/hermes/acp-client'
+import { sendTurn } from '../lib/acp/client'
 
 const COMMAND = process.argv[2] ?? 'claude-agent-acp'
 const cwd = mkdtempSync(join(tmpdir(), 'perm-'))

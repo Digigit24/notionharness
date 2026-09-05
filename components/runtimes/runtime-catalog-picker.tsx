@@ -40,7 +40,14 @@ export function RuntimeCatalogPicker({
    * cross-reference — never a new detection path, see the catalog's own
    * header comment for why. */
   probedCommandLines: ReadonlySet<string>
-  onPick: (selection: { name: string; protocolFamily: RuntimeProfile['protocolFamily']; commandLine: string }) => void
+  onPick: (selection: {
+    name: string
+    protocolFamily: RuntimeProfile['protocolFamily']
+    commandLine: string
+    /** The entry's identity strategy, so the created profile gets the right
+     * `homeStrategy` instead of the collection's Hermes default. */
+    homeStrategy: string
+  }) => void
   onManual: () => void
 }) {
   const [search, setSearch] = useState('')
@@ -71,7 +78,12 @@ export function RuntimeCatalogPicker({
   }
 
   function pick(entry: RuntimeCatalogEntry) {
-    onPick({ name: entry.displayName, protocolFamily: entry.protocolFamily, commandLine: catalogEntryCommandLine(entry) })
+    onPick({
+      name: entry.displayName,
+      protocolFamily: entry.protocolFamily,
+      commandLine: catalogEntryCommandLine(entry),
+      homeStrategy: entry.homeStrategy,
+    })
     close()
   }
 
@@ -216,10 +228,40 @@ function DetailPane({ entry, ready, onPick }: { entry: RuntimeCatalogEntry; read
           <dd>{entry.protocolFamily.toUpperCase()}</dd>
         </div>
         <div className="flex gap-2">
+          <dt className="w-14 shrink-0 text-faint">Install</dt>
+          <dd className="min-w-0 flex-1 font-mono break-all">{entry.installCommand}</dd>
+        </div>
+        <div className="flex gap-2">
+          <dt className="w-14 shrink-0 text-faint">Sign in</dt>
+          <dd className="min-w-0 flex-1">
+            <span className="font-mono break-all">{entry.signInCommand}</span>
+            {entry.apiKeyEnvVar && (
+              <span className="text-faint">
+                {' '}
+                or set <span className="font-mono">{entry.apiKeyEnvVar}</span> for the server
+              </span>
+            )}
+          </dd>
+        </div>
+        {entry.home && (
+          <div className="flex gap-2">
+            <dt className="w-14 shrink-0 text-faint">Identity</dt>
+            <dd className="min-w-0 flex-1 text-faint">
+              Each agent gets its own skills through <span className="font-mono">{entry.home.envVar}</span>.
+            </dd>
+          </div>
+        )}
+        <div className="flex gap-2">
           <dt className="w-14 shrink-0 text-faint">Source</dt>
           <dd className="min-w-0 flex-1 text-faint">{entry.source}</dd>
         </div>
       </dl>
+
+      {entry.commandConfidence === 'verified' && (
+        <p className="text-[11px] text-emerald-700 dark:text-emerald-400">
+          Verified: probed and ran a real turn from this codebase on the machine it was developed on.
+        </p>
+      )}
 
       {entry.commandConfidence === 'illustrative' && (
         <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-[11px] text-amber-700 dark:text-amber-400">

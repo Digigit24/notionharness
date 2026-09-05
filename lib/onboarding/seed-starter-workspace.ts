@@ -22,7 +22,9 @@ import { enqueueRun } from '@/lib/broker'
 import { loadDoc, seedEmptyDoc, encodeDocUpdate } from '@/lib/blocksuite-doc'
 import { Text } from '@/lib/blocksuite-store'
 import type { Payload } from 'payload'
-import type { TaskStatus } from '@/payload-types'
+import type { RuntimeProfile, TaskStatus } from '@/payload-types'
+import { RUNTIME_CATALOG, catalogEntryCommandLine, catalogEntryForCommand } from '@/lib/runtimes/catalog'
+import { resolveCommandPath } from '@/lib/runtimes/spawn-command'
 
 // Unlike the standalone script (which needs `nextEnv.loadEnvConfig()` and a
 // hard failure if unset, since it has no other way to get env vars), the
@@ -30,18 +32,48 @@ import type { TaskStatus } from '@/payload-types'
 // false` regardless (see below), so an unresolved binary path here is only
 // ever a placeholder a human confirms before turning the agent on, never a
 // value anything actually spawns against from this code path.
-function defaultAcpBinary(): string {
-  // An explicit runtime command wins, whatever it points at. This is the
-  // runtime-neutral knob: an install driving Claude Code or Codex through an
-  // ACP adapter sets this and never reaches the Hermes fallbacks below.
-  // Seeding used to start at the Hermes guess and therefore always produced a
-  // Hermes-only runtime profile.
-  if (process.env.ACP_RUNTIME_COMMAND) return process.env.ACP_RUNTIME_COMMAND
-  if (process.env.HERMES_ACP_BIN) return process.env.HERMES_ACP_BIN
-  if (process.env.HERMES_HOME_BASE) {
-    return `${process.env.HERMES_HOME_BASE}\\hermes-agent\\venv\\Scripts\\hermes-acp.exe`
+/**
+ * The runtime the starter profile points at.
+ *
+ * An explicit `ACP_RUNTIME_COMMAND` wins, whatever it names — and since it
+ * names a CLI we may not know, it gets no home strategy beyond what the
+ * catalog can infer from the command. Otherwise the Hermes-specific
+ * variables, for installs that predate the catalog. Otherwise the first
+ * catalog CLI actually on this machine's PATH, in catalog order, so a machine
+ * with only Codex on it seeds a Codex profile rather than a Hermes one that
+ * can never probe green. Otherwise Hermes by name, which is what this always
+ * did, and which the disabled starter agent keeps safe (see below).
+ */
+async function pickStarterRuntime(): Promise<{ name: string; commandName: string; fixedArgs: string[]; homeStrategy: string }> {
+  if (process.env.ACP_RUNTIME_COMMAND) {
+    const command = process.env.ACP_RUNTIME_COMMAND
+    const known = catalogEntryForCommand(command)
+    return {
+      name: known ? `${known.displayName} (starter)` : 'ACP runtime (starter)',
+      commandName: command,
+      fixedArgs: [],
+      homeStrategy: known?.homeStrategy ?? 'none',
+    }
   }
-  return 'hermes-acp'
+  const hermesBinary =
+    process.env.HERMES_ACP_BIN ??
+    (process.env.HERMES_HOME_BASE
+      ? `${process.env.HERMES_HOME_BASE}\\hermes-agent\\venv\\Scripts\\hermes-acp.exe`
+      : undefined)
+  if (hermesBinary) {
+    return { name: 'Hermes Agent (starter)', commandName: hermesBinary, fixedArgs: [], homeStrategy: 'hermes' }
+  }
+  for (const entry of RUNTIME_CATALOG) {
+    if (await resolveCommandPath(entry.detectCommand)) {
+      return {
+        name: `${entry.displayName} (starter)`,
+        commandName: catalogEntryCommandLine(entry),
+        fixedArgs: [],
+        homeStrategy: entry.homeStrategy,
+      }
+    }
+  }
+  return { name: 'ACP runtime (starter)', commandName: 'hermes-acp', fixedArgs: [], homeStrategy: 'hermes' }
 }
 
 export interface SeedStarterWorkspaceOptions {
@@ -99,7 +131,7 @@ async function ensureTaskStatuses(payload: Payload, workspaceId: number) {
  */
 export async function seedStarterWorkspace({ workspaceId, userId }: SeedStarterWorkspaceOptions) {
   const payload = await getPayloadClient()
-  const HERMES_ACP_BIN = defaultAcpBinary()
+  const starterRuntime = await pickStarterRuntime()
 
   // 1. Starter project.
   const project = await payload.create({
@@ -118,10 +150,11 @@ export async function seedStarterWorkspace({ workspaceId, userId }: SeedStarterW
     collection: 'runtime-profiles',
     data: {
       workspace: workspaceId,
-      name: 'ACP runtime (starter)',
+      name: starterRuntime.name,
       protocolFamily: 'acp',
-      commandName: HERMES_ACP_BIN,
-      fixedArgs: [],
+      commandName: starterRuntime.commandName,
+      fixedArgs: starterRuntime.fixedArgs,
+      homeStrategy: starterRuntime.homeStrategy as RuntimeProfile['homeStrategy'],
       enabled: true,
     },
     overrideAccess: true,

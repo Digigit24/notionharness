@@ -1,7 +1,14 @@
-// Hermes ACP stdio seam — Pillar 3.1 of the NotionForge roadmap.
+// The ACP stdio client — Pillar 3.1 of the NotionForge roadmap, and the one
+// piece of code every runtime shares.
 //
-// Spawns the real `hermes-acp.exe` binary (the Hermes Agent running as an ACP
-// stdio server, confirmed working via `hermes-acp --check`) and speaks the
+// Lived at `lib/hermes/acp-client.ts` until the runtime catalog (R15): it was
+// written against `hermes-acp.exe` and named for it, but nothing in it is
+// Hermes-specific — verified live against Hermes, Claude Code's adapter,
+// Codex's adapter and OpenCode, all through this file unchanged. The name
+// was the only thing that said otherwise, and a name that tells the next
+// reader "this is Hermes-only" costs a second client eventually.
+//
+// Spawns whatever `binaryPath` names as an ACP stdio server and speaks the
 // Agent Client Protocol over its child-process stdio via the official
 // `@agentclientprotocol/sdk`. Normalises the agent's session-update stream
 // into the canonical `RunEventEnvelope { runId, seq, event }` shape from
@@ -64,9 +71,9 @@ import * as pty from 'node-pty'
 // worktree is behind main so the file isn't visible here — the lead wires
 // it up at merge time, same as for the daemon-ws and broker consumers.
 import type { ApprovalOutcome, PermissionOption, RunEvent, RunEventEnvelope } from '@/lib/run-events'
-import { TerminalBuffer } from './terminal-buffer'
-import { buildSpawnEnv } from './spawn-env'
-import { unifiedDiff } from './unified-diff'
+import { TerminalBuffer } from '@/lib/hermes/terminal-buffer'
+import { buildSpawnEnv } from '@/lib/hermes/spawn-env'
+import { unifiedDiff } from '@/lib/hermes/unified-diff'
 import { resolveSpawnCommand } from '@/lib/runtimes/spawn-command'
 import { redactError, redactSecrets } from '@/lib/redact'
 
@@ -187,6 +194,18 @@ export interface SendTurnOptions {
    * user's machine and are exactly what approvals are for.
    */
   autoAllowToolPrefixes?: string[]
+  /**
+   * Which of the agent's advertised `authMethods` to use if it refuses to
+   * open a session without authentication.
+   *
+   * ACP's answer to "I am not signed in" is a `-32000` error on `session/new`
+   * and a list of `authMethods` on `initialize`; the client is expected to
+   * call `authenticate` with one of them and try again. Most CLIs — Codex's
+   * adapter and Claude's both — accept an already-signed-in state or an API
+   * key in the environment and never refuse, which is why this is optional.
+   * Absent, the first advertised method is used. The retry happens once.
+   */
+  authMethodId?: string
 }
 
 export interface SendTurnResult {
@@ -250,7 +269,7 @@ function spawnBinary(
    * then died with ENOENT the first time anyone used it. A green light that
    * does not predict a working run is worse than no light.
    */
-  resolved: { command: string; args: string[] },
+  resolved: { command: string; args: string[]; windowsVerbatimArguments?: boolean },
 ): {
   child: ChildProcessWithoutNullStreams
   readable: ReadableStream<Uint8Array>
@@ -258,6 +277,9 @@ function spawnBinary(
 } {
   const child = spawn(resolved.command, resolved.args, {
     cwd: opts.cwd,
+    // A batch shim's command line is pre-quoted for `cmd /s /c`; see
+    // `batchShimInvocation` for the `C:\Program Files` failure this fixes.
+    windowsVerbatimArguments: resolved.windowsVerbatimArguments === true,
     // `node:child_process`'s `SpawnOptions.env` is typed as `NodeJS.
     // ProcessEnv`, which (unlike our own `Record<string, string>`) requires
     // `NODE_ENV` to statically be present — `buildSpawnEnv` filters that key
@@ -273,7 +295,7 @@ function spawnBinary(
     // R3.8 — the agent's stderr is the single richest source of leaked
     // credentials: a failing provider call prints the request it made, and
     // this line writes it to a log that outlives the turn.
-    process.stderr.write(`[hermes-acp stderr] ${redactSecrets(chunk.toString('utf8'))}`)
+    process.stderr.write(`[acp stderr] ${redactSecrets(chunk.toString('utf8'))}`)
   })
   return { child, ...childStdioToStreams(child) }
 }
@@ -915,6 +937,20 @@ function isToolErrorContent(c: unknown): boolean {
 /** One-shot guard so the diagnostic below can't become a log flood. */
 let usageShapeLogged = false
 
+/**
+ * ACP's "authentication required" refusal, as the SDK raises it: JSON-RPC
+ * error code -32000 (`RequestError.authRequired`). The message is checked as
+ * well because an agent hand-rolling its JSON-RPC may use the code for other
+ * refusals — the SDK's own tests do — and a wrong guess here costs one
+ * needless `authenticate` call, never a wrong turn.
+ */
+export function isAuthRequired(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false
+  const code = (err as { code?: unknown }).code
+  const message = String((err as { message?: unknown }).message ?? '')
+  return code === -32000 && /auth/i.test(message)
+}
+
 function normaliseSessionUpdate(update: unknown): RunEvent | null {
   if (!update || typeof update !== 'object') return null
   const u = update as { sessionUpdate?: string; [key: string]: unknown }
@@ -1000,7 +1036,10 @@ function normaliseSessionUpdate(update: unknown): RunEvent | null {
 
       const inputTokens = num(pick('inputTokens', 'input_tokens', 'promptTokens', 'prompt_tokens'))
       const outputTokens = num(pick('outputTokens', 'output_tokens', 'completionTokens', 'completion_tokens'))
-      const totalRaw = pick('totalTokens', 'total_tokens', 'tokens')
+      // `used` is what OpenCode sends: `{ used, size, cost: { amount,
+      // currency } }` — context consumed out of the window, which is the
+      // closest thing it reports to a token total. Verified live.
+      const totalRaw = pick('totalTokens', 'total_tokens', 'tokens', 'used')
       const tokens = totalRaw != null ? num(totalRaw) : inputTokens + outputTokens
 
       // `cost` may be `{ ticks }`, a bare tick count, or a dollar amount.
@@ -1060,15 +1099,24 @@ function normaliseSessionUpdate(update: unknown): RunEvent | null {
       if (!id) return null
       return { type: 'session', externalId: id }
     }
+    case 'current_mode_update': {
+      // The agent changed its own mode (or confirmed the one we set). Said in
+      // the transcript as a system line, because "the agent is now in
+      // read-only mode" is exactly the sentence that explains why it stopped
+      // editing files. Not a new `RunEvent` type: nothing renders modes yet.
+      const modeId = typeof u.currentModeId === 'string' ? u.currentModeId : null
+      if (!modeId) return null
+      return { type: 'message', role: 'system', text: `Mode: ${modeId}.` }
+    }
     default:
-      // FIVE VARIANTS REACH HERE AND ARE DELIBERATELY NOT RENDERED, which is a
+      // FOUR VARIANTS REACH HERE AND ARE DELIBERATELY NOT RENDERED, which is a
       // different statement from the silent `return null` this used to be.
       //
       // ACP declares fifteen `sessionUpdate` kinds; this switch now handles
-      // ten. `available_commands_update`, `compaction_summary_chunk`,
-      // `compaction_update`, `config_option_update` and `current_mode_update`
-      // arrive and are dropped because none of them has a `RunEvent` type or a
-      // renderer yet - not because they are uninteresting. `compaction_update`
+      // eleven. `available_commands_update`, `compaction_summary_chunk`,
+      // `compaction_update` and `config_option_update` arrive and are dropped
+      // because none of them has a `RunEvent` type or a renderer yet - not
+      // because they are uninteresting. `compaction_update`
       // in particular is the agent announcing that it has just compacted its
       // own context, which is exactly the signal that explains an agent no
       // longer recognising work it did earlier in the same run.
@@ -1289,13 +1337,40 @@ export async function sendTurn(opts: SendTurnOptions): Promise<SendTurnResult> {
             }
           }
 
+          // The modes the agent offers for this session, from `session/new`.
+          // Only a fresh session reports them; a resumed one keeps whatever
+          // mode it had, which is the correct behaviour for a continuation.
+          let availableModeIds: string[] = []
           if (!resumed) {
-            const created = (await ctx.request(
-              'session/new',
-              mcpServers.length > 0 ? { cwd: opts.cwd, mcpServers } : { cwd: opts.cwd, mcpServers: [] },
-            )) as { sessionId: string }
+            const newSessionParams =
+              mcpServers.length > 0 ? { cwd: opts.cwd, mcpServers } : { cwd: opts.cwd, mcpServers: [] }
+            let created: { sessionId: string; modes?: { availableModes?: Array<{ id?: string }> } }
+            try {
+              created = (await ctx.request('session/new', newSessionParams)) as typeof created
+            } catch (err) {
+              // The one refusal with a protocol-defined remedy: authenticate
+              // with a method the agent itself advertised, then ask again.
+              // Anything else, or a second refusal, is the turn's failure.
+              const authMethods = Array.isArray(init.authMethods)
+                ? (init.authMethods as Array<{ id?: string; name?: string }>)
+                : []
+              const chosen = opts.authMethodId ?? authMethods[0]?.id
+              if (!isAuthRequired(err) || !chosen) throw err
+              pushEvent({
+                type: 'message',
+                role: 'system',
+                text: `${agentName} asked for authentication before opening a session. Trying its "${
+                  authMethods.find((m) => m.id === chosen)?.name ?? chosen
+                }" method.`,
+              })
+              await ctx.request('authenticate', { methodId: chosen })
+              created = (await ctx.request('session/new', newSessionParams)) as typeof created
+            }
             // Pin immediately once the session exists (roadmap 3.2 §1).
             pinnedSessionId = created.sessionId
+            availableModeIds = (created.modes?.availableModes ?? [])
+              .map((mode) => mode?.id)
+              .filter((id): id is string => typeof id === 'string')
           }
           const sessionId = pinnedSessionId as string
           pushEvent({ type: 'session', externalId: sessionId })
@@ -1360,9 +1435,34 @@ export async function sendTurn(opts: SendTurnOptions): Promise<SendTurnResult> {
           // default. Sequential rather than parallel: these mutate one
           // session's state, and a runtime is entitled to reject a
           // combination that only makes sense in order.
-          const configEntries = Object.entries(opts.sessionConfig ?? {}).filter(
+          let configEntries = Object.entries(opts.sessionConfig ?? {}).filter(
             ([, value]) => value !== undefined && value !== null && value !== '',
           )
+
+          // A mode is its own ACP request, `session/set_mode`, distinct from
+          // a config option — Codex's adapter declares read-only / agent /
+          // full-access this way, while Claude's adapter declares `mode` as
+          // an ordinary config option. The value comes through the same
+          // `sessionConfig` map under the key `mode` either way (the settings
+          // UI synthesises a `mode` option from `availableModes`, see
+          // `effectiveSessionConfigOptions`), and the session's own answer
+          // decides which request carries it: if `session/new` listed the
+          // requested id as a mode, it is set as a mode and NOT also sent as
+          // a config option the agent would reject.
+          const requestedMode = opts.sessionConfig?.mode
+          if (typeof requestedMode === 'string' && availableModeIds.includes(requestedMode)) {
+            configEntries = configEntries.filter(([configId]) => configId !== 'mode')
+            try {
+              await ctx.request('session/set_mode', { sessionId, modeId: requestedMode })
+            } catch (err) {
+              pushEvent({
+                type: 'message',
+                role: 'system',
+                text: `The runtime rejected mode "${requestedMode}" (${redactError(err)}). This turn runs in its default mode instead.`,
+              })
+            }
+          }
+
           for (const [configId, value] of configEntries) {
             try {
               // `configId`, not `optionId` — and a boolean must declare its

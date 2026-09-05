@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { toast } from '@/hooks/use-toast'
 import { unwrap } from '@/lib/failures'
 import { useUnsavedChangesGuard } from '@/hooks/use-unsaved-changes-guard'
-import { sessionConfigOptions, type AgentHandshake } from '@/lib/runtimes/handshake'
+import { effectiveSessionConfigOptions, type AgentHandshake } from '@/lib/runtimes/handshake'
 import { RuntimeConfigFields } from '@/components/runtimes/runtime-config-fields'
 import { saveRuntimeDefaults } from '@/app/(app)/workspace/[workspaceSlug]/settings/runtimes/actions'
 
@@ -61,7 +61,7 @@ export function RuntimeDefaultsForm({
   // form mounted before its handshake arrives.
   useUnsavedChangesGuard(JSON.stringify(values) !== JSON.stringify(savedValues))
 
-  const options = sessionConfigOptions(handshake)
+  const options = effectiveSessionConfigOptions(handshake)
 
   if (!options) {
     return (
