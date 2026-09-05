@@ -274,8 +274,8 @@ export function PageCanvas({
 
         <div
           className={cn(
-            'mx-auto w-full flex-1 pb-24 pt-8',
-            fullWidth ? 'max-w-none px-4 md:px-6' : 'max-w-4xl px-6 md:px-12',
+            'mx-auto w-full flex-1 pb-24 pt-4',
+            fullWidth ? 'max-w-none px-3 md:px-5' : 'max-w-5xl px-4 md:px-8',
           )}
         >
           {/* R7.4 — a row page or task document says where it belongs. These
@@ -357,7 +357,7 @@ export function PageCanvas({
         </div>
 
         {/* ROADMAP B3.1 (Batch B-2, suggestions mode) — deliberately outside the
-            `max-w-4xl`/`max-w-none` content column above: a floating review bar
+            `max-w-5xl`/`max-w-none` content column above: a floating review bar
             reads better anchored to the viewport than the (possibly narrow)
             prose column. Renders nothing when the page has no pending agent
             suggestions (own internal poll, see suggestion-bar.tsx). */}
