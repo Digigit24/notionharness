@@ -66,13 +66,19 @@ export function RecordDetailHeader({
   if (!page) return <p className="text-sm text-black/40 dark:text-white/40">Loading…</p>
 
   const isGradientCover = page.coverImage?.startsWith('gradient:')
+  // Same `media:<id>` convention `page-canvas.tsx`/`cover-picker.tsx` use —
+  // resolved here too, or an uploaded cover would render as a literal
+  // `media:123` background-image URL on a row's own page header.
+  const coverImageUrl = page.coverImage?.startsWith('media:')
+    ? `/api/media/${page.coverImage.slice('media:'.length)}/file`
+    : page.coverImage
 
   return (
     <div className="mb-2">
       {page.coverImage && (
         <div
           className={`mb-3 h-28 w-full rounded-md ${isGradientCover ? `bg-gradient-to-br ${page.coverImage.replace('gradient:', '')}` : ''}`}
-          style={!isGradientCover ? { backgroundImage: `url(${page.coverImage})`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined}
+          style={!isGradientCover ? { backgroundImage: `url(${coverImageUrl})`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined}
         />
       )}
       <div className="flex items-center gap-2">
@@ -89,6 +95,7 @@ export function RecordDetailHeader({
         />
         {!page.coverImage && (
           <CoverPicker
+            workspaceId={page.workspaceId}
             trigger="Add cover"
             onSelect={(v) => {
               setPage((p) => (p ? { ...p, coverImage: v } : p))

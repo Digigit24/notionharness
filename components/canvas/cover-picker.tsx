@@ -1,12 +1,22 @@
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { Loader2 } from 'lucide-react'
 import { PopoverMenu } from '@/components/ui/popover-menu'
+import { toast } from '@/hooks/use-toast'
+import { unwrap } from '@/lib/failures'
+import { uploadMediaAction } from '@/app/api/media/actions'
+
+const MAX_COVER_BYTES = 15 * 1024 * 1024
 
 /**
- * Gallery of preset gradients ("randomizer") plus a paste-a-URL fallback for
- * "upload" until a real media/upload pipeline exists. Values are prefixed so
- * PageCanvas can tell a gradient token apart from an image URL.
+ * Gallery of preset gradients ("randomizer"), a real file upload (via the
+ * same `uploadMediaAction`/Media pipeline the channel composer's
+ * attachments already use — see that action's own docstring), and a
+ * paste-a-URL fallback for an already-hosted image. Values are prefixed so
+ * `PageCanvas` can tell a gradient (`gradient:...`), an uploaded file
+ * (`media:<id>`, resolved to this app's own `/api/media/<id>/file` route),
+ * and a plain external URL apart from each other.
  */
 export const COVER_GRADIENTS = [
   'gradient:from-orange-200 to-pink-200',
@@ -19,8 +29,45 @@ export const COVER_GRADIENTS = [
   'gradient:from-teal-200 to-lime-200',
 ]
 
-export function CoverPicker({ onSelect, trigger }: { onSelect: (value: string) => void; trigger: string }) {
+export function CoverPicker({
+  workspaceId,
+  onSelect,
+  trigger,
+}: {
+  workspaceId: number
+  onSelect: (value: string) => void
+  trigger: string
+}) {
   const [url, setUrl] = useState('')
+  const [uploading, setUploading] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  async function handleFile(file: File) {
+    if (file.size > MAX_COVER_BYTES) {
+      toast({
+        title: 'That image is too large',
+        description: `Covers are capped at ${Math.floor(MAX_COVER_BYTES / (1024 * 1024))} MB.`,
+        variant: 'destructive',
+      })
+      return
+    }
+    setUploading(true)
+    try {
+      const formData = new FormData()
+      formData.set('file', file)
+      formData.set('workspaceId', String(workspaceId))
+      const uploaded = unwrap(await uploadMediaAction(formData))
+      onSelect(`media:${uploaded.id}`)
+    } catch (err) {
+      toast({
+        title: "Couldn't upload that image",
+        description: err instanceof Error ? err.message : undefined,
+        variant: 'destructive',
+      })
+    } finally {
+      setUploading(false)
+    }
+  }
 
   return (
     <PopoverMenu
@@ -36,6 +83,35 @@ export function CoverPicker({ onSelect, trigger }: { onSelect: (value: string) =
     >
       {(close) => (
         <div className="w-72 p-2">
+          <div className="mb-2 flex items-center gap-1">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                e.target.value = ''
+                if (!file) return
+                // Closes the popover once the upload actually lands, not on
+                // click — an image that streamed for a second with the
+                // popover still open (and a spinner saying so) beats one
+                // that vanished mid-upload with nothing on screen to explain
+                // why the cover hasn't changed yet.
+                void handleFile(file).then(() => close())
+              }}
+            />
+            <button
+              type="button"
+              disabled={uploading}
+              onClick={() => fileInputRef.current?.click()}
+              className="flex flex-1 items-center justify-center gap-1.5 rounded bg-black/[.06] px-2 py-1.5 text-xs font-medium hover:bg-black/10 disabled:opacity-60 dark:bg-white/10 dark:hover:bg-white/20"
+            >
+              {uploading && <Loader2 size={12} className="animate-spin" />}
+              {uploading ? 'Uploading…' : 'Upload an image'}
+            </button>
+          </div>
+
           <div className="mb-2 flex items-center justify-between">
             <span className="text-xs font-medium text-black/50 dark:text-white/50">Gallery</span>
             <button

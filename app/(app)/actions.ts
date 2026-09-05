@@ -189,21 +189,29 @@ export async function setPageIcon(pageId: number, workspaceSlug: string, icon: s
   await requirePage(pageId, 'write')
   const payload = await getPayloadClient()
   await payload.update({ collection: 'pages', id: pageId, data: { icon }, overrideAccess: true })
-  revalidatePath(`/workspace/${workspaceSlug}`)
+  // See `toggleFullWidth`'s comment — 'layout' so the currently-open
+  // `/p/[pageId]` route (a fresh load, or another tab) picks this up too,
+  // not just the workspace index. `PageCanvas` reflects the change instantly
+  // via its own local state; this is the correctness fallback, and without
+  // it the write persisted but nothing outside the tab that made it ever saw
+  // so.
+  revalidatePath(`/workspace/${workspaceSlug}`, 'layout')
 }
 
 export async function setPageCover(pageId: number, workspaceSlug: string, coverImage: string | null) {
   await requirePage(pageId, 'write')
   const payload = await getPayloadClient()
   await payload.update({ collection: 'pages', id: pageId, data: { coverImage }, overrideAccess: true })
-  revalidatePath(`/workspace/${workspaceSlug}`)
+  // See `toggleFullWidth`'s comment.
+  revalidatePath(`/workspace/${workspaceSlug}`, 'layout')
 }
 
 export async function toggleFavorite(pageId: number, workspaceSlug: string, value: boolean) {
   await requirePage(pageId, 'write')
   const payload = await getPayloadClient()
   await payload.update({ collection: 'pages', id: pageId, data: { isFavorite: value }, overrideAccess: true })
-  revalidatePath(`/workspace/${workspaceSlug}`)
+  // See `toggleFullWidth`'s comment.
+  revalidatePath(`/workspace/${workspaceSlug}`, 'layout')
 }
 
 export async function toggleFullWidth(pageId: number, workspaceSlug: string, value: boolean) {

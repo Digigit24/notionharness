@@ -88,6 +88,25 @@ export async function canUserReadMedia(
 
   if (!(await isWorkspaceMember(userId, workspaceId))) return false
 
+  // A page cover, stored on `pages.coverImage` as `media:<id>` (see
+  // `page-canvas.tsx`/`cover-picker.tsx`). Unlike a channel attachment,
+  // `collections/Pages.ts` has no extra privacy tier beyond workspace
+  // membership (`access.read: inMyWorkspaces()`) — so the workspace-member
+  // check just above is already the WHOLE answer here; this only needs to
+  // confirm the media is genuinely in use as a cover, not narrow who may see
+  // it further. Checked before the channel-attachment path so an uploaded
+  // cover is never miscategorised as "unattached, uploader-only" simply
+  // because it never rides in a `team_messages` row.
+  const payload = await getPayloadClient()
+  const asCover = await payload.find({
+    collection: 'pages',
+    where: { coverImage: { equals: `media:${media.id}` } },
+    limit: 1,
+    depth: 0,
+    overrideAccess: true,
+  })
+  if (asCover.docs.length > 0) return true
+
   const pool = getBrokerPool()
   const { rows } = await pool.query<{ team_id: string }>(
     `SELECT DISTINCT team_id FROM team_messages WHERE attachments @> $1::jsonb`,

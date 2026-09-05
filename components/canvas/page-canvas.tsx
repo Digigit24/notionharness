@@ -104,7 +104,42 @@ export function PageCanvas({
   // tabs — this is purely about instant feedback in the tab that clicked.
   const [locked, setLocked] = useState(!!page.isLocked)
   const [fullWidth, setFullWidth] = useState(!!page.isFullWidth)
-  const isGradientCover = page.coverImage?.startsWith('gradient:')
+  // Same reasoning, for the icon and cover: both used to call their server
+  // action directly off `page.icon`/`page.coverImage` with no local mirror,
+  // so the emoji/cover you just picked did not actually appear until
+  // `revalidatePath` (previously ALSO missing its `'layout'` argument, so it
+  // invalidated only the workspace index, never this open page — see that
+  // action's own comment) round-tripped and a fresh render landed. Painted
+  // here immediately instead; reverted if the server call fails.
+  const [icon, setIcon] = useState(page.icon ?? null)
+  const [coverImage, setCoverImage] = useState(page.coverImage ?? null)
+  const isGradientCover = coverImage?.startsWith('gradient:')
+  // `media:<id>` — an uploaded cover, resolved to this app's own byte-serving
+  // route (never Payload's own `/api/media/file/<name>`, which is gated on
+  // `req.user` and always null for a Better-Auth-only browser session — see
+  // `collections/Media.ts`'s header comment). A gradient or a pasted external
+  // URL pass through unchanged.
+  const coverImageUrl = coverImage?.startsWith('media:') ? `/api/media/${coverImage.slice('media:'.length)}/file` : coverImage
+
+  async function updateIcon(next: string | null) {
+    const previous = icon
+    setIcon(next)
+    try {
+      await setPageIcon(page.id, workspace.slug, next)
+    } catch {
+      setIcon(previous)
+    }
+  }
+
+  async function updateCover(next: string | null) {
+    const previous = coverImage
+    setCoverImage(next)
+    try {
+      await setPageCover(page.id, workspace.slug, next)
+    } catch {
+      setCoverImage(previous)
+    }
+  }
 
   // ROADMAP B-1 (Detail) — page view is a full-bleed document editor, not a
   // tabbed entity like an agent/run/task, so it does NOT adopt
@@ -198,17 +233,17 @@ export function PageCanvas({
           </div>
         </header>
 
-        {page.coverImage && (
+        {coverImage && (
           <div
-            className={cn('group relative h-40 w-full', isGradientCover && `bg-gradient-to-br ${page.coverImage.replace('gradient:', '')}`)}
-            style={!isGradientCover ? { backgroundImage: `url(${page.coverImage})`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined}
+            className={cn('group relative h-40 w-full', isGradientCover && `bg-gradient-to-br ${coverImage.replace('gradient:', '')}`)}
+            style={!isGradientCover ? { backgroundImage: `url(${coverImageUrl})`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined}
           >
             {!locked && (
               <div className="absolute bottom-3 right-3 flex gap-2 opacity-0 transition-opacity group-hover:opacity-100">
-                <CoverPicker trigger="Change cover" onSelect={(v) => void setPageCover(page.id, workspace.slug, v)} />
+                <CoverPicker workspaceId={workspace.id} trigger="Change cover" onSelect={(v) => void updateCover(v)} />
                 <button
                   type="button"
-                  onClick={() => void setPageCover(page.id, workspace.slug, null)}
+                  onClick={() => void updateCover(null)}
                   className="rounded-md bg-black/40 px-2 py-1 text-xs text-white hover:bg-black/60"
                 >
                   Remove
@@ -230,28 +265,28 @@ export function PageCanvas({
           <PageOriginHeader workspaceSlug={workspace.slug} origin={origin ?? null} />
 
           <div className="mb-1 flex flex-col gap-2">
-            {page.icon &&
+            {icon &&
               (locked ? (
-                <span className="w-fit text-6xl leading-none">{page.icon}</span>
+                <span className="w-fit text-6xl leading-none">{icon}</span>
               ) : (
                 <EmojiPicker
-                  value={page.icon}
-                  onSelect={(emoji) => void setPageIcon(page.id, workspace.slug, emoji)}
-                  onClear={() => void setPageIcon(page.id, workspace.slug, null)}
+                  value={icon}
+                  onSelect={(emoji) => void updateIcon(emoji)}
+                  onClear={() => void updateIcon(null)}
                 />
               ))}
 
-            {!locked && (!page.icon || !page.coverImage) && (
+            {!locked && (!icon || !coverImage) && (
               <div className="flex gap-2">
-                {!page.icon && (
+                {!icon && (
                   <EmojiPicker
                     value={null}
-                    onSelect={(emoji) => void setPageIcon(page.id, workspace.slug, emoji)}
-                    onClear={() => void setPageIcon(page.id, workspace.slug, null)}
+                    onSelect={(emoji) => void updateIcon(emoji)}
+                    onClear={() => void updateIcon(null)}
                   />
                 )}
-                {!page.coverImage && (
-                  <CoverPicker trigger="Add cover" onSelect={(v) => void setPageCover(page.id, workspace.slug, v)} />
+                {!coverImage && (
+                  <CoverPicker workspaceId={workspace.id} trigger="Add cover" onSelect={(v) => void updateCover(v)} />
                 )}
               </div>
             )}
