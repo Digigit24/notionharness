@@ -96,7 +96,11 @@ export function ToolkitPicker({
       const row = unwrap(
         await addConnector({ workspaceSlug, scopeType, scopeId, toolkitSlug: option.slug, name: option.name }),
       )
-      startTransition(() => onAdded(row))
+      // The server's row has no logo or description (see `toRowView`'s own
+      // comment) — this search result is the very place that data came from,
+      // so merging it in here is free and saves a Composio round trip the
+      // panel would otherwise need just to redraw the card it already has.
+      startTransition(() => onAdded({ ...row, logo: option.logo, description: option.description }))
       setOptions((current) =>
         (current ?? []).map((item) => (item.slug === option.slug ? { ...item, alreadyAdded: true } : item)),
       )
