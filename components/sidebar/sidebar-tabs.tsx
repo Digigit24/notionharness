@@ -1,23 +1,33 @@
 'use client'
 
 /**
- * The sidebar's three tabs, and the one function that decides which of them a
+ * The sidebar's two tabs, and the one function that decides which of them a
  * URL belongs to.
  *
  * WHY TABS AT ALL: the sidebar used to be twelve flat section links stacked
  * above the page tree — every route in the product competing for the same
  * strip of 256px, with no grouping to say which of them belong together. The
- * three tabs are the product's three real modes of attention:
+ * two tabs (labelled "Home" and "Work" — the KEYS below stay `plan`/
+ * `channels`, only the sidebar's own display labels changed, so this file's
+ * routing table did not need a rename to match) are the product's two real
+ * modes of attention:
  *
- *   Plan     — the Notion half. Home, Inbox, Tasks, Projects, Artifacts, the
- *              page tree, Favourites.
- *   Channels — the rooms. Every channel with its agents, then Agents and Work.
- *   Activity — what the machines did. Review, Active runs, Audit.
+ *   Home (key: plan)     — the Notion half, PLUS what the machines did.
+ *                          Home, Inbox, Tasks, Projects, Artifacts, Review,
+ *                          Active runs, Audit, the page tree, Favourites.
+ *   Work (key: channels) — the rooms and the conversations. Every channel
+ *                          with its agents, Agents, New Session, and the
+ *                          Sessions history.
+ *
+ * ACTIVITY USED TO BE A THIRD TAB. Folded into Home: a handful of links did
+ * not carry its own mode of attention the way planning and working do, and a
+ * third tab for it cost a permanent slot in a three-way strip for something
+ * reached far less often than either of the other two.
  *
  * Settings is deliberately NOT a tab: it is pinned at the bottom of the
- * sidebar, outside the tab strip, so it is reachable from all three without a
+ * sidebar, outside the tab strip, so it is reachable from both without a
  * detour. That is why `tabForPathname` returns `null` for it rather than
- * forcing one of the three — see the "neutral route" note below.
+ * forcing one of the two — see the "neutral route" note below.
  *
  * NOTHING HERE NAVIGATES. Switching a tab is `useState` in the sidebar, not
  * `router.push`. That exact mistake was fixed in components/layout/
@@ -28,9 +38,9 @@
 
 import { cn } from '@/lib/cn'
 
-export type SidebarTabKey = 'plan' | 'channels' | 'activity'
+export type SidebarTabKey = 'plan' | 'channels'
 
-export const SIDEBAR_TAB_KEYS: readonly SidebarTabKey[] = ['plan', 'channels', 'activity']
+export const SIDEBAR_TAB_KEYS: readonly SidebarTabKey[] = ['plan', 'channels']
 
 export function isSidebarTabKey(value: unknown): value is SidebarTabKey {
   return typeof value === 'string' && (SIDEBAR_TAB_KEYS as readonly string[]).includes(value)
@@ -47,24 +57,23 @@ export function isSidebarTabKey(value: unknown): value is SidebarTabKey {
  * section the user is not in.
  */
 const TAB_BY_SEGMENT: Record<string, SidebarTabKey> = {
-  // Plan — the Notion half.
+  // Home (label) / plan (key) — the Notion half, plus what the machines did.
   '': 'plan', // the bare workspace root, i.e. Home
   inbox: 'plan',
   tasks: 'plan',
   projects: 'plan',
   artifacts: 'plan',
   p: 'plan', // a page: /workspace/:slug/p/:id
-  // Channels — the rooms and who is in them.
+  review: 'plan',
+  'active-runs': 'plan',
+  audit: 'plan',
+  runs: 'plan', // /runs/:runId/review
+  // Work (label) / channels (key) — the rooms and who is in them.
   teams: 'channels',
   agents: 'channels',
   work: 'channels',
   ask: 'channels', // legacy alias that redirects to /work; mapped so the one
   // render before the redirect lands is not on the wrong tab.
-  // Activity — what the machines did.
-  review: 'activity',
-  'active-runs': 'activity',
-  audit: 'activity',
-  runs: 'activity', // /runs/:runId/review
 }
 
 /**
@@ -103,7 +112,12 @@ export function SidebarTabBar({
     <div
       role="tablist"
       aria-label="Sidebar section"
-      className="mx-2 mt-2 grid grid-cols-3 gap-0.5 rounded-lg bg-black/[.05] p-0.5 dark:bg-white/[.06]"
+      // Sized to however many tabs are actually passed in, rather than a
+      // hardcoded column count — Activity folding into Home dropped this from
+      // three tabs to two, and a fixed `grid-cols-3` would have left a bare
+      // third slot rather than two evenly-split buttons.
+      style={{ gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))` }}
+      className="mx-2 mt-2 grid gap-0.5 rounded-lg bg-black/[.05] p-0.5 dark:bg-white/[.06]"
     >
       {tabs.map((tab) => {
         const isActive = tab.key === active

@@ -4,7 +4,6 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import { ArrowDown, AtSign, Hash, UserPlus } from 'lucide-react'
 import type { ChannelApproval, TeamMessageKind, TeamTask } from '@/lib/broker'
 import { Button } from '@/components/ui/button'
-import { cn } from '@/lib/utils'
 import { unwrap } from '@/lib/failures'
 import { toast } from '@/hooks/use-toast'
 import { useKeyboardShortcut } from '@/lib/keyboard/use-keyboard-shortcut'
@@ -860,15 +859,6 @@ export function ChannelView({
           onCommand={onCommand}
           focusToken={composerFocusToken}
         />
-        {/* This paragraph used to say "nothing dispatches a run from here
-            yet", which stopped being true when `lib/teams/mention-dispatch.ts`
-            landed. A footnote that contradicts the ghost row directly above it
-            is worse than no footnote at all. */}
-        <p className={cn('px-3 pb-2 text-[11px] text-black/35 dark:text-white/35')}>
-          Written to the team mailbox. Naming an agent with <span className="font-medium">@</span> starts its turn
-          straight away and its answer streams in under your message; everyone else picks the message up through the
-          team MCP surface (R6.2).
-        </p>
       </div>
     </div>
   )

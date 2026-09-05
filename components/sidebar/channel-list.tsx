@@ -10,10 +10,11 @@
  * components/teams/shared.ts.)
  */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { ChevronDown, ChevronRight, Users } from 'lucide-react'
 import { cn } from '@/lib/cn'
+import { registerChannelNames } from '@/lib/channel-name-cache'
 import type { SidebarChannel, SidebarChannels } from './channels-data'
 
 /** Members rendered under one expanded channel before "+N more". */
@@ -36,6 +37,15 @@ export function ChannelList({
   activeChannelId: number | null
 }) {
   const teamsHref = `/workspace/${workspaceSlug}/teams`
+
+  // Feeds `[teamId]/loading.tsx`'s breadcrumb — see `lib/channel-name-cache.ts`
+  // for why this is a cache write, not a fetch. `data?.channels` rather than
+  // `data` alone: `undefined`/`null` mean "nothing to register", not "clear
+  // what's there" (a workspace switch that briefly shows no data must not
+  // blank out the previous workspace's cached names while it loads).
+  useEffect(() => {
+    if (data?.channels) registerChannelNames(data.channels)
+  }, [data])
 
   return (
     <div className="mb-3">

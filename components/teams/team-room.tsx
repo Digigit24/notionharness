@@ -1131,15 +1131,15 @@ export function TeamRoom({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <header className="mb-3 flex flex-wrap items-center gap-3">
+      <header className="mb-2 flex flex-wrap items-center gap-3">
         <div className="min-w-0 flex-1">
-          <h1 className="flex items-center gap-1.5 truncate text-2xl font-semibold">
+          <h1 className="flex items-center gap-1.5 truncate text-xl font-semibold">
             <span aria-hidden className="text-black/25 dark:text-white/25">
-              {channel.isPrivate ? <Lock size={18} /> : <Hash size={20} />}
+              {channel.isPrivate ? <Lock size={16} /> : <Hash size={18} />}
             </span>
             {channel.name}
           </h1>
-          <p className="mt-0.5 truncate text-sm text-black/50 dark:text-white/50">
+          <p className="truncate text-xs text-black/50 dark:text-white/50">
             {channel.topic ? `${channel.topic} · ` : channel.description ? `${channel.description} · ` : ''}
             {slots.length} {slots.length === 1 ? 'member' : 'members'} ·{' '}
             {channel.workspaceMode === 'shared' ? 'shared worktree' : 'worktree per member'}

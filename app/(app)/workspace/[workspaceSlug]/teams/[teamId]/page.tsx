@@ -10,7 +10,6 @@ import {
   listTeamTasks,
 } from '@/lib/broker'
 import { listTeamRoomMessages, readTeamStopState, sweepTeamSlots } from '@/lib/teams/reliability'
-import { Breadcrumbs } from '@/components/nav/breadcrumbs'
 import { TeamRoom } from '@/components/teams/team-room'
 import { getChannel, isChannelMember, loadChannelFeed, loadSlots, resolveMySlot } from '../data'
 
@@ -138,15 +137,13 @@ export default async function ChannelPage({
   ])
 
   return (
-    <main className="flex h-full w-full flex-col px-5 py-6">
-      <Breadcrumbs
-        className="mb-2"
-        segments={[
-          { label: workspace.name, href: `/workspace/${workspace.slug}` },
-          { label: 'Channels', href: `/workspace/${workspace.slug}/teams` },
-          { label: `#${channel.name}` },
-        ]}
-      />
+    // R14 — height pass. No breadcrumb here: the room's own header states the
+    // channel name one line below where this row used to sit, in a bigger,
+    // bolder typeface — a breadcrumb repeating it added a full row of chrome
+    // that told you nothing the header didn't. Reduced page padding for the
+    // same reason: this route's whole reason to exist is the message list
+    // below, not the frame around it.
+    <main className="flex h-full w-full flex-col px-5 py-4">
       <TeamRoom
         workspaceId={workspace.id}
         workspaceSlug={workspace.slug}

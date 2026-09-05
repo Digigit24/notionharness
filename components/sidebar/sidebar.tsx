@@ -323,13 +323,12 @@ export function Sidebar({
   }, [channels])
 
   const tabs: SidebarTabDescriptor[] = [
-    { key: 'plan', label: 'Plan' },
+    { key: 'plan', label: 'Home' },
     {
       key: 'channels',
-      label: 'Channels',
+      label: 'Work',
       dot: channelTotals.mentions > 0 ? 'mention' : channelTotals.unread > 0 ? 'unread' : 'none',
     },
-    { key: 'activity', label: 'Activity' },
   ]
 
   const settingsHref = `/workspace/${workspace.slug}/settings`
@@ -443,13 +442,39 @@ export function Sidebar({
       <div className="mt-2 flex-1 overflow-y-auto px-2 pb-4">
         {tab === 'plan' && (
           <div role="tabpanel" id="sidebar-panel-plan" aria-labelledby="sidebar-tab-plan">
-            <nav className="mb-3 flex flex-col gap-px">
+            <nav className="flex flex-col gap-px">
               {PLAN_LINKS.map((link) => (
                 <NavRow
                   key={link.href}
                   link={link}
                   workspaceSlug={workspace.slug}
                   active={isSectionActive(pathname, workspace.slug, link.href)}
+                />
+              ))}
+            </nav>
+
+            {/* Activity — "what the machines did" — folded in here rather
+                than kept as its own tab: two tabs for the app's two real
+                modes of attention (planning and working) said more than
+                three did, and this is a handful of links, not a category
+                that needed a whole strip to itself. */}
+            <nav className="mb-3 flex flex-col gap-px border-t border-black/5 pt-2 dark:border-white/10">
+              {ACTIVITY_LINKS.map((link) => (
+                <NavRow
+                  key={link.href}
+                  link={link}
+                  workspaceSlug={workspace.slug}
+                  active={isSectionActive(pathname, workspace.slug, link.href)}
+                  // Counts come from the ambient status the layout already
+                  // fetches for the status bar below — no extra query for a
+                  // badge, and the two can never disagree.
+                  count={
+                    link.href === '/review'
+                      ? ambientStatus.approvalsWaiting
+                      : link.href === '/active-runs'
+                        ? ambientStatus.runsInFlight
+                        : undefined
+                  }
                 />
               ))}
             </nav>
@@ -574,49 +599,26 @@ export function Sidebar({
 
         {tab === 'channels' && (
           <div role="tabpanel" id="sidebar-panel-channels" aria-labelledby="sidebar-tab-channels">
-            <ChannelList workspaceSlug={workspace.slug} data={channels} activeChannelId={activeChannelId} />
-            <div className="border-t border-black/5 pt-2 dark:border-white/10">
-              <SessionsSection workspaceId={workspace.id} workspaceSlug={workspace.slug} />
-            </div>
-            <div className="border-t border-black/5 pt-2 dark:border-white/10">
-              <nav className="flex flex-col gap-px">
-                {CHANNEL_LINKS.map((link) => (
-                  <NavRow
-                    key={link.href}
-                    link={link}
-                    workspaceSlug={workspace.slug}
-                    active={isSectionActive(pathname, workspace.slug, link.href)}
-                  />
-                ))}
-              </nav>
-            </div>
-          </div>
-        )}
-
-        {tab === 'activity' && (
-          <div role="tabpanel" id="sidebar-panel-activity" aria-labelledby="sidebar-tab-activity">
-            <nav className="flex flex-col gap-px">
-              {ACTIVITY_LINKS.map((link) => (
+            {/* Agents and New Session first: two deliberate jumping-off
+                points, not something to scroll past the channel list and the
+                session history to find. */}
+            <nav className="mb-2 flex flex-col gap-px">
+              {CHANNEL_LINKS.map((link) => (
                 <NavRow
                   key={link.href}
                   link={link}
                   workspaceSlug={workspace.slug}
                   active={isSectionActive(pathname, workspace.slug, link.href)}
-                  // Counts come from the ambient status the layout already
-                  // fetches for the status bar below — no extra query for a
-                  // badge, and the two can never disagree.
-                  count={
-                    link.href === '/review'
-                      ? ambientStatus.approvalsWaiting
-                      : link.href === '/active-runs'
-                        ? ambientStatus.runsInFlight
-                        : undefined
-                  }
                 />
               ))}
             </nav>
+            <ChannelList workspaceSlug={workspace.slug} data={channels} activeChannelId={activeChannelId} />
+            <div className="border-t border-black/5 pt-2 dark:border-white/10">
+              <SessionsSection workspaceId={workspace.id} workspaceSlug={workspace.slug} />
+            </div>
           </div>
         )}
+
       </div>
 
       <AmbientStatus workspaceId={workspace.id} workspaceSlug={workspace.slug} initialStatus={ambientStatus} />
