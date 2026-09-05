@@ -1,10 +1,17 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Plug, Plus, ShieldAlert, Trash2 } from 'lucide-react'
+import Link from 'next/link'
+import { Blocks, Mail, Plug, Plus, ShieldAlert, Sparkles, Trash2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { useOptimisticAction } from '@/lib/optimistic'
 import { unwrap } from '@/lib/failures'
 import { toast } from '@/hooks/use-toast'
@@ -53,6 +60,28 @@ const POLL_INTERVAL_MS = 2_000
  * tab polling for the rest of the day. Five minutes is longer than any real
  * OAuth flow and is the point at which "still pending" stops being news. */
 const POLL_CEILING_MS = 5 * 60 * 1000
+
+/**
+ * "Native" is a UI grouping only, not a fact `lib/connectors/composio.ts`
+ * knows about — every toolkit here, allowlisted or not, is provisioned
+ * through the same Composio auth-config flow (`findOrCreateAuthConfig`).
+ * There is no second, hand-rolled OAuth path in this app to distinguish it
+ * from. The badge exists because a person recognises "Slack" by name and does
+ * not care whether Composio or something else sits behind it; this list is
+ * that recognisability boundary, cosmetic and hardcoded on purpose rather
+ * than a schema field for something no mutation ever needs to query. Extend
+ * it by adding a slug — it needs no server change and no migration.
+ */
+const PRIMARY_TOOLKIT_SLUGS = new Set([
+  'gmail',
+  'googlecalendar',
+  'google_calendar',
+  'slack',
+  'github',
+  'googledrive',
+  'google_drive',
+  'telegram',
+])
 
 /** What `/api/connectors/status` returns per row. Deliberately narrower than
  * the `connections` document: no `redirectUrl` and no connected-account id,
@@ -187,6 +216,19 @@ export function ConnectorsPanel({
     })
   }
 
+  // Two tiers, not one flat list: `PRIMARY_TOOLKIT_SLUGS` above is the only
+  // thing that decides which grid a row lands in, so a workspace that has
+  // only long-tail toolkits attached sees one grid under "All other
+  // integrations" rather than an empty primary section above it.
+  const primaryRows = rows.filter((row) => PRIMARY_TOOLKIT_SLUGS.has(row.toolkitSlug.toLowerCase()))
+  const otherRows = rows.filter((row) => !PRIMARY_TOOLKIT_SLUGS.has(row.toolkitSlug.toLowerCase()))
+
+  const cardProps = {
+    canAdminister: data.canAdminister,
+    keyPresent: data.key.present,
+    busy: optimistic.pending,
+  }
+
   return (
     <div className="flex flex-col gap-4">
       {(heading || data.canAdminister) && (
@@ -230,21 +272,47 @@ export function ConnectorsPanel({
           {...(data.canAdminister ? { action: { label: 'Add an app', onClick: () => setPicking(true) } } : {})}
         />
       ) : (
-        <ul className="flex flex-col gap-2">
-          {rows.map((row) => (
-            <ConnectorRow
-              key={row.id}
-              row={row}
-              canAdminister={data.canAdminister}
-              keyPresent={data.key.present}
-              busy={optimistic.pending}
-              onConnect={() => void onConnect(row)}
-              onDisconnect={() => void onDisconnect(row)}
-              onToggle={(enabled) => void onToggle(row, enabled)}
-              onRemove={() => void onRemove(row)}
-            />
-          ))}
-        </ul>
+        <div className="flex flex-col gap-5">
+          {primaryRows.length > 0 && (
+            <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {primaryRows.map((row) => (
+                <ConnectorCard
+                  key={row.id}
+                  row={row}
+                  {...cardProps}
+                  onConnect={() => void onConnect(row)}
+                  onDisconnect={() => void onDisconnect(row)}
+                  onToggle={(enabled) => void onToggle(row, enabled)}
+                  onRemove={() => void onRemove(row)}
+                />
+              ))}
+            </ul>
+          )}
+
+          {(otherRows.length > 0 || data.canAdminister) && (
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="text-sm font-medium text-black/70 dark:text-white/70">All other integrations</h3>
+                {data.canAdminister && <AddMoreMenu workspaceSlug={workspaceSlug} />}
+              </div>
+              {otherRows.length > 0 && (
+                <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {otherRows.map((row) => (
+                    <ConnectorCard
+                      key={row.id}
+                      row={row}
+                      {...cardProps}
+                      onConnect={() => void onConnect(row)}
+                      onDisconnect={() => void onDisconnect(row)}
+                      onToggle={(enabled) => void onToggle(row, enabled)}
+                      onRemove={() => void onRemove(row)}
+                    />
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
       )}
 
       {picking && (
@@ -260,7 +328,14 @@ export function ConnectorsPanel({
   )
 }
 
-function ConnectorRow({
+/**
+ * One app, as a card. Same row data and the same four handlers `ConnectorRow`
+ * used to render as a compact list item — only the layout changed, into the
+ * icon/badge/name/description/button shape the reference design asked for.
+ * Nothing here decides differently than before: `status`, `keyPresent` and
+ * `canAdminister` still gate exactly what they gated.
+ */
+function ConnectorCard({
   row,
   canAdminister,
   keyPresent,
@@ -280,31 +355,45 @@ function ConnectorRow({
   onRemove: () => void
 }) {
   const status = row.connection?.status ?? null
+  const isPrimary = PRIMARY_TOOLKIT_SLUGS.has(row.toolkitSlug.toLowerCase())
 
   return (
-    <li className="flex items-center gap-3 rounded-lg border border-black/10 px-3 py-2.5 dark:border-white/10">
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="truncate text-sm font-medium">{row.name}</span>
-          <span className="font-mono text-[10px] text-black/35 dark:text-white/35">{row.toolkitSlug}</span>
+    <li className="flex flex-col gap-2.5 rounded-xl border border-black/10 p-3.5 dark:border-white/10">
+      <div className="flex items-start justify-between gap-2">
+        <ToolkitIcon logo={row.logo} name={row.name} />
+        <Badge
+          variant="outline"
+          className="shrink-0 text-[10px] font-medium tracking-wide text-black/40 uppercase dark:text-white/40"
+        >
+          {isPrimary ? 'Native' : 'MCP'}
+        </Badge>
+      </div>
+
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="truncate text-sm font-semibold">{row.name}</span>
           {!row.enabled && <Badge variant="outline">disabled</Badge>}
           {row.scopeType !== 'workspace' && <Badge variant="secondary">{row.scopeType}</Badge>}
         </div>
-        <p className="mt-0.5 text-xs text-black/50 dark:text-white/50">
+        <p className="mt-0.5 line-clamp-1 text-xs text-black/50 dark:text-white/50">
+          {row.description || row.toolkitSlug}
+        </p>
+        <p className="mt-1 text-[11px] text-black/40 dark:text-white/40">
           <ConnectionSentence status={status} detail={row.connection?.statusDetail ?? null} />
         </p>
       </div>
 
-      <div className="flex shrink-0 items-center gap-1.5">
+      <div className="mt-auto flex flex-col gap-1.5 pt-1">
         {status === 'active' ? (
-          <Button type="button" size="xs" variant="ghost" onClick={onDisconnect} disabled={busy}>
+          <Button type="button" size="sm" variant="outline" className="w-full" onClick={onDisconnect} disabled={busy}>
             Disconnect
           </Button>
         ) : (
           <Button
             type="button"
-            size="xs"
-            variant="outline"
+            size="sm"
+            variant="default"
+            className="w-full"
             onClick={onConnect}
             // A Connect button with no key behind it opens nothing and reports
             // a failure the person cannot fix. Disabled, with the reason
@@ -316,8 +405,15 @@ function ConnectorRow({
         )}
 
         {canAdminister && (
-          <>
-            <Button type="button" size="xs" variant="ghost" onClick={() => onToggle(!row.enabled)} disabled={busy}>
+          <div className="flex items-center gap-1.5">
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              className="flex-1"
+              onClick={() => onToggle(!row.enabled)}
+              disabled={busy}
+            >
               {row.enabled ? 'Disable' : 'Enable'}
             </Button>
             <Button
@@ -330,10 +426,95 @@ function ConnectorRow({
             >
               <Trash2 />
             </Button>
-          </>
+          </div>
         )}
       </div>
     </li>
+  )
+}
+
+/** The square logo tile. Composio's own artwork is an arbitrary remote URL —
+ * not one of this app's own domains — so it is a plain `img`, not
+ * `next/image`, which would need that host added to `next.config`'s allowed
+ * remote patterns for every toolkit Composio ever adds. Falls back to an
+ * initial on a tinted tile, both for toolkits `enrichWithToolkitMeta` never
+ * found a logo for and for a URL that 404s after the fact. */
+function ToolkitIcon({ logo, name }: { logo: string | null; name: string }) {
+  const [broken, setBroken] = useState(false)
+  if (!logo || broken) {
+    return (
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-black/5 text-xs font-semibold text-black/50 uppercase dark:bg-white/10 dark:text-white/50">
+        {name.charAt(0)}
+      </span>
+    )
+  }
+  return (
+    // Composio's own CDN, an arbitrary third-party host per toolkit — never
+    // one `next.config`'s remote patterns could enumerate in advance.
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={logo}
+      alt=""
+      className="size-8 shrink-0 rounded-md border border-black/5 object-contain dark:border-white/10"
+      onError={() => setBroken(true)}
+    />
+  )
+}
+
+/**
+ * The long tail's own add menu, distinct from the "Add an app" button above
+ * the primary grid. That button already does the one thing this screen's
+ * mutations support — searching Composio's catalogue via `ToolkitPicker` —
+ * and stays exactly as it was. These three items are the reference design's
+ * catch-all for everything Composio's catalogue does not cover, and each is
+ * wired to whatever this app genuinely has today rather than a flow invented
+ * to fill the slot:
+ *
+ * - "Add custom MCP server" opens the existing MCP catalog page. That page is
+ *   itself read-only browse of this machine's bundled Hermes presets
+ *   (`app/(app)/workspace/[workspaceSlug]/settings/mcp-catalog/page.tsx`'s own
+ *   header says so) — there is no flow anywhere in this app to register an
+ *   arbitrary MCP server URL, so this is the closest real destination, not a
+ *   working "paste a URL" form.
+ * - "Request an integration" has nothing to file a request against — no
+ *   tracker, no admin contact stored anywhere this screen can reach — so it
+ *   says that plainly instead of pretending to submit something.
+ * - "Create a skill" is disabled outright: this codebase has no Skills
+ *   collection and no skill-authoring surface (checked `collections/` and
+ *   `docs/`), so a working link here would be a lie about what shipped.
+ */
+function AddMoreMenu({ workspaceSlug }: { workspaceSlug: string }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button type="button" size="sm" variant="outline">
+          <Plus /> Add
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem asChild>
+          <Link href={`/workspace/${workspaceSlug}/settings/mcp-catalog`}>
+            <Blocks /> Add custom MCP server
+          </Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onSelect={() =>
+            toast({
+              title: 'Not yet available',
+              description: 'There is no request-tracking flow here yet — tell your workspace admin which app you need.',
+            })
+          }
+        >
+          <Mail /> Request an integration
+        </DropdownMenuItem>
+        <DropdownMenuItem disabled>
+          <Sparkles /> Create a skill
+          <Badge variant="outline" className="ml-auto text-[9px]">
+            Soon
+          </Badge>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 

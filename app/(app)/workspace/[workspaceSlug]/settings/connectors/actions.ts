@@ -68,6 +68,13 @@ export interface ConnectorRowView {
   scopeId: string | null
   enabled: boolean
   allowedTools: string[]
+  /** Composio's own toolkit artwork and one-line blurb, e.g. "Database and
+   * applications" for Airtable. Best-effort: sourced from a single bounded
+   * catalog page (`enrichWithToolkitMeta` below) or, for a row just added in
+   * this session, from the picker's own search result — never guaranteed, so
+   * the card renderer must read `null` as "say nothing" rather than as a bug. */
+  logo: string | null
+  description: string | null
   /** The VIEWER's own connection for this toolkit — never the agent's, never
    * another member's. */
   connection: {
@@ -134,6 +141,12 @@ export async function getConnectorPanel(input: {
       describeKey(workspace.id),
     ])
 
+    const meta = await enrichWithToolkitMeta(
+      workspace.id,
+      key,
+      resolved.map((entry) => entry.connector.toolkitSlug),
+    )
+
     return {
       workspaceId: workspace.id,
       scopeType: input.scopeType,
@@ -142,6 +155,7 @@ export async function getConnectorPanel(input: {
       key,
       connectors: resolved.map((entry) => {
         const connection = connections.get(entry.connector.toolkitSlug.toLowerCase()) ?? null
+        const found = meta.get(entry.connector.toolkitSlug.toLowerCase()) ?? null
         return {
           id: entry.connector.id,
           toolkitSlug: entry.connector.toolkitSlug,
@@ -152,6 +166,8 @@ export async function getConnectorPanel(input: {
           allowedTools: Array.isArray(entry.connector.allowedTools)
             ? entry.connector.allowedTools.filter((slug): slug is string => typeof slug === 'string')
             : [],
+          logo: found?.logo ?? null,
+          description: found?.description ?? null,
           connection: connection
             ? {
                 id: connection.id,
@@ -165,6 +181,41 @@ export async function getConnectorPanel(input: {
       }),
     }
   })
+}
+
+/**
+ * Best-effort artwork and blurb for the rows already attached at this scope.
+ *
+ * ONE CALL, NOT ONE PER ROW. Composio meters per organisation
+ * (`lib/connectors/composio.ts`'s own header), and a panel with a dozen
+ * connectors firing a dozen concurrent `/toolkits` searches would spend that
+ * budget rendering a card grid rather than doing anything a person asked for.
+ * `listToolkits` with no `search` returns one page of the catalog; a toolkit
+ * outside that page simply renders without a logo or a description, which is
+ * a card that says less, never a card that lies.
+ *
+ * SKIPPED OUTRIGHT WITHOUT A KEY. `listToolkits` would fail the same way for
+ * every row, and turning one known "no key" state into N identical failed
+ * requests teaches Composio's rate limiter nothing useful.
+ */
+async function enrichWithToolkitMeta(
+  workspaceId: number,
+  key: KeyPresence,
+  toolkitSlugs: string[],
+): Promise<Map<string, { logo: string | null; description: string | null }>> {
+  const map = new Map<string, { logo: string | null; description: string | null }>()
+  if (!key.present || toolkitSlugs.length === 0) return map
+  try {
+    const { toolkits } = await listToolkits(workspaceId, { limit: 150 })
+    for (const toolkit of toolkits) {
+      map.set(toolkit.slug.toLowerCase(), { logo: toolkit.logo, description: toolkit.description })
+    }
+  } catch {
+    // The panel still renders every row without artwork — this is decoration,
+    // not the connector list itself, and a Composio hiccup here must not be
+    // the reason the whole screen shows a failure state.
+  }
+  return map
 }
 
 /** The viewer's own connections, keyed by lowercased toolkit. An active row
@@ -716,6 +767,13 @@ function toRowView(connector: Connector, connection: Connection | null): Connect
     allowedTools: Array.isArray(connector.allowedTools)
       ? connector.allowedTools.filter((slug): slug is string => typeof slug === 'string')
       : [],
+    // Empty here, not a Composio lookup: this is the row for a connector
+    // created moments ago, and the caller (`toolkit-picker.tsx`) already has
+    // this toolkit's logo and description from the very search result the
+    // person picked it from — merging it in there is one fewer network call,
+    // not a gap in this row.
+    logo: null,
+    description: null,
     connection: connection
       ? {
           id: connection.id,
