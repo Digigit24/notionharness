@@ -52,7 +52,7 @@ async function main() {
     console.log(`[ok] enqueueRun -> run ${run.id}, status=${run.status}`)
 
     // --- CLAIM (FOR UPDATE SKIP LOCKED) ---
-    const claimed = await claimNextRun('test-worker-1', 5_000)
+    const claimed = await claimNextRun('test-worker-1', 'test-host', 5_000)
     assert(claimed !== null, 'expected a run to be claimed')
     assert(claimed!.id === run.id, `expected to claim run ${run.id}, got ${claimed!.id}`)
     assert(claimed!.status === 'dispatched', `expected dispatched, got ${claimed!.status}`)
@@ -61,7 +61,7 @@ async function main() {
     console.log(`[ok] claimNextRun -> claimed run ${claimed!.id}, status=${claimed!.status}, lease set, run_token minted`)
 
     // A second immediate claim must find nothing (no other queued run).
-    const secondClaim = await claimNextRun('test-worker-2', 5_000)
+    const secondClaim = await claimNextRun('test-worker-2', 'test-host', 5_000)
     assert(secondClaim === null, `expected no second run to claim, got ${JSON.stringify(secondClaim)}`)
     console.log('[ok] second claimNextRun with nothing queued -> null')
 
@@ -105,7 +105,7 @@ async function main() {
     // --- SETTLE with retry ---
     const retryableRun = await enqueueRun({ accountableUser: userId, maxAttempts: 3 })
     createdRunIds.push(retryableRun.id)
-    const claimedForFailure = await claimNextRun('test-worker-3', 5_000)
+    const claimedForFailure = await claimNextRun('test-worker-3', 'test-host', 5_000)
     assert(claimedForFailure!.id === retryableRun.id, 'expected to claim the retryable run')
     assert(
       !!claimedForFailure!.runToken && claimedForFailure!.runToken !== claimed!.runToken,
@@ -122,13 +122,13 @@ async function main() {
 
     // Drain the still-queued retry spawned above so it can't be the one the
     // RECOVER section below claims instead of its own intended target.
-    const leftoverRetry = await claimNextRun('cleanup-drain', 5_000)
+    const leftoverRetry = await claimNextRun('cleanup-drain', 'test-host', 5_000)
     if (leftoverRetry) await settleRun(leftoverRetry.id, 'cancelled')
 
     // --- RECOVER (lease sweep) ---
     const staleRun = await enqueueRun({ accountableUser: userId })
     createdRunIds.push(staleRun.id)
-    const claimedStale = await claimNextRun('dead-worker', 1) // 1ms lease — expires almost immediately
+    const claimedStale = await claimNextRun('dead-worker', 'test-host', 1) // 1ms lease — expires almost immediately
     assert(claimedStale!.id === staleRun.id, 'expected to claim the stale run')
     await new Promise((r) => setTimeout(r, 50)) // let the 1ms lease actually lapse
     const swept = await sweepExpiredLeases()
@@ -140,10 +140,60 @@ async function main() {
     console.log(`[ok] sweepExpiredLeases -> reclaimed ${swept} run(s), stale run back to queued`)
 
     // Clean up the now-queued recovered run so nothing is left claimable.
-    const recoveredClaim = await claimNextRun('cleanup-worker', 5_000)
+    const recoveredClaim = await claimNextRun('cleanup-worker', 'test-host', 5_000)
     if (recoveredClaim) await settleRun(recoveredClaim.id, 'cancelled')
-    const remainingRetry = await claimNextRun('cleanup-worker-2', 5_000)
+    const remainingRetry = await claimNextRun('cleanup-worker-2', 'test-host', 5_000)
     if (remainingRetry) await settleRun(remainingRetry.id, 'cancelled')
+
+    // --- HOST-SCOPED CLAIMING ---
+    // A run whose agent's runtime profile names a DIFFERENT host must not be
+    // claimable from here; the same profile's own host must still claim it.
+    // Every OTHER run in this file has no agent at all, which exercises the
+    // "no host preference" (LEFT JOIN, host_id NULL) path already — this is
+    // the one scenario that needs a real agent + profile row.
+    const setupPool = new Pool({ connectionString: process.env.DATABASE_URI || '', max: 1 })
+    let hostScopedProfileId: number | undefined
+    let hostScopedAgentId: number | undefined
+    try {
+      const workspaceRow = await setupPool.query<{ id: number }>('SELECT id FROM workspaces ORDER BY id ASC LIMIT 1')
+      if (!workspaceRow.rows[0]) throw new Error('No workspaces row exists for the host-scoping check — seed one first.')
+      const workspaceId = workspaceRow.rows[0].id
+
+      const profileRes = await setupPool.query<{ id: number }>(
+        `INSERT INTO runtime_profiles (name, workspace_id, protocol_family, command_name, host_id, enabled)
+         VALUES ('test-broker host-scoped profile', $1, 'acp', 'nonexistent-test-binary', 'a-different-machine', true)
+         RETURNING id`,
+        [workspaceId],
+      )
+      hostScopedProfileId = profileRes.rows[0].id
+
+      const agentRes = await setupPool.query<{ id: number }>(
+        `INSERT INTO agents (name, workspace_id, runtime_profile_id)
+         VALUES ('test-broker host-scoped agent', $1, $2)
+         RETURNING id`,
+        [workspaceId, hostScopedProfileId],
+      )
+      hostScopedAgentId = agentRes.rows[0].id
+
+      const hostScopedRun = await enqueueRun({ accountableUser: userId, agentId: hostScopedAgentId, priority: 5 })
+      createdRunIds.push(hostScopedRun.id)
+
+      const wrongHostClaim = await claimNextRun('test-worker-wrong-host', 'this-host', 5_000)
+      assert(wrongHostClaim === null, `expected a run scoped to a different host not to be claimable, got ${JSON.stringify(wrongHostClaim)}`)
+      console.log('[ok] claimNextRun does not claim a run whose profile names a different host')
+
+      const rightHostClaim = await claimNextRun('test-worker-right-host', 'a-different-machine', 5_000)
+      assert(
+        rightHostClaim !== null && rightHostClaim.id === hostScopedRun.id,
+        `expected the matching host to claim run ${hostScopedRun.id}, got ${JSON.stringify(rightHostClaim)}`,
+      )
+      await settleRun(rightHostClaim!.id, 'cancelled')
+      console.log('[ok] claimNextRun claims a run whose profile names THIS host')
+    } finally {
+      if (hostScopedAgentId) await setupPool.query('DELETE FROM agents WHERE id = $1', [hostScopedAgentId])
+      if (hostScopedProfileId) await setupPool.query('DELETE FROM runtime_profiles WHERE id = $1', [hostScopedProfileId])
+      await setupPool.end()
+    }
 
     console.log('\nALL BROKER CHECKS PASSED')
   } finally {

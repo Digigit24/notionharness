@@ -87,7 +87,7 @@ async function main() {
   console.log(`[ok] enqueueRun -> run ${run.id}`)
 
   try {
-    const claimed = await claimNextRun('test-run-usage-worker', 60_000)
+    const claimed = await claimNextRun('test-run-usage-worker', 'test-host', 60_000)
     if (claimed && claimed.id !== run.id) {
       // Belt-and-suspenders: even with max priority this should be
       // unreachable, but if it ever happens again, self-heal immediately

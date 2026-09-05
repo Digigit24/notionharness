@@ -5,6 +5,7 @@ import { recordDispatcherTick } from '@/lib/broker/dispatcher-health'
 import { reclaimRunWorktrees } from '@/lib/run-worktrees/retention'
 import { reapOrphanedWorktrees, barePathFor } from '@/lib/run-worktrees/manager'
 import { resolveRunWorktreeConfig } from '@/lib/run-worktrees/config'
+import { currentHostId } from '@/lib/runtimes/host-id'
 import { getBrokerPool } from '@/lib/broker/db'
 import { bestEffort } from '@/lib/failures'
 import { logger } from '@/lib/logger'
@@ -151,6 +152,6 @@ export async function POST(request: Request) {
     ticksSinceSweep = 0
     recovered = await sweepExpiredLeases()
   }
-  const outcome = await dispatchNextRun(workerId)
+  const outcome = await dispatchNextRun(workerId, currentHostId())
   return NextResponse.json({ ...outcome, recovered })
 }

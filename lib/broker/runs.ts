@@ -151,6 +151,22 @@ export async function enqueueRun(input: {
  * subquery selecting the row to claim, never select-then-update ("Two hosts
  * will both win" otherwise). Returns null if nothing is queued.
  *
+ * `hostId` (`lib/runtimes/host-id.ts`) is this process's own machine identity,
+ * and the subquery only considers a run whose agent's runtime profile either
+ * names no host (`host_id IS NULL` — every profile created before this field
+ * existed, and every single-machine install) or names THIS one. Without this,
+ * any machine's dispatcher could claim a run whose runtime only exists on a
+ * different machine, spawn ENOENT, and — because that failure used to be
+ * unconditionally non-retryable — die permanently instead of being left for
+ * the right machine to pick up.
+ *
+ * The two LEFT JOINs (a run with no agent, or an agent with no profile row
+ * left to load, must both still be claimable by anyone) are why `FOR UPDATE`
+ * names `runs` explicitly: without `OF r`, Postgres would try to lock rows in
+ * `agents`/`runtime_profiles` too, which is not what this needs to serialise
+ * on and would make an unrelated write to either table block a claim for no
+ * reason.
+ *
  * Per 4.7, "minted at claim, dead at settle": `run_token` — the bearer
  * credential `POST /api/daemon/page-writes` checks — is generated here, in
  * the same atomic UPDATE as status/worker_id/lease, not as a separate step
@@ -158,25 +174,28 @@ export async function enqueueRun(input: {
  * window. `settleRun` already wipes it back to NULL on every terminal
  * transition (see below); minting it anywhere but claim would either miss
  * that "dead at settle" guarantee or need its own extra round trip. */
-export async function claimNextRun(workerId: string, leaseMs = DEFAULT_LEASE_MS): Promise<Run | null> {
+export async function claimNextRun(workerId: string, hostId: string, leaseMs = DEFAULT_LEASE_MS): Promise<Run | null> {
   const pool = getBrokerPool()
   const runToken = randomBytes(32).toString('hex')
   const res = await pool.query<RunRow>(
     `UPDATE runs
      SET status = 'dispatched',
          worker_id = $1,
-         lease_expires_at = now() + ($2::text || ' milliseconds')::interval,
-         run_token = $3,
+         lease_expires_at = now() + ($3::text || ' milliseconds')::interval,
+         run_token = $4,
          updated_at = now()
      WHERE id = (
-       SELECT id FROM runs
-       WHERE status = 'queued'
-       ORDER BY priority DESC, created_at ASC
-       FOR UPDATE SKIP LOCKED
+       SELECT r.id FROM runs r
+       LEFT JOIN agents a ON a.id = r.agent_id
+       LEFT JOIN runtime_profiles rp ON rp.id = a.runtime_profile_id
+       WHERE r.status = 'queued'
+         AND (rp.host_id IS NULL OR rp.host_id = $2)
+       ORDER BY r.priority DESC, r.created_at ASC
+       FOR UPDATE OF r SKIP LOCKED
        LIMIT 1
      )
      RETURNING *`,
-    [workerId, leaseMs, runToken],
+    [workerId, hostId, leaseMs, runToken],
   )
   return res.rows[0] ? rowToRun(res.rows[0]) : null
 }

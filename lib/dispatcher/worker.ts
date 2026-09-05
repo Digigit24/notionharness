@@ -226,7 +226,7 @@ function decrAgentInFlight(agentId: number): void {
   else agentInFlightCounts.set(agentId, next)
 }
 
-export async function dispatchNextRun(workerId: string): Promise<DispatchOutcome> {
+export async function dispatchNextRun(workerId: string, hostId: string): Promise<DispatchOutcome> {
   // Global ceiling enforced *before* claiming: don't pull work off the
   // queue past capacity just to let it sit claimed-but-waiting — leave it
   // 'queued' for whichever tick has room, so priority ordering (`claimNextRun`'s
@@ -235,7 +235,7 @@ export async function dispatchNextRun(workerId: string): Promise<DispatchOutcome
     return { claimed: false }
   }
 
-  const run = await claimNextRun(workerId)
+  const run = await claimNextRun(workerId, hostId)
   if (!run) return { claimed: false }
 
   const execution = executeRun(run)

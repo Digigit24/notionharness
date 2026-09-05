@@ -5,6 +5,7 @@ import { getPayloadClient } from '@/lib/payload'
 import type { RuntimeProfile } from '@/payload-types'
 import { probeAcpRuntime, resolveCommandPath } from '@/lib/runtimes/detect'
 import { CATALOG_HOME_STRATEGIES, RUNTIME_CATALOG, type RuntimeCatalogId } from '@/lib/runtimes/catalog'
+import { currentHostId } from '@/lib/runtimes/host-id'
 import { getCurrentPayloadUser } from '@/lib/current-user'
 import { guard, raise, type WithFailure } from '@/lib/failures'
 
@@ -68,6 +69,12 @@ export async function createRuntimeProfile({
         // explicitly and a custom profile that is not Hermes gets 'none' —
         // the honest default for a CLI we know nothing about.
         ...(homeStrategy !== undefined ? { homeStrategy: homeStrategy as RuntimeProfile['homeStrategy'] } : {}),
+        // Scoped to THIS machine by default — this action only ever runs on
+        // whichever machine's server the browser creating it is talking to,
+        // which is exactly the machine `detectCatalogRuntimes` just checked
+        // PATH on. See `lib/broker/runs.ts`'s `claimNextRun` for where this
+        // is enforced; a single-machine install never notices it.
+        hostId: currentHostId(),
         enabled: true,
       },
       overrideAccess: true,
@@ -104,6 +111,40 @@ export async function detectCatalogRuntimes(): Promise<WithFailure<DetectedRunti
         return { id: entry.id, installed: path !== null, path }
       }),
     )
+  })
+}
+
+/**
+ * Changes which machine may claim runs for agents on this profile — or clears
+ * it, making the profile claimable from any machine again (`host_id NULL`,
+ * this collection's own pre-multi-machine default). See
+ * `lib/broker/runs.ts`'s `claimNextRun` for the read side.
+ *
+ * Deliberately does not accept an arbitrary string from the client: the only
+ * two honest values a person can pick from a browser are "this machine" (the
+ * one this Server Action is actually running on) and "any machine" — typing a
+ * hostname for a machine that isn't the one you're looking at would silently
+ * create a profile that can never be claimed anywhere, which is a worse
+ * failure mode than the one this feature closes.
+ */
+export async function setRuntimeProfileHost({
+  workspaceSlug,
+  profileId,
+  scope,
+}: {
+  workspaceSlug: string
+  profileId: number
+  scope: 'this-machine' | 'any-machine'
+}): Promise<WithFailure<void>> {
+  return guard(async () => {
+    const payload = await getPayloadClient()
+    await payload.update({
+      collection: 'runtime-profiles',
+      id: profileId,
+      data: { hostId: scope === 'this-machine' ? currentHostId() : null },
+      overrideAccess: true,
+    })
+    revalidatePath(`/workspace/${workspaceSlug}/settings/runtimes`)
   })
 }
 

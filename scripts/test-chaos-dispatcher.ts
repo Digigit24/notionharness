@@ -203,8 +203,8 @@ async function scenarioConcurrencyCeiling(): Promise<void> {
     const runB = await enqueueRun({ accountableUser, agentId, pageId: nextFakePageId(), prompt: 'Reply with exactly the word "two" and nothing else.' })
     cleanupRunIds.push(runA.id, runB.id)
 
-    await dispatchNextRun('chaos-worker-a')
-    await dispatchNextRun('chaos-worker-b')
+    await dispatchNextRun('chaos-worker-a', 'test-host')
+    await dispatchNextRun('chaos-worker-b', 'test-host')
 
     const deadline = Date.now() + 90_000
     let a = await getRun(runA.id)

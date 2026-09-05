@@ -19,10 +19,15 @@
  *
  * `retryable` is the dispatcher's own question — should `settleRun` enqueue a
  * fresh attempt — and it is answered "does trying this again, unchanged, have a
- * real chance of working". A missing binary does not. A pool with no free
- * connections does. Retries are bounded by `runs.max_attempts` either way, so
- * the cost of a wrong `true` is one wasted attempt while the cost of a wrong
- * `false` is a dead run, which is why anything unrecognised stays retryable.
+ * real chance of working". A pool with no free connections does. Retries are
+ * bounded by `runs.max_attempts` either way, so the cost of a wrong `true` is
+ * one wasted attempt while the cost of a wrong `false` is a dead run, which is
+ * why anything unrecognised stays retryable — and, since host-scoped claiming
+ * (`lib/broker/runs.ts`'s `claimNextRun`), why a missing binary
+ * (`runtime_not_installed`) is retryable too: on a single machine it is
+ * genuinely still missing next attempt and this costs two wasted tries, but
+ * on a multi-machine install it can mean "the wrong machine's dispatcher
+ * happened to claim this," which the next attempt can self-heal.
  *
  * Cancellation is deliberately NOT a failure code. A person pressing Stop got
  * exactly what they asked for; settling that as `failed` put it in the failed
@@ -75,7 +80,15 @@ const RETRYABLE_BY_CODE: Partial<Record<FailureCode, boolean>> = {
   timeout: true,
   worktree_missing: true,
   agent_unavailable: false,
-  runtime_not_installed: false,
+  // Was unconditionally false — correct for a machine that genuinely lacks
+  // the binary, wrong for the multi-machine case host-scoping now exists to
+  // handle (`lib/broker/runs.ts`'s `claimNextRun`): a run whose queue window
+  // opened between two machines' polls can still land on the wrong one for a
+  // moment. `settleRun` already bounds every retry by `runs.max_attempts`
+  // (3 by default), so this costs at most two wasted attempts on a machine
+  // that is really missing the binary, in exchange for a wrong-host claim
+  // self-healing instead of dying permanently.
+  runtime_not_installed: true,
   spend_cap_reached: false,
   run_not_retryable: false,
   git_missing: false,

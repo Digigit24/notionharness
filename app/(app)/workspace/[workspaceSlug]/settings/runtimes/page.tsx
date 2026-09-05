@@ -13,6 +13,8 @@ import { ToggleRuntimeProfileEnabledButton } from '@/components/runtimes/toggle-
 import { RuntimeProbeButton } from '@/components/runtimes/probe-button'
 import { explainProbeCode } from '@/lib/runtimes/probe-codes'
 import { catalogEntryForCommand, catalogEntryForHomeStrategy } from '@/lib/runtimes/catalog'
+import { currentHostId } from '@/lib/runtimes/host-id'
+import { HostScopeControl } from '@/components/runtimes/host-scope-control'
 import { formatRelativeTime } from '@/lib/relative-time'
 import type { Agent, Runtime, RuntimeProfile } from '@/payload-types'
 
@@ -85,8 +87,9 @@ export default async function RuntimesPage({ params }: { params: Promise<{ works
           </h1>
           <p className="mt-1 text-sm text-faint">
             Every runtime profile this workspace can dispatch to — Hermes, Claude Code, Codex, OpenCode or any other
-            ACP command — and whether it answered the last time anyone checked. Runtimes run on the machine hosting
-            this server; per-machine runtimes are a later milestone.
+            ACP command — and whether it answered the last time anyone checked. A profile added here is scoped to
+            this machine by default, so running this app on a second computer and adding its own runtimes there lets
+            both dispatch at once without one machine trying (and failing) to run the other&apos;s binaries.
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -109,6 +112,7 @@ export default async function RuntimesPage({ params }: { params: Promise<{ works
               profile={profile}
               runtime={runtimeByProfileId.get(profile.id) ?? null}
               agents={agentsByProfileId.get(profile.id) ?? []}
+              thisHostId={currentHostId()}
             />
           ))}
         </ul>
@@ -122,11 +126,13 @@ function RuntimeRow({
   profile,
   runtime,
   agents,
+  thisHostId,
 }: {
   workspaceSlug: string
   profile: RuntimeProfile
   runtime: Runtime | null
   agents: Agent[]
+  thisHostId: string
 }) {
   const status = runtime?.status ?? 'unknown'
   const handshake = (profile.handshake as AgentHandshake | null) ?? null
@@ -168,6 +174,12 @@ function RuntimeRow({
                   ? ((profile.handshake as { agentName?: string | null }).agentName ?? null)
                   : null
               }
+            />
+            <HostScopeControl
+              workspaceSlug={workspaceSlug}
+              profileId={profile.id}
+              hostId={profile.hostId}
+              thisHostId={thisHostId}
             />
           </div>
           <span className="text-xs text-faint">

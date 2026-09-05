@@ -519,6 +519,7 @@ export interface RuntimeProfile {
     | boolean
     | null;
   enabled?: boolean | null;
+  hostId?: string | null;
   homeStrategy?: ('hermes' | 'claude-home' | 'codex-home' | 'opencode-home' | 'none') | null;
   handshake?:
     | {
@@ -1538,6 +1539,7 @@ export interface RuntimeProfilesSelect<T extends boolean = true> {
   commandName?: T;
   fixedArgs?: T;
   enabled?: T;
+  hostId?: T;
   homeStrategy?: T;
   handshake?: T;
   defaultSessionConfig?: T;

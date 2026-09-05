@@ -56,16 +56,24 @@ describe('classifyRunFailure', () => {
     })
   })
 
-  it('does not requeue a missing agent or a missing binary', () => {
+  it('does not requeue a missing agent', () => {
     expect(classifyRunFailure('Agent missing or disabled.')).toEqual({
       outcome: 'failed',
       code: 'agent_unavailable',
       retryable: false,
     })
+  })
+
+  // Host-scoped claiming (lib/broker/runs.ts's claimNextRun) can still let a
+  // run land on the wrong machine for a moment; retrying lets it self-heal.
+  // Bounded by runs.max_attempts either way, so a binary that is genuinely
+  // missing on every machine still gives up, just after two wasted attempts
+  // instead of zero.
+  it('requeues a missing binary, so a wrong-machine claim can self-heal', () => {
     expect(classifyRunFailure(new Error('spawn hermes ENOENT'))).toEqual({
       outcome: 'failed',
       code: 'runtime_not_installed',
-      retryable: false,
+      retryable: true,
     })
   })
 

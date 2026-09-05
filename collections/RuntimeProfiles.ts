@@ -21,6 +21,15 @@ export const RuntimeProfiles: CollectionConfig = {
     { name: 'commandName', type: 'text', required: true },
     { name: 'fixedArgs', type: 'json', defaultValue: [] },
     { name: 'enabled', type: 'checkbox', defaultValue: true },
+    // Which machine's dispatcher may claim a run whose agent uses this
+    // profile. Set automatically to the creating machine's id
+    // (`lib/runtimes/host-id.ts`) — a profile is only ever created by hitting
+    // the Runtimes page on the machine it names a binary on, so that default
+    // is always correct. NULL means "any host may claim it", which is every
+    // profile created before this field existed, so upgrading changes
+    // nothing for a single-machine install. See `lib/broker/runs.ts`'s
+    // `claimNextRun` for where this is actually enforced.
+    { name: 'hostId', type: 'text', index: true },
     // What the agent said about itself during the ACP `initialize` handshake,
     // stored verbatim. Deliberately not mapped into flags we maintain: a
     // capability matrix in our own code goes stale the moment a CLI ships a
