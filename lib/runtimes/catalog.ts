@@ -123,14 +123,14 @@ export const RUNTIME_CATALOG: RuntimeCatalogEntry[] = [
     displayName: 'Codex',
     icon: SquareTerminal,
     description:
-      "OpenAI Codex, reached through Zed's ACP adapter. Codex speaks its own app-server JSON-RPC protocol, not ACP — same shape as Claude Code above, different vendor.",
+      "OpenAI Codex, reached through an ACP adapter. Codex speaks its own app-server JSON-RPC protocol, not ACP — same shape as Claude Code above, different vendor.",
     protocolFamily: 'acp',
     homeStrategy: 'none',
     command: 'codex-acp',
     args: [],
     commandConfidence: 'documented',
     source:
-      "Zed's published adapter package, zed-industries/codex-acp (Codex 0.144.4 installed and inspected on the dev machine per AGENTS.md — confirmed to speak app-server JSON-RPC, not ACP). The exact bin name left on PATH by a global install has not been independently reprobed here.",
+      "Zed's original adapter package, zed-industries/codex-acp, is now deprecated in favour of @agentclientprotocol/codex-acp (confirmed on npm: same `codex-acp` bin name, installed and resolved on PATH on the dev machine this session — `npm install -g @agentclientprotocol/codex-acp`). The ACTUAL app-server JSON-RPC behaviour has not been re-inspected against this newer package; only that it installs and exposes the right binary name.",
   },
   {
     id: 'gemini',
