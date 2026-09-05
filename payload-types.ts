@@ -890,6 +890,10 @@ export interface NotificationPreference {
    */
   pushMentions?: boolean | null;
   /**
+   * Play a short chime in the open app when an agent asks this user for a decision or a permission. Per user, honoured on every device where the app is open.
+   */
+  soundOnApprovals?: boolean | null;
+  /**
    * Opt-in daily email digest (pending approvals + completions since the last digest). The digest query itself is real (lib/notifications/digest.ts); actual email sending/scheduling is an explicitly documented gap, not faked — see that file.
    */
   emailDigestEnabled?: boolean | null;
@@ -1634,6 +1638,7 @@ export interface NotificationPreferencesSelect<T extends boolean = true> {
   pushApprovals?: T;
   pushCompletions?: T;
   pushMentions?: T;
+  soundOnApprovals?: T;
   emailDigestEnabled?: T;
   updatedAt?: T;
   createdAt?: T;

@@ -20,6 +20,14 @@ import { listActiveRunsForWorkspace, getWorkspaceUsageRollup, hasAnyRunForWorksp
 export interface AmbientStatus {
   runsInFlight: number
   approvalsWaiting: number
+  /**
+   * The highest id among the approvals waiting for this user, or null when
+   * none is. The shell's chime keys off this rather than the count, because
+   * a count can stay flat while one request is settled and a new one
+   * arrives — and that new one is exactly what deserves a sound. Free: the
+   * rows are already fetched for the count.
+   */
+  latestApprovalId: number | null
   spendTicks24h: number
   /** null when this workspace has no runtime profiles at all — distinct from "0 up out of some". */
   runtimesUp: { up: number; total: number } | null
@@ -45,6 +53,7 @@ export async function getAmbientStatus(workspaceId: number): Promise<AmbientStat
   return {
     runsInFlight: activeRuns.length,
     approvalsWaiting: approvals.length,
+    latestApprovalId: approvals.length > 0 ? Math.max(...approvals.map((a) => a.id)) : null,
     spendTicks24h: usage.totalCostTicks,
     runtimesUp:
       runtimes.docs.length === 0
