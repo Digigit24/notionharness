@@ -42,6 +42,11 @@ export interface Run {
   runtimeConfig: Record<string, unknown> | null
   /** The channel message this run answers, when a mention started it. */
   channelMessageId: number | null
+  /** Media ids attached to this run's prompt, from the Work hero composer.
+   * Same shape and reasoning as `ChannelMessage.attachments` — see
+   * `lib/broker/migrations/0017_run_attachments.sql`. Always an array, never
+   * null. */
+  attachments: number[]
   nextSeq: number
   leaseExpiresAt: string | null
   startedAt: string | null

@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation'
 import { Bot, FolderGit2, GitBranch, Loader2, RotateCcw, Send, Square, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
-import type { SessionConfigOption } from '@/lib/runtimes/handshake'
 import { ComposerChips, composerOptions } from './composer-chips'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -14,8 +13,13 @@ import { ConnectionStatusBanner } from '@/components/thread/connection-status-ba
 import { useRunEventStream } from '@/components/runs/use-run-event-stream'
 import { adaptRunSnapshotsToThread, type ChatMessage, type ChatThread } from '@/lib/hermes/runEvent-adapter'
 import type { SessionListItem } from '@/lib/broker'
-import type { ActiveModelConfig } from '@/lib/runtimes/hermes/providers'
+// `WorkAgent`/`WorkProject` live in `lib/work/types.ts`, not defined here —
+// see that file's header for why (the hero composer needs them without
+// importing back into this file). Re-exported below so no existing import
+// site changes.
+import type { WorkAgent, WorkProject } from '@/lib/work/types'
 import { GitRail } from './git-rail'
+import { HeroComposer } from './hero-composer'
 import { publishSessionEvent, useSessionBusListener, applySessionEvent } from '@/lib/sessions-bus'
 import {
   convertReplyToPage,
@@ -28,23 +32,7 @@ import {
   stopSessionRun,
 } from '@/app/(app)/workspace/[workspaceSlug]/work/actions'
 
-export interface WorkAgent {
-  id: number
-  name: string
-  profile: string
-  model: ActiveModelConfig | null
-  /** Settings this agent's runtime declares for a session — its model, effort
-   * level, permission mode. `undefined` when the runtime has never been
-   * probed, which is a different answer from an empty list. */
-  runtimeOptions?: SessionConfigOption[]
-  /** The agent's own saved values, which the composer chips start from. */
-  runtimeDefaults?: Record<string, unknown>
-}
-
-export interface WorkProject {
-  id: number
-  name: string
-}
+export type { WorkAgent, WorkProject } from '@/lib/work/types'
 
 /**
  * Work — the full-screen chat, with real conversations.
@@ -259,6 +247,18 @@ export function WorkView({
     return { ...thread, messages: [...thread.messages, optimistic], isRunning: running || thread.isRunning }
   }, [thread, pendingSend, failedSend])
 
+  // The hero blank-state — headline, rounded composer, quick starters, recent
+  // threads — replaces the old bare "Start a new conversation" placeholder,
+  // and ONLY that placeholder. Gated on both halves of what used to decide
+  // it (`!threadToRender`, the ternary below) AND `activeSessionId == null`,
+  // because the brief instant between pressing Send on a brand-new chat and
+  // the created session's id landing (`handleSend`, above) has `pendingSend`
+  // set but `activeSessionId` still null — during that window `threadToRender`
+  // already holds the optimistic bubble, so this stays false and the normal
+  // thread view (which knows how to paint that bubble) renders instead of the
+  // hero flashing back on top of a message someone just sent.
+  const showHero = activeSessionId == null && !threadToRender
+
   function selectSession(id: number | null) {
     setActiveSessionId(id)
     setPendingSend(null)
@@ -270,7 +270,7 @@ export function WorkView({
     router.replace(url, { scroll: false })
   }
 
-  async function handleSend(override?: string) {
+  async function handleSend(override?: string, attachmentIds: number[] = []) {
     const text = (override ?? prompt).trim()
     if (!text || sending) return
     if (!agentId) {
@@ -337,6 +337,7 @@ export function WorkView({
         prompt: text,
         projectId,
         runtimeConfig: Object.keys(messageConfig).length > 0 ? messageConfig : null,
+        attachments: attachmentIds.length > 0 ? attachmentIds : null,
       })
       setMessageConfig({})
       if (sessionId !== activeSessionId) {
@@ -420,10 +421,15 @@ export function WorkView({
 
   return (
     <div className="flex h-full w-full">
-      <div className="flex min-w-0 flex-1 flex-col px-5 py-4">
-        <div className="mb-3 flex shrink-0 items-center justify-between gap-3">
-          <div className="min-w-0">
-            <h1 className="truncate text-lg font-semibold">
+      <div className="flex min-w-0 flex-1 flex-col px-5 py-3">
+        {/* One line, not two — a title plus a separate subtitle line cost the
+            thread below a whole row of scroll height for information that
+            fits perfectly well beside it. Only the active-conversation state
+            actually feels this (the hero state has no long thread competing
+            for room), but a shorter header helps both and hurts neither. */}
+        <div className="mb-2 flex shrink-0 items-center justify-between gap-3">
+          <div className="flex min-w-0 items-baseline gap-2">
+            <h1 className="truncate text-sm font-semibold">
               {activeSession?.title || (activeSessionId ? 'Untitled chat' : 'New chat')}
             </h1>
             <p className="truncate text-xs text-black/40 dark:text-white/40">
@@ -485,6 +491,28 @@ export function WorkView({
           </div>
         )}
 
+        {showHero ? (
+          <HeroComposer
+            workspaceId={workspaceId}
+            workspaceSlug={workspaceSlug}
+            agents={agents}
+            projects={projects}
+            draftAgentId={draftAgentId}
+            onDraftAgentChange={setDraftAgentId}
+            draftProjectId={draftProjectId}
+            onDraftProjectChange={setDraftProjectId}
+            prompt={prompt}
+            onPromptChange={setPrompt}
+            chipOptions={chipOptions}
+            messageConfig={messageConfig}
+            onMessageConfigChange={setMessageConfig}
+            sending={sending}
+            onSend={(attachmentIds) => void handleSend(undefined, attachmentIds)}
+            sessions={sessions}
+            onSelectSession={selectSession}
+          />
+        ) : (
+          <>
         <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-black/10 dark:border-white/10">
           {threadToRender ? (
             <Thread
@@ -506,7 +534,7 @@ export function WorkView({
           )}
         </div>
 
-        <div className="mt-3 shrink-0">
+        <div className="mt-2 shrink-0">
           {/* Queued messages are shown, and removable. A message that has been
               accepted but is invisible is indistinguishable from one that was
               silently dropped. */}
@@ -545,13 +573,13 @@ export function WorkView({
               }}
               placeholder={isAnswering ? 'Queue a message while it works…' : 'Say what you need…'}
               autoResize
-              className="max-h-48 min-h-14 resize-none border-0 bg-transparent px-4 py-3 text-sm shadow-none focus-visible:ring-0 dark:bg-transparent"
+              className="max-h-48 min-h-11 resize-none border-0 bg-transparent px-4 py-2.5 text-sm shadow-none focus-visible:ring-0 dark:bg-transparent"
               // Live while the agent answers. Watching it go the wrong way and
               // wanting to say so immediately is the most useful moment there
               // is, and disabling the box threw it away.
               disabled={sending}
             />
-            <div className="flex flex-wrap items-center justify-between gap-2 px-3 pb-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2 px-3 pb-2">
               <div className="flex items-center gap-1.5">
                 <Select
                   value={agentId != null ? String(agentId) : undefined}
@@ -632,6 +660,7 @@ export function WorkView({
                   values={messageConfig}
                   disabled={sending}
                   onChange={setMessageConfig}
+                  isAnswering={isAnswering}
                 />
               )}
 
@@ -673,6 +702,8 @@ export function WorkView({
             </div>
           </div>
         </div>
+          </>
+        )}
       </div>
 
       {/* Only for a session bound to a checkout. Without one there is no
