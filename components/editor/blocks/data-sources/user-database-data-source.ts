@@ -178,6 +178,11 @@ export class UserDatabaseDataSource extends GenericDataSource {
     if (this._databaseId == null) return this._fields.value
     const res = await userDbFetch(`/api/user-databases/${this._databaseId}`)
     const json = await res.json().catch(() => null)
+    // A non-OK response used to fall through to an empty field list — a
+    // permission or server error looked identical to "this database
+    // genuinely has no columns," and the block's own error state (with its
+    // "Change table" recovery action) never got a chance to render.
+    if (!res.ok) throw new Error(json?.error || `Failed to load this database's columns (HTTP ${res.status}).`)
     const doc = json?.doc as DatabaseDoc | undefined
     if (doc?.name) this._databaseName = doc.name
     return Array.isArray(doc?.fields) ? doc!.fields!.map(normalizeLegacyField) : []
@@ -187,6 +192,7 @@ export class UserDatabaseDataSource extends GenericDataSource {
     if (this._databaseId == null) return this._records.value
     const res = await userDbFetch(`/api/user-databases/${this._databaseId}/rows`)
     const json = await res.json().catch(() => ({ docs: [] }))
+    if (!res.ok) throw new Error(json?.error || `Failed to load this database's rows (HTTP ${res.status}).`)
     const docs: { id: number; cells?: Record<string, unknown> | null }[] = Array.isArray(json.docs) ? json.docs : []
     return docs.map((d) => ({ id: String(d.id), fields: d.cells ?? {} }))
   }

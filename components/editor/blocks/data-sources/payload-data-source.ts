@@ -46,6 +46,12 @@ export class PayloadDataSource extends GenericDataSource {
   protected async fetchFields(): Promise<GenericField[]> {
     const res = await payloadDsFetch(`/api/payload-datasource/${this._collection}?workspaceId=${this._workspaceId}`)
     const json = await res.json().catch(() => null)
+    // A non-OK response used to fall through to `json?.properties ?? []` —
+    // an empty schema, indistinguishable from "this collection genuinely has
+    // no fields yet." That silently rendered a blank table instead of the
+    // block's own error state, which already exists and already has a
+    // "Change table" recovery action — it just never got the message.
+    if (!res.ok) throw new Error(json?.error || `Failed to load this table's columns (HTTP ${res.status}).`)
     const properties: Array<{ id: string; name: string; type: string; isPrimary?: boolean }> = json?.properties ?? []
     return properties.map((p) => ({ id: p.id, name: p.name, type: p.type, isPrimary: p.isPrimary }))
   }
@@ -53,6 +59,7 @@ export class PayloadDataSource extends GenericDataSource {
   protected async fetchRecords(): Promise<GenericRecord[]> {
     const res = await payloadDsFetch(`/api/payload-datasource/${this._collection}?workspaceId=${this._workspaceId}`)
     const json = await res.json().catch(() => ({ docs: [] }))
+    if (!res.ok) throw new Error(json?.error || `Failed to load this table's rows (HTTP ${res.status}).`)
     const docs: { id: number; fields: Record<string, unknown> }[] = Array.isArray(json.docs) ? json.docs : []
     return docs.map((d) => ({ id: String(d.id), fields: d.fields }))
   }

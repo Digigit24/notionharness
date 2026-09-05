@@ -500,8 +500,15 @@ export class NativeDatabaseBlockComponent extends BlockComponent<NativeDatabaseB
   override renderBlock() {
     if (this._effectiveSourceType === null) return this._renderCreateOrConnect()
     if (this._changingSource && this._pickingSourceType) return this._renderChangeSourceOverlay()
-    if (this._loading || !this._dataSource) return this._renderLoading()
+    if (this._loading) return this._renderLoading()
+    // `_error` must be checked BEFORE the missing-`_dataSource` fallback: a
+    // failed `_loadPayloadSource`/`_loadUserDatabaseSource` sets `_error` and
+    // clears `_loading` in its `finally`, but never sets `_dataSource` (only
+    // the success path does). The old order — `_loading || !_dataSource` —
+    // caught that case as "still loading" and rendered the spinner forever,
+    // silently swallowing the real error message this component already had.
     if (this._error) return this._renderErrorState()
+    if (!this._dataSource) return this._renderLoading()
     return this._renderDataView()
   }
 
