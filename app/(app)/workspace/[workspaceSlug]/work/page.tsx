@@ -11,13 +11,16 @@ import { WorkView } from '@/components/work/work-view'
  *
  * Opens the session named in `?session=`, or the most recently active one, so
  * returning to Work lands where you left off rather than on a blank page.
+ * `?new=1` — the sidebar's "New Session" link — overrides that fallback: a
+ * person who explicitly asked for a fresh session should get one, not
+ * whatever they were last looking at.
  */
 export default async function WorkPage({
   params,
   searchParams,
 }: {
   params: Promise<{ workspaceSlug: string }>
-  searchParams: Promise<{ session?: string }>
+  searchParams: Promise<{ session?: string; new?: string }>
 }) {
   const [{ workspaceSlug }, query] = await Promise.all([params, searchParams])
   const workspace = await getWorkspaceBySlug(workspaceSlug)
@@ -64,7 +67,7 @@ export default async function WorkPage({
   const requestedSession = Number.isSafeInteger(requested)
     ? sessions.find((s) => s.id === requested)
     : undefined
-  const initialSessionId = requestedSession?.id ?? sessions[0]?.id ?? null
+  const initialSessionId = query.new ? null : requestedSession?.id ?? sessions[0]?.id ?? null
 
   return (
     <WorkView

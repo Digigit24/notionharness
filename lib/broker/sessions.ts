@@ -113,6 +113,13 @@ export interface SessionListItem extends ChatSession {
    * (R14-P0.3's channel History tab) has something to open in the run-detail
    * sheet without a second query. Null only for a session with zero runs. */
   latestRunId: number | null
+  /** The sidebar's Sessions section highlight: true when the session's own
+   * NEWEST run ended in `failed`. Deliberately narrow — not "any run ever
+   * failed" (a retried, since-succeeded session has nothing left to look at)
+   * and not "awaiting approval" (that already surfaces louder, in Review) —
+   * just the one signal a session list can show honestly with no second
+   * query: something here ended badly and nobody has looked yet. */
+  needsAttention: boolean
 }
 
 /**
@@ -157,7 +164,8 @@ export async function listSessions(options: {
             COALESCE(r.run_count, 0)::int AS run_count,
             COALESCE(r.is_running, false) AS is_running,
             r.preview,
-            r.latest_run_id
+            r.latest_run_id,
+            COALESCE(r.latest_status, '') = 'failed' AS needs_attention
        FROM chat_sessions s
        LEFT JOIN agents a ON a.id = s.agent_id
        LEFT JOIN projects p ON p.id = s.project_id
@@ -165,7 +173,8 @@ export async function listSessions(options: {
          SELECT count(*)::int AS run_count,
                 bool_or(status NOT IN ('completed', 'failed', 'cancelled')) AS is_running,
                 (ARRAY_AGG(prompt ORDER BY id DESC) FILTER (WHERE prompt IS NOT NULL))[1] AS preview,
-                (ARRAY_AGG(id ORDER BY id DESC))[1] AS latest_run_id
+                (ARRAY_AGG(id ORDER BY id DESC))[1] AS latest_run_id,
+                (ARRAY_AGG(status ORDER BY id DESC))[1] AS latest_status
            FROM runs
           WHERE runs.session_id = s.id
        ) r ON true
@@ -185,6 +194,7 @@ export async function listSessions(options: {
       (row as { latest_run_id: string | number | null }).latest_run_id == null
         ? null
         : Number((row as { latest_run_id: string | number | null }).latest_run_id),
+    needsAttention: (row as { needs_attention: boolean }).needs_attention,
   }))
 }
 

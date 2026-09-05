@@ -15,20 +15,16 @@ import { useRunEventStream } from '@/components/runs/use-run-event-stream'
 import { adaptRunSnapshotsToThread, type ChatMessage, type ChatThread } from '@/lib/hermes/runEvent-adapter'
 import type { SessionListItem } from '@/lib/broker'
 import type { ActiveModelConfig } from '@/lib/runtimes/hermes/providers'
-import { SessionRail } from './session-rail'
 import { GitRail } from './git-rail'
+import { publishSessionEvent, useSessionBusListener, applySessionEvent } from '@/lib/sessions-bus'
 import {
   convertReplyToPage,
   createWorkSession,
   listProjectWorktreeOptions,
   setWorkSessionWorktree,
-  deleteWorkSession,
   getSessionSnapshots,
   listWorkSessions,
-  renameWorkSession,
   sendSessionMessage,
-  setWorkSessionArchived,
-  setWorkSessionPinned,
   stopSessionRun,
 } from '@/app/(app)/workspace/[workspaceSlug]/work/actions'
 
@@ -117,7 +113,6 @@ export function WorkView({
   const [error, setError] = useState<string | null>(null)
   const [pendingSend, setPendingSend] = useState<string | null>(null)
   const [failedSend, setFailedSend] = useState<string | null>(null)
-  const [railBusy, setRailBusy] = useState(false)
   const [worktrees, setWorktrees] = useState<Array<{ id: number; label: string; branch: string; path: string }>>([])
 
   const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null
@@ -145,12 +140,23 @@ export function WorkView({
   }, [workspaceId])
 
   // The server re-renders this page whenever an action revalidates it, which
-  // hands down a fresh `initialSessions`. Without adopting it, the rail keeps
-  // whatever the first render had — the reason a brand-new chat stayed
+  // hands down a fresh `initialSessions`. Without adopting it, this state
+  // keeps whatever the first render had — the reason a brand-new chat stayed
   // invisible in the list until a manual reload.
   useEffect(() => {
     setSessions(initialSessions)
   }, [initialSessions])
+
+  // The sidebar's Sessions section is the same list, mirrored — see
+  // `lib/sessions-bus.ts`. A rename, pin, archive or delete made FROM THE
+  // SIDEBAR has to reach this page's own copy too, or the header above the
+  // thread would go on showing a title the sidebar just changed. Applying our
+  // own published events back onto ourselves is harmless (same data, same
+  // reducer) rather than something worth guarding against with an origin flag.
+  useSessionBusListener((event) => {
+    setSessions((current) => applySessionEvent(current, event))
+    if (event.type === 'deleted' && event.id === activeSessionId) selectSession(null)
+  })
 
   // The worktree list follows the project: binding a session to a checkout
   // from a different project would run its turns somewhere unrelated.
@@ -294,25 +300,35 @@ export function WorkView({
         // Put it in the rail immediately rather than waiting for the refresh
         // that follows the send — otherwise the list stays empty while the
         // conversation it describes is already on screen.
-        setSessions((current) => [
-          {
-            ...created,
-            title: deriveOptimisticTitle(text),
-            agentName: agents.find((a) => a.id === agentId)?.name ?? null,
-            projectName: projects.find((p) => p.id === projectId)?.name ?? null,
-            runCount: 0,
-            isRunning: true,
-            preview: text,
-            latestRunId: null,
-          },
-          ...current,
-        ])
+        const optimisticRow: SessionListItem = {
+          ...created,
+          title: deriveOptimisticTitle(text),
+          agentName: agents.find((a) => a.id === agentId)?.name ?? null,
+          projectName: projects.find((p) => p.id === projectId)?.name ?? null,
+          runCount: 0,
+          isRunning: true,
+          preview: text,
+          latestRunId: null,
+          needsAttention: false,
+        }
+        setSessions((current) => [optimisticRow, ...current])
+        // Same paint, mirrored into the sidebar's own copy of the list — see
+        // `lib/sessions-bus.ts`'s header comment for why a bus and not lifted
+        // state.
+        publishSessionEvent({ type: 'created', session: optimisticRow })
         // State only — deliberately NO `router.replace` here. Navigating while
         // a Server Action is in flight drops that action's response: observed
         // live, the message was created, the send never resolved, and the
         // composer sat on its spinner forever with no error. The URL is
         // updated after the round-trip instead, below.
         setActiveSessionId(sessionId)
+      } else {
+        // An existing session just got busier: bump it to the top of both
+        // lists and show it answering, on the same frame the send fired
+        // rather than after the round trip settles.
+        const patch = { isRunning: true, preview: text, lastActivityAt: new Date().toISOString() }
+        setSessions((current) => current.map((s) => (s.id === sessionId ? { ...s, ...patch } : s)))
+        publishSessionEvent({ type: 'patched', id: sessionId, patch })
       }
       await sendSessionMessage({
         sessionId,
@@ -377,15 +393,16 @@ export function WorkView({
     }
   }
 
-  const withRailBusy = async (work: () => Promise<unknown>) => {
-    setRailBusy(true)
+  // The one caller left after the session rail moved into the sidebar
+  // (`components/sidebar/sessions-section.tsx` now owns rename/pin/archive/
+  // delete, each optimistic in its own right) — the worktree-binding picker
+  // below, which still just needs "run this, and surface a refusal."
+  const withBusy = async (work: () => Promise<unknown>) => {
     try {
       await work()
       await refreshSessions()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'That change did not go through.')
-    } finally {
-      setRailBusy(false)
     }
   }
 
@@ -403,34 +420,6 @@ export function WorkView({
 
   return (
     <div className="flex h-full w-full">
-      <SessionRail
-        sessions={sessions}
-        activeSessionId={activeSessionId}
-        busy={railBusy}
-        onSelect={(id) => selectSession(id)}
-        onNew={() => {
-          setDraftAgentId(activeSession?.agentId ?? agents[0]?.id ?? null)
-          setDraftProjectId(activeSession?.projectId ?? null)
-          selectSession(null)
-        }}
-        onRename={(id, title) => void withRailBusy(() => renameWorkSession({ sessionId: id, workspaceId, title }))}
-        onTogglePin={(id, pinned) =>
-          void withRailBusy(() => setWorkSessionPinned({ sessionId: id, workspaceId, pinned }))
-        }
-        onArchive={(id) =>
-          void withRailBusy(async () => {
-            await setWorkSessionArchived({ sessionId: id, workspaceId, archived: true })
-            if (id === activeSessionId) selectSession(null)
-          })
-        }
-        onDelete={(id) =>
-          void withRailBusy(async () => {
-            await deleteWorkSession({ sessionId: id, workspaceId, workspaceSlug })
-            if (id === activeSessionId) selectSession(null)
-          })
-        }
-      />
-
       <div className="flex min-w-0 flex-1 flex-col px-5 py-4">
         <div className="mb-3 flex shrink-0 items-center justify-between gap-3">
           <div className="min-w-0">
@@ -447,6 +436,22 @@ export function WorkView({
                   : 'Pick an agent'}
             </p>
           </div>
+          {/* Quick in-page reset. The sidebar's "New Session" link does the
+              same thing via a navigation to `/work?new=1`; this is the
+              zero-round-trip version for someone already sitting here — no
+              reason to leave the page to start a blank one. */}
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              setDraftAgentId(activeSession?.agentId ?? agents[0]?.id ?? null)
+              setDraftProjectId(activeSession?.projectId ?? null)
+              selectSession(null)
+            }}
+          >
+            New chat
+          </Button>
         </div>
 
         <ConnectionStatusBanner
@@ -595,7 +600,7 @@ export function WorkView({
                     value={activeSession?.worktreeId != null ? String(activeSession.worktreeId) : 'none'}
                     onValueChange={(v) => {
                       if (!activeSessionId) return
-                      void withRailBusy(() =>
+                      void withBusy(() =>
                         setWorkSessionWorktree({
                           sessionId: activeSessionId,
                           workspaceId,

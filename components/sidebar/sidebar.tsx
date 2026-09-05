@@ -31,6 +31,7 @@ import { authClient } from '@/lib/auth-client'
 import { PageTree } from './page-tree'
 import { WorkspaceSwitcher } from './workspace-switcher'
 import { ChannelList } from './channel-list'
+import { SessionsSection } from './sessions-section'
 import { SidebarTabBar, isSidebarTabKey, tabForPathname, type SidebarTabDescriptor, type SidebarTabKey } from './sidebar-tabs'
 import { CommandBar } from '@/components/command-bar/command-bar'
 import { openCommandBar } from '@/lib/command-bar-bus'
@@ -79,8 +80,15 @@ import type { SidebarChannels } from './channels-data'
  */
 
 interface SectionLink {
-  /** Workspace-relative; '' is the workspace root, i.e. Home. */
+  /** Workspace-relative; '' is the workspace root, i.e. Home. Used for BOTH
+   * the link target and the active-route match — see `query` below when a
+   * link needs a search param that must not participate in that match. */
   href: string
+  /** Appended to the link's target only; `isSectionActive` never sees it, so
+   * a query-bearing link (e.g. "New Session" → `/work?new=1`) still lights up
+   * for the whole route rather than never matching because `pathname` never
+   * contains a query string. */
+  query?: string
   label: string
   icon: LucideIcon
 }
@@ -95,7 +103,11 @@ const PLAN_LINKS: SectionLink[] = [
 
 const CHANNEL_LINKS: SectionLink[] = [
   { href: '/agents', label: 'Agents', icon: Bot },
-  { href: '/work', label: 'Work', icon: MessageCircle },
+  // `?new=1` — read by `work/page.tsx` — forces a blank session rather than
+  // reopening whichever one was last active, matching what "New Session"
+  // says it does. The full history now lives in the Sessions section above,
+  // not on this page any more.
+  { href: '/work', query: '?new=1', label: 'New Session', icon: MessageCircle },
 ]
 
 const ACTIVITY_LINKS: SectionLink[] = [
@@ -564,6 +576,9 @@ export function Sidebar({
           <div role="tabpanel" id="sidebar-panel-channels" aria-labelledby="sidebar-tab-channels">
             <ChannelList workspaceSlug={workspace.slug} data={channels} activeChannelId={activeChannelId} />
             <div className="border-t border-black/5 pt-2 dark:border-white/10">
+              <SessionsSection workspaceId={workspace.id} workspaceSlug={workspace.slug} />
+            </div>
+            <div className="border-t border-black/5 pt-2 dark:border-white/10">
               <nav className="flex flex-col gap-px">
                 {CHANNEL_LINKS.map((link) => (
                   <NavRow
@@ -660,7 +675,7 @@ function NavRow({
   const Icon = link.icon
   return (
     <Link
-      href={`/workspace/${workspaceSlug}${link.href}`}
+      href={`/workspace/${workspaceSlug}${link.href}${link.query ?? ''}`}
       className={cn(
         'flex items-center gap-2 rounded-md px-2 py-1.5 text-sm',
         active
