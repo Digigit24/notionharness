@@ -519,7 +519,7 @@ export interface RuntimeProfile {
     | boolean
     | null;
   enabled?: boolean | null;
-  homeStrategy?: ('hermes' | 'none') | null;
+  homeStrategy?: ('hermes' | 'claude-home' | 'codex-home' | 'opencode-home' | 'none') | null;
   handshake?:
     | {
         [k: string]: unknown;

@@ -50,8 +50,64 @@ export interface AgentHandshake {
   /** The mode the agent starts a session in. */
   currentModeId: string | null
   availableCommands: unknown[] | null
+  /**
+   * True when the probe's throwaway `session/new` was refused with ACP's
+   * authentication-required error. The handshake itself succeeded — the
+   * binary is installed and speaks the protocol — but no run will open a
+   * session until someone signs the CLI in on this machine. Absent on
+   * handshakes stored before this field existed, which reads as "not
+   * observed" rather than "not required".
+   */
+  authRequired?: boolean
   /** When the probe ran, so staleness is visible. */
   probedAt: string
+}
+
+/** One entry of `availableModes`, as ACP defines it. */
+export interface SessionModeOption {
+  id: string
+  name: string
+  description?: string | null
+}
+
+function isSessionMode(value: unknown): value is SessionModeOption {
+  if (!value || typeof value !== 'object') return false
+  const mode = value as Record<string, unknown>
+  return typeof mode.id === 'string' && typeof mode.name === 'string'
+}
+
+/** The modes a runtime offers, if its probe session reported any. */
+export function sessionModes(h: AgentHandshake | null): SessionModeOption[] {
+  if (!h || !Array.isArray(h.availableModes)) return []
+  return h.availableModes.filter(isSessionMode)
+}
+
+/**
+ * The runtime's declared config options plus, when it offers session modes
+ * and does not already declare a `mode` option, a synthesised one.
+ *
+ * ACP has two mechanisms for the same idea: Claude's adapter exposes its
+ * permission mode as a config option named `mode`, Codex's adapter exposes
+ * read-only / agent / full-access as `availableModes` set through
+ * `session/set_mode`. A settings screen should not make a person learn which
+ * is which, so both surface as one select called Mode; `sendTurn` reads the
+ * chosen value and sends whichever request that session actually accepts.
+ */
+export function effectiveSessionConfigOptions(h: AgentHandshake | null): SessionConfigOption[] | undefined {
+  const declared = sessionConfigOptions(h)
+  const modes = sessionModes(h)
+  if (modes.length === 0) return declared
+  if (declared?.some((option) => option.id === 'mode')) return declared
+  const synthesised: SessionConfigOption = {
+    id: 'mode',
+    name: 'Mode',
+    description: 'How much the agent may do on its own in this session.',
+    category: 'mode',
+    type: 'select',
+    currentValue: h?.currentModeId ?? undefined,
+    options: modes.map((mode) => ({ value: mode.id, name: mode.name, description: mode.description ?? null })),
+  }
+  return [...(declared ?? []), synthesised]
 }
 
 /**

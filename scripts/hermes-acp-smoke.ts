@@ -24,7 +24,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { sendTurn } from '../lib/hermes/acp-client'
+import { sendTurn } from '../lib/acp/client'
 import type { RunEvent, RunEventEnvelope } from '@/lib/run-events'
 
 function defaultAcpBinary(): string | undefined {

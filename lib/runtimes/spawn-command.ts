@@ -19,6 +19,46 @@ export interface ResolvedCommand {
   args: string[]
   /** True when this is being run through the Windows command processor. */
   viaShell: boolean
+  /**
+   * Pass through to `spawn` as `windowsVerbatimArguments`. True exactly when
+   * `viaShell` is: the command line handed to `cmd.exe` is already quoted
+   * the way `/s /c` expects (see `batchShimInvocation`), and Node's own
+   * quoting on top of that is what broke `npx` under `C:\Program Files`.
+   */
+  windowsVerbatimArguments: boolean
+}
+
+/**
+ * Quotes one argument for `cmd.exe`. Only when it needs it: a bare word
+ * passes through untouched, which keeps the common case identical to what
+ * ran before.
+ */
+function quoteForCmd(arg: string): string {
+  if (arg.length > 0 && !/[\s"&|<>^()]/.test(arg)) return arg
+  return `"${arg.replace(/"/g, '""')}"`
+}
+
+/**
+ * How to run a `.cmd`/`.bat` shim, correctly, whatever directory it lives in.
+ *
+ * The previous form — `cmd /d /s /c <shim> <args>` with Node quoting each
+ * argument — worked for every shim under `%APPDATA%\npm` and failed for
+ * `npx.cmd` under `C:\Program Files\nodejs`: Node quoted the path, `/s`
+ * stripped the first and last quote of the WHOLE command line, and cmd was
+ * left running `C:\Program` — verified live as "'C:\Program' is not
+ * recognized as an internal or external command". `/s` exists for exactly
+ * one form: the entire command line wrapped in one outer pair of quotes,
+ * each inner token quoted on its own, and nothing re-quoted by the caller —
+ * hence `windowsVerbatimArguments`.
+ */
+export function batchShimInvocation(shimPath: string, args: string[]): ResolvedCommand {
+  const line = [shimPath, ...args].map(quoteForCmd).join(' ')
+  return {
+    command: process.env.COMSPEC || 'cmd.exe',
+    args: ['/d', '/s', '/c', `"${line}"`],
+    viaShell: true,
+    windowsVerbatimArguments: true,
+  }
 }
 
 /**
@@ -80,12 +120,6 @@ export async function resolveSpawnCommand(commandName: string, extraArgs: string
 
   // A `.cmd`/`.bat` is a script for the command processor, not an executable
   // image, so `spawn` cannot run it directly — it fails with EINVAL or ENOENT.
-  if (/\.(cmd|bat)$/i.test(resolved)) {
-    return {
-      command: process.env.COMSPEC || 'cmd.exe',
-      args: ['/d', '/s', '/c', resolved, ...args],
-      viaShell: true,
-    }
-  }
-  return { command: resolved, args, viaShell: false }
+  if (/\.(cmd|bat)$/i.test(resolved)) return batchShimInvocation(resolved, args)
+  return { command: resolved, args, viaShell: false, windowsVerbatimArguments: false }
 }

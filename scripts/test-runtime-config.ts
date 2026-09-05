@@ -22,7 +22,7 @@ for (const file of ['.env', '.env.local']) {
   }
 }
 
-import { sendTurn } from '../lib/hermes/acp-client'
+import { sendTurn } from '../lib/acp/client'
 import type { RunEventEnvelope } from '@/lib/run-events'
 
 const COMMAND = process.argv[2] ?? 'claude-agent-acp'

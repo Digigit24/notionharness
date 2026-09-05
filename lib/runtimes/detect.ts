@@ -11,12 +11,11 @@
 // the previous check, which spawned the binary with Hermes's own `--check`
 // flag and therefore could only ever validate Hermes.
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildSpawnEnv } from '@/lib/hermes/spawn-env'
-import { resolveCommandPath, resolveSpawnCommand, splitCommand } from './spawn-command'
+import { batchShimInvocation, resolveCommandPath, splitCommand } from './spawn-command'
 import type { AgentHandshake } from './handshake'
 
 // Re-exported so every existing server-side import of these keeps resolving
@@ -26,8 +25,10 @@ import type { AgentHandshake } from './handshake'
 // it broke the build exactly once, which is why the split exists.
 export type { AgentHandshake, SessionConfigOption } from './handshake'
 export {
+  effectiveSessionConfigOptions,
   modelOption,
   sessionConfigOptions,
+  sessionModes,
   supportedMcpTransports,
   supportsModelSelection,
   supportsSessionLoad,
@@ -133,21 +134,20 @@ export async function probeAcpRuntime(
     try {
       // A Windows batch shim (`.cmd`/`.bat`, which is how npm installs a CLI)
       // is not an executable image — `spawn` cannot run it directly and fails
-      // with EINVAL or ENOENT. Route those through the command processor.
-      const isBatchShim = /\.(cmd|bat)$/i.test(commandName)
-      child = isBatchShim
-        ? spawn(process.env.COMSPEC || 'cmd.exe', ['/d', '/s', '/c', commandName, ...args], {
-            cwd,
-            env: buildSpawnEnv() as NodeJS.ProcessEnv,
-            stdio: ['pipe', 'pipe', 'pipe'],
-            windowsHide: true,
-          })
-        : spawn(commandName, args, {
-            cwd,
-            env: buildSpawnEnv() as NodeJS.ProcessEnv,
-            stdio: ['pipe', 'pipe', 'pipe'],
-            windowsHide: true,
-          })
+      // with EINVAL or ENOENT. Route those through the command processor,
+      // quoted the one way `cmd /s /c` accepts (`batchShimInvocation`), so
+      // the probe and the run path cannot disagree about a shim under a
+      // directory with a space in its name.
+      const invocation = /\.(cmd|bat)$/i.test(commandName)
+        ? batchShimInvocation(commandName, args)
+        : { command: commandName, args, viaShell: false, windowsVerbatimArguments: false }
+      child = spawn(invocation.command, invocation.args, {
+        cwd,
+        env: buildSpawnEnv() as NodeJS.ProcessEnv,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true,
+        windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+      })
     } catch (err) {
       void rm(cwd, { recursive: true, force: true }).catch(() => undefined)
       resolve(finish('spawn_failed', err instanceof Error ? err.message : String(err)))
@@ -187,7 +187,16 @@ export async function probeAcpRuntime(
       if (!pendingHandshake) return
       const handshake = pendingHandshake
       pendingHandshake = null
-      done(finish('ok', `Handshake complete with ${handshake.agentName ?? 'an ACP agent'}.`, handshake))
+      const who = handshake.agentName ?? 'an ACP agent'
+      done(
+        finish(
+          'ok',
+          handshake.authRequired
+            ? `Handshake complete with ${who}, but it refused to open a session until this machine signs in.`
+            : `Handshake complete with ${who}.`,
+          handshake,
+        ),
+      )
     }
 
     let stderr = ''
@@ -254,6 +263,16 @@ export async function probeAcpRuntime(
         if (message.id === 2) {
           // An error here is ordinary — the agent may need auth, or may not
           // allow a session in an empty directory. The handshake still stands.
+          // One error is worth recording by name: ACP's authentication-
+          // required refusal (`-32000`), because its fix is a sign-in, not a
+          // reinstall, and the UI can say exactly that.
+          if (message.error && pendingHandshake) {
+            const code = (message.error as { code?: unknown }).code
+            const text = String(message.error.message ?? '')
+            if (code === -32000 && /auth/i.test(text)) {
+              pendingHandshake = { ...pendingHandshake, authRequired: true }
+            }
+          }
           if (!message.error && pendingHandshake) {
             const result = message.result ?? {}
             const modes = (result.modes ?? null) as
