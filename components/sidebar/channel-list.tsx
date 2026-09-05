@@ -12,9 +12,11 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { ChevronDown, ChevronRight, Users } from 'lucide-react'
+import { ChevronDown, ChevronRight, Plus, Users } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { registerChannelNames } from '@/lib/channel-name-cache'
+import { ChannelCreateDialog } from '@/components/teams/channel-create-dialog'
+import type { TeamAgentOption, TeamUserOption } from '@/components/teams/shared'
 import type { SidebarChannel, SidebarChannels } from './channels-data'
 
 /** Members rendered under one expanded channel before "+N more". */
@@ -22,10 +24,14 @@ const MEMBER_LIMIT = 6
 
 export function ChannelList({
   workspaceSlug,
+  workspaceId,
   data,
   activeChannelId,
+  agents,
+  users,
 }: {
   workspaceSlug: string
+  workspaceId: number
   /**
    * `undefined` means the layout is not passing channels yet, `null` means the
    * broker could not answer, and an empty `channels` array means this
@@ -35,6 +41,11 @@ export function ChannelList({
    */
   data: SidebarChannels | null | undefined
   activeChannelId: number | null
+  /** The "+" popup's rosters. Empty arrays rather than omitted — a workspace
+   * with nobody to add yet still gets a working (if empty) picker rather than
+   * losing the "+" button entirely. */
+  agents: TeamAgentOption[]
+  users: TeamUserOption[]
 }) {
   const teamsHref = `/workspace/${workspaceSlug}/teams`
 
@@ -50,13 +61,34 @@ export function ChannelList({
   return (
     <div className="mb-3">
       <div className="mb-1 flex items-center justify-between px-2">
-        <span className="text-xs font-medium text-black/40 dark:text-white/40">Channels</span>
+        {/* The label itself is now the way to the full Teams list — "All" used
+            to sit here as a separate link, but a "+" is far more useful in
+            that exact spot: it's the ONE thing the sidebar's channel section
+            couldn't do at all until now (open a channel-creation popup with
+            member/agent pickers, reusing the same dialog the Teams page
+            already built — see channel-create-dialog.tsx). */}
         <Link
           href={teamsHref}
-          className="rounded px-1 text-[11px] text-black/40 hover:bg-black/[.06] hover:text-black/70 dark:text-white/40 dark:hover:bg-white/[.08] dark:hover:text-white/70"
+          title="Browse all channels"
+          className="text-xs font-medium text-black/40 hover:text-black/70 dark:text-white/40 dark:hover:text-white/70"
         >
-          All
+          Channels
         </Link>
+        <ChannelCreateDialog
+          workspaceId={workspaceId}
+          workspaceSlug={workspaceSlug}
+          agents={agents}
+          users={users}
+          trigger={
+            <button
+              type="button"
+              title="New channel"
+              className="flex h-5 w-5 items-center justify-center rounded text-black/40 hover:bg-black/[.06] hover:text-black/70 dark:text-white/40 dark:hover:bg-white/[.08] dark:hover:text-white/70"
+            >
+              <Plus size={13} />
+            </button>
+          }
+        />
       </div>
 
       {data === undefined || data === null ? (

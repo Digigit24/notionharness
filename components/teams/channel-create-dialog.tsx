@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState, useTransition } from 'react'
+import { useMemo, useState, useTransition, type ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
 import { Bot, Crown, Hash, Lock, User, X } from 'lucide-react'
 import type { TeamWorkspaceMode } from '@/lib/broker'
@@ -59,11 +59,16 @@ export function ChannelCreateDialog({
   workspaceSlug,
   agents,
   users,
+  trigger,
 }: {
   workspaceId: number
   workspaceSlug: string
   agents: TeamAgentOption[]
   users: TeamUserOption[]
+  /** Defaults to the "New channel" button the Teams page uses. The sidebar's
+   * "+" icon passes its own compact trigger instead — same dialog, same
+   * submit, just a different way in. */
+  trigger?: ReactNode
 }) {
   const router = useRouter()
   const [open, setOpen] = useState(false)
@@ -157,10 +162,12 @@ export function ChannelCreateDialog({
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button type="button" size="sm">
-          <Hash size={14} />
-          New channel
-        </Button>
+        {trigger ?? (
+          <Button type="button" size="sm">
+            <Hash size={14} />
+            New channel
+          </Button>
+        )}
       </DialogTrigger>
       <DialogContent className="max-w-lg">
         <DialogHeader>

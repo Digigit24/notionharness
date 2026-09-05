@@ -38,6 +38,7 @@ import { openCommandBar } from '@/lib/command-bar-bus'
 import { NotificationsBell } from '@/components/notifications/notifications-bell'
 import { AmbientStatus } from '@/components/shell/ambient-status'
 import type { AmbientStatus as AmbientStatusData } from '@/app/(app)/workspace/[workspaceSlug]/actions'
+import type { TeamAgentOption, TeamUserOption } from '@/components/teams/shared'
 import { useSidebarAutoCollapse, useSidebarCollapsed } from '@/lib/keyboard/sidebar-collapse-store'
 import { createPage, deletePageForever, restorePage } from '@/app/(app)/actions'
 import type { Page, Workspace } from '@/payload-types'
@@ -140,6 +141,8 @@ export function Sidebar({
   unreadNotificationCount,
   ambientStatus,
   channels,
+  channelCreateAgents = [],
+  channelCreateUsers = [],
 }: {
   workspace: Workspace
   workspaces: Workspace[]
@@ -165,6 +168,12 @@ export function Sidebar({
    * first two are the third.
    */
   channels?: SidebarChannels | null
+  /** The sidebar's "+" channel-creation popup's rosters. Optional, same
+   * reasoning as `channels` above: the layout that resolves them is owned by
+   * another unit and may not pass them yet, so an absent prop degrades to an
+   * empty (but still functional) picker rather than a crash. */
+  channelCreateAgents?: TeamAgentOption[]
+  channelCreateUsers?: TeamUserOption[]
 }) {
   const router = useRouter()
   const pathname = usePathname()
@@ -612,7 +621,14 @@ export function Sidebar({
                 />
               ))}
             </nav>
-            <ChannelList workspaceSlug={workspace.slug} data={channels} activeChannelId={activeChannelId} />
+            <ChannelList
+              workspaceSlug={workspace.slug}
+              workspaceId={workspace.id}
+              data={channels}
+              activeChannelId={activeChannelId}
+              agents={channelCreateAgents}
+              users={channelCreateUsers}
+            />
             <div className="border-t border-black/5 pt-2 dark:border-white/10">
               <SessionsSection workspaceId={workspace.id} workspaceSlug={workspace.slug} />
             </div>

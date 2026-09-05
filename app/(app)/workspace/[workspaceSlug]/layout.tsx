@@ -100,28 +100,64 @@ export default async function WorkspaceLayout({
   const role = roleByWorkspace.get(workspace.id)
   if (!role || !workspaceRoleAllows(role, 'read')) notFound()
 
-  const [workspaces, pages, ambientStatus, unreadNotificationCount, channels] = await Promise.all([
-    payload.find({
-      collection: 'workspaces',
-      // The workspace switcher's list, out of the same query the check above
-      // already made — a switcher that offers a workspace the layout then 404s
-      // is worse than one that omits it, and this costs nothing extra.
-      where: { id: { in: memberWorkspaceIds } },
-      limit: 100,
-      sort: 'name',
-      overrideAccess: true,
-    }),
-    getSidebarPages(workspace.id),
-    getAmbientStatus(workspace.id),
-    getUnreadNotificationCount(),
-    // The Channels tab's rows and unread badges. Joins the existing Promise.all
-    // rather than adding a fifth sequential await, and it is three queries
-    // internally rather than one per channel — the sidebar renders on every
-    // page in the product, so an N+1 here would be the most-repeated one there
-    // is (D0). A failure degrades the tab to a "Browse channels" link instead
-    // of taking the whole shell down with it.
-    getSidebarChannels(workspace.id, currentUser.id).catch(() => null),
-  ])
+  const [workspaces, pages, ambientStatus, unreadNotificationCount, channels, channelCreateAgents, workspaceDoc] =
+    await Promise.all([
+      payload.find({
+        collection: 'workspaces',
+        // The workspace switcher's list, out of the same query the check above
+        // already made — a switcher that offers a workspace the layout then 404s
+        // is worse than one that omits it, and this costs nothing extra.
+        where: { id: { in: memberWorkspaceIds } },
+        limit: 100,
+        sort: 'name',
+        overrideAccess: true,
+      }),
+      getSidebarPages(workspace.id),
+      getAmbientStatus(workspace.id),
+      getUnreadNotificationCount(),
+      // The Channels tab's rows and unread badges. Joins the existing Promise.all
+      // rather than adding a fifth sequential await, and it is three queries
+      // internally rather than one per channel — the sidebar renders on every
+      // page in the product, so an N+1 here would be the most-repeated one there
+      // is (D0). A failure degrades the tab to a "Browse channels" link instead
+      // of taking the whole shell down with it.
+      getSidebarChannels(workspace.id, currentUser.id).catch(() => null),
+      // The sidebar's "+" channel-creation popup's agent roster — same query
+      // teams/page.tsx already runs for the full-page dialog. A failure
+      // degrades to an empty roster rather than breaking the shell.
+      payload
+        .find({
+          collection: 'agents',
+          where: { workspace: { equals: workspace.id }, enabled: { equals: true } },
+          sort: 'name',
+          limit: 200,
+          depth: 0,
+          overrideAccess: true,
+        })
+        .catch(() => null),
+      // The same popup's people roster comes off the workspace doc's
+      // owner/members, exactly as teams/page.tsx reads it below.
+      payload
+        .findByID({
+          collection: 'workspaces',
+          id: workspace.id,
+          depth: 1,
+          overrideAccess: true,
+          disableErrors: true,
+        })
+        .catch(() => null),
+    ])
+
+  const channelCreateUsersById = new Map<number, { id: number; name: string; email: string }>()
+  for (const candidate of [workspaceDoc?.owner, ...(workspaceDoc?.members ?? [])]) {
+    if (candidate && typeof candidate === 'object') {
+      channelCreateUsersById.set(candidate.id, {
+        id: candidate.id,
+        name: candidate.name || candidate.email,
+        email: candidate.email,
+      })
+    }
+  }
 
   return (
     <KeyboardProvider workspaceId={workspace.id} workspaceSlug={workspace.slug}>
@@ -135,6 +171,8 @@ export default async function WorkspaceLayout({
           unreadNotificationCount={unreadNotificationCount}
           ambientStatus={ambientStatus}
           channels={channels}
+          channelCreateAgents={channelCreateAgents?.docs.map((a) => ({ id: a.id, name: a.name })) ?? []}
+          channelCreateUsers={[...channelCreateUsersById.values()].sort((a, b) => a.name.localeCompare(b.name))}
         />
         <div className="flex min-w-0 flex-1 flex-col">
           {!HERMES_BASE_URL && <HermesNotConfiguredBanner />}
