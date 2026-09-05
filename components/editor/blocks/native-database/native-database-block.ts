@@ -9,7 +9,7 @@ import {
   type DataViewSelection,
   type DataViewWidgetProps,
 } from '@/lib/blocksuite-data-view'
-import { popMenu, popupTargetFromElement, menu } from '@/lib/blocksuite-affine-components'
+import { popMenu, popupTargetFromElement, menu, ensurePopupStylesInjected } from '@/lib/blocksuite-affine-components'
 import { computed, signal } from '@preact/signals-core'
 import { css, html, unsafeCSS } from 'lit'
 import type { NativeDatabaseBlockModel, NativeDatabaseSourceType } from './schema'
@@ -138,6 +138,15 @@ export class NativeDatabaseBlockComponent extends BlockComponent<NativeDatabaseB
   override connectedCallback() {
     super.connectedCallback()
     this.contentEditable = 'false'
+    // property-popup-polish — BlockSuite's own stock property-type picker
+    // (`@blocksuite/data-view`'s `database-header-column.js`) opens its popup
+    // through the REAL `@blocksuite/affine-components/context-menu` package
+    // directly, never through this app's `lib/blocksuite-affine-components`
+    // wrapper — so the wrapper's lazy, first-`popMenu`-call injection would
+    // never run before a user's very first action is opening that exact
+    // menu. This block is the one thing guaranteed to be connected before
+    // that menu can exist, so it forces the injection eagerly instead.
+    ensurePopupStylesInjected()
     const sourceType = this._effectiveSourceType
     if (sourceType === 'payload' && this.model.payloadCollection) void this._loadPayloadSource(this.model.payloadCollection)
     else if (sourceType === 'user-database' && this.model.userDatabaseId !== null) void this._loadUserDatabaseSource(this.model.userDatabaseId)

@@ -1,10 +1,11 @@
 import { propertyPresets, type PropertyMetaConfig, type TypeInstance } from '@/lib/blocksuite-data-view'
 import type { InsertToPosition } from '@/lib/blocksuite-affine-shared'
+import { popupTargetFromElement, type PopupTarget } from '@/lib/blocksuite-affine-components'
 import { computed, signal, type ReadonlySignal } from '@preact/signals-core'
 import { GenericDataSource, type GenericField, type GenericRecord } from './generic-data-source'
 import { showClientError } from '@/lib/client-notify'
-import { relationPropertyConfig } from './relation-property'
-import { formulaPropertyConfig, rollupPropertyConfig } from './computed-property'
+import { relationPropertyConfig, openRelationConfig } from './relation-property'
+import { formulaPropertyConfig, rollupPropertyConfig, openFormulaConfig, openRollupConfig } from './computed-property'
 import {
   evaluateComputed,
   keyOf,
@@ -73,6 +74,30 @@ function normalizeLegacyField(field: GenericField): GenericField {
     return { ...rest, options: data }
   }
   return field
+}
+
+/**
+ * Finds the rendered column-header element for a property so a follow-up
+ * config popup can anchor to it — same "no clean extension point, reach into
+ * BlockSuite's own DOM instead" posture `native-database/slash-menu.ts`
+ * documents for the slash menu, just at object- rather than string-identity:
+ * `affine-database-header-column` binds `.column` as a live JS property (not
+ * a reflected attribute), and it's the SAME `Property` object graph this data
+ * source's own `view.propertyGet(id)` returns (one module graph app-wide —
+ * see `lib/blocksuite-affine-components.ts`'s header on why that invariant
+ * matters), so matching on `.column.id` is exact, not a name/text guess.
+ * `document.querySelector` (not scoped to `this` block's own subtree) is the
+ * same pragmatic "one editor per page" stand-in already used elsewhere in
+ * this file (see `openRelatedRow`'s `[data-workspace-slug]` lookup).
+ */
+function findPropertyHeaderAnchor(propertyId: string): PopupTarget | null {
+  if (typeof document === 'undefined') return null
+  const columns = document.querySelectorAll('affine-database-header-column')
+  for (const el of columns) {
+    const withColumn = el as HTMLElement & { column?: { id?: string } }
+    if (withColumn.column?.id === propertyId) return popupTargetFromElement(withColumn)
+  }
+  return null
 }
 
 interface DatabaseDoc {
@@ -677,6 +702,69 @@ export class UserDatabaseDataSource extends GenericDataSource {
         : f,
     )
     this._persistFields()
+
+    if (toType === 'formula' || toType === 'rollup' || toType === 'relation') {
+      this._openConfigAfterTypeChange(propertyId, toType)
+    }
+  }
+
+  /**
+   * property-popup — WHY this exists: BlockSuite's own property-type picker
+   * (`@blocksuite/data-view`'s `core/common/property-menu.js`) calls
+   * `property.typeSet?.(type)` and stops — no lifecycle hook fires after a
+   * property becomes `formula`/`rollup`/`relation`, so a user picking one of
+   * these from the header dropdown had no way to discover that clicking into
+   * a CELL is what actually opens the real editor
+   * (`FormulaCellEditing`/`RollupCellEditing`/`RelationCellEditing`'s own
+   * `firstUpdated()`). `TableSingleView.propertyTypeSet` (the vendored
+   * source) just forwards to `dataSource.propertyTypeSet` — this method —
+   * making it the one, and only, place in this whole app that call funnels
+   * through, so it's the correct extension point rather than something
+   * reached for by convenience.
+   *
+   * Reuses the cell editors' own popup-building functions (never rewrites
+   * them — see each one's own comment on why) anchored at the column's
+   * HEADER, not a cell: at this moment there's no specific row in play yet,
+   * so this only ever drives the column-level half of relation's flow
+   * (target database + two-way), never `_pickRows` (a specific row's links).
+   * `queueMicrotask` lets BlockSuite's own type-picker submenu finish
+   * closing first (it closes synchronously, in the same click handler that
+   * called `typeSet`, per `sub-menu.js`'s `onComplete` chain) so this app's
+   * follow-up popup doesn't contend with the one being torn down.
+   *
+   * Select/multi-select share this exact same gap (confirmed by reading
+   * `@blocksuite/data-view/property-presets/select/cell-renderer.js`:
+   * `SelectCellEditing.firstUpdated()` also only opens its options editor on
+   * a cell click) but aren't wired up here — their editor is `popTagSelect`,
+   * an internal helper `@blocksuite/data-view` never exports from its public
+   * entry points (checked: absent from `index.js`/`property-presets.js`), so
+   * reaching it would mean a deep, unsupported import into vendored
+   * internals, unlike formula/rollup/relation, which are this app's OWN
+   * files it fully controls.
+   */
+  private _openConfigAfterTypeChange(propertyId: string, toType: 'formula' | 'rollup' | 'relation') {
+    queueMicrotask(() => {
+      const anchor = findPropertyHeaderAnchor(propertyId)
+      if (!anchor) return
+      const view = this.viewManager.viewGet('table-view')
+      // `view.propertyGet` returns the widest `Property<unknown, Record<
+      // string, unknown>>` — `Parameters<typeof openXConfig>[0]['property']`
+      // (not the unexported `PropertyHandle`/`ConfigHost` types themselves,
+      // which can't be named from outside `computed-property.ts`/
+      // `relation-property.ts`) narrows it back to what each opener actually
+      // declares, since this data source is the one that just set this exact
+      // field's type and knows which shape it now has.
+      if (toType === 'formula') {
+        const property = view.propertyGet(propertyId) as unknown as Parameters<typeof openFormulaConfig>[0]['property']
+        openFormulaConfig({ dataSource: this, property, anchor, onClose: () => undefined })
+      } else if (toType === 'rollup') {
+        const property = view.propertyGet(propertyId) as unknown as Parameters<typeof openRollupConfig>[0]['property']
+        openRollupConfig({ dataSource: this, property, anchor, onClose: () => undefined })
+      } else {
+        const property = view.propertyGet(propertyId) as unknown as Parameters<typeof openRelationConfig>[0]['property']
+        openRelationConfig({ dataSource: this, property, anchor, onClose: () => undefined })
+      }
+    })
   }
 
   propertyDataGet(propertyId: string): Record<string, unknown> {
@@ -691,6 +779,28 @@ export class UserDatabaseDataSource extends GenericDataSource {
         cardinality: field.options?.cardinality ?? 'many',
         twoWay: field.options?.twoWay ?? false,
         mirrorFieldId: field.options?.mirrorFieldId,
+      }
+    }
+    // property-popup — these two branches were MISSING entirely (this method
+    // fell through to the bare `{}` below for every formula/rollup field),
+    // which is why `FormulaCellEditing`/`RollupCellEditing` always reopened
+    // to an empty, unconfigured state even for a field someone had already
+    // filled in through this exact popup: `Property.data$` is `computed(()
+    // => view.propertyDataGet(id))` (see `PropertyBase` in
+    // `@blocksuite/data-view`), so whatever this returns for `expression`/
+    // `relationPropertyId`/etc. IS what the popup shows as "already set."
+    // `_computedSpecOf` below already read these same keys off `field.options`
+    // (via a cast, since `GenericField['options']` never declared them either
+    // — now fixed in `generic-data-source.ts`), so this is a read-path
+    // omission, not new field names invented for this fix.
+    if (field.type === 'formula') {
+      return { expression: field.options?.expression ?? '' }
+    }
+    if (field.type === 'rollup') {
+      return {
+        relationPropertyId: field.options?.relationPropertyId,
+        targetPropertyId: field.options?.targetPropertyId,
+        aggregation: field.options?.aggregation ?? 'count_values',
       }
     }
     return {}
@@ -715,6 +825,43 @@ export class UserDatabaseDataSource extends GenericDataSource {
       const cardinality = data.cardinality === 'one' ? 'one' : 'many'
       this._fields.value = this._fields.value.map((f) =>
         f.id === propertyId ? { ...f, options: { ...f.options, targetDatabaseId, cardinality } } : f,
+      )
+      this._persistFields()
+      return
+    }
+    // property-popup — the actual root cause behind "I cannot configure the
+    // formula or rollup [in the cell editor]": these two branches didn't
+    // exist, so `FormulaCellEditing`/`RollupCellEditing` calling
+    // `property.dataUpdate(...)` (see `computed-property.ts`) silently wrote
+    // nothing — this method just fell through and returned. Typing an
+    // expression and hitting Enter *looked* like it worked (the popup closed
+    // without an error) but nothing was ever persisted to `field.options`,
+    // so `_computedSpecOf` always saw an unconfigured field on the very next
+    // read. Merged onto existing `options` like `relation` above, not
+    // replaced wholesale, so e.g. picking a new aggregation doesn't clobber
+    // an already-chosen relation/target.
+    if (field.type === 'formula') {
+      const expression = typeof data.expression === 'string' ? data.expression : (field.options?.expression ?? '')
+      this._fields.value = this._fields.value.map((f) => (f.id === propertyId ? { ...f, options: { ...f.options, expression } } : f))
+      this._persistFields()
+      return
+    }
+    if (field.type === 'rollup') {
+      // NOT falling back to `field.options?.X` the way `expression`/`relation`
+      // above do: `PropertyBase.dataUpdate` (the only real caller — see
+      // `@blocksuite/data-view`'s `core/view-manager/property.js`) already
+      // merges the CURRENT `data$.value` with the updater's partial result
+      // before calling this method, so `data` here is already the complete
+      // desired state — including an explicit `targetPropertyId: undefined`
+      // from `openRollupRelationPicker`'s "changing the relation invalidates
+      // the target/aggregation answers" reset. Falling back to the old
+      // `field.options` value here would silently UNDO that reset, keeping
+      // a rollup pointed at a property in a database it no longer reads.
+      const relationPropertyId = typeof data.relationPropertyId === 'string' ? data.relationPropertyId : undefined
+      const targetPropertyId = typeof data.targetPropertyId === 'string' ? data.targetPropertyId : undefined
+      const aggregation = typeof data.aggregation === 'string' ? data.aggregation : undefined
+      this._fields.value = this._fields.value.map((f) =>
+        f.id === propertyId ? { ...f, options: { ...f.options, relationPropertyId, targetPropertyId, aggregation } } : f,
       )
       this._persistFields()
     }

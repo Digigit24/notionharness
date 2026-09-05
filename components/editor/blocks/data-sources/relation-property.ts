@@ -1,6 +1,6 @@
-import { popMenu, popupTargetFromElement, menu } from '@/lib/blocksuite-affine-components'
+import { popMenu, popupTargetFromElement, menu, type PopupTarget } from '@/lib/blocksuite-affine-components'
 import { BaseCellRenderer, createFromBaseCellRenderer, propertyType, t } from '@/lib/blocksuite-data-view'
-import { computed } from '@preact/signals-core'
+import { computed, type ReadonlySignal } from '@preact/signals-core'
 import { html } from 'lit/static-html.js'
 import type { UserDatabaseDataSource } from './user-database-data-source'
 
@@ -111,60 +111,123 @@ class RelationChips extends BaseCellRenderer<string[], RelationPropertyData> {
 
 export class RelationCell extends RelationChips {}
 
+/**
+ * The minimal slice of a BlockSuite `Property` these config-openers need —
+ * not imported from `@blocksuite/data-view` because `Property<Value, Data>`
+ * isn't part of that package's public export surface (see the identical
+ * comment in `computed-property.ts`, which hit the same gap first).
+ */
+interface PropertyHandle<Data extends Record<string, unknown>> {
+  readonly id: string
+  readonly data$: ReadonlySignal<Data>
+  dataUpdate(updater: (data: Data) => Partial<Data>): void
+}
+
+/**
+ * NOTION-PARITY/property-popup — same motivation as `computed-property.ts`'s
+ * `ConfigHost`: BlockSuite's property-type picker only ever calls
+ * `property.typeSet?.('relation')`, with no follow-up, so picking Relation
+ * from the header dropdown left a column with no target database and no
+ * visible way to set one short of clicking a cell. `openRelationConfig`
+ * below reuses `_pickTargetDatabase`/`_configureRelation`'s exact popups —
+ * pulled out to take an explicit `anchor`/`onClose` — from BOTH the cell's
+ * `firstUpdated()` and `UserDatabaseDataSource.propertyTypeSet`. Deliberately
+ * NOT reused for `_pickRows`: that step assigns row ids to one specific
+ * cell's value, which only makes sense once a row is in play — the
+ * header-triggered flow stops at the column-level half (target database +
+ * two-way), which is the actual "configuration."
+ */
+interface RelationConfigHost {
+  dataSource: UserDatabaseDataSource
+  property: PropertyHandle<RelationPropertyData>
+  anchor: PopupTarget
+  onClose: () => void
+  track?: (close: () => void) => void
+}
+
+function openRelationTargetDatabasePicker(host: RelationConfigHost, afterConfigured: (targetId: number) => void) {
+  const { dataSource, property, anchor, onClose, track } = host
+  void dataSource.listDatabases().then((databases) => {
+    const handler = popMenu(anchor, {
+      options: {
+        title: { text: 'Link to database' },
+        search: { placeholder: 'Search databases…' },
+        items: databases.map((d) =>
+          menu.action({
+            name: d.name,
+            select: () => {
+              property.dataUpdate((data) => ({ ...data, targetDatabaseId: d.id }))
+              openRelationTypeConfig(host, d.id, afterConfigured)
+            },
+          }),
+        ),
+        onClose,
+      },
+    })
+    track?.(handler.close)
+  })
+}
+
+/** NOTION-PARITY 7 — one-way/two-way toggle, shown right after picking a
+ * target database (first-time setup) and reachable again later via the
+ * "⚙" affordance next to an already-configured field's chips (or, now, right
+ * after picking Relation as the type). `afterConfigured` is what differs by
+ * caller: a cell chains into `_pickRows` (assign THIS row's links); the
+ * header-triggered flow just finishes. */
+function openRelationTypeConfig(host: RelationConfigHost, targetId: number, afterConfigured: (targetId: number) => void) {
+  const { dataSource, property, anchor, track } = host
+  let twoWay = property.data$.value.twoWay ?? false
+  const handler = popMenu(anchor, {
+    options: {
+      title: { text: 'Relationship' },
+      items: [
+        menu.toggleSwitch({
+          name: 'Two-way',
+          on: twoWay,
+          label: () => html`Show on linked database`,
+          onChange: (on) => {
+            twoWay = on
+            void dataSource.setRelationTwoWay(property.id, on).catch((err) => {
+              console.error('[relation] failed to toggle two-way sync', err)
+            })
+          },
+        }),
+      ],
+      onClose: () => afterConfigured(targetId),
+    },
+  })
+  track?.(handler.close)
+}
+
+/** Entry point for `UserDatabaseDataSource.propertyTypeSet` — see
+ * `RelationConfigHost`'s comment on why this stops short of `_pickRows`. */
+export function openRelationConfig(host: RelationConfigHost) {
+  const targetId = host.property.data$.value.targetDatabaseId
+  if (targetId) openRelationTypeConfig(host, targetId, () => host.onClose())
+  else openRelationTargetDatabasePicker(host, () => host.onClose())
+}
+
 export class RelationCellEditing extends RelationChips {
   private get _value(): string[] {
     return Array.isArray(this.value) ? this.value : []
   }
 
-  private _pickTargetDatabase() {
-    void this._dataSource.listDatabases().then((databases) => {
-      const handler = popMenu(popupTargetFromElement(this), {
-        options: {
-          title: { text: 'Link to database' },
-          search: { placeholder: 'Search databases…' },
-          items: databases.map((d) =>
-            menu.action({
-              name: d.name,
-              select: () => {
-                this.property.dataUpdate((data) => ({ ...data, targetDatabaseId: d.id }))
-                this._configureRelation(d.id)
-              },
-            }),
-          ),
-          onClose: () => this.selectCurrentCell(false),
-        },
-      })
-      this._disposables.add(handler.close)
-    })
+  private _host(): RelationConfigHost {
+    return {
+      dataSource: this._dataSource,
+      property: this.property,
+      anchor: popupTargetFromElement(this),
+      onClose: () => this.selectCurrentCell(false),
+      track: (close) => this._disposables.add(close),
+    }
   }
 
-  /** NOTION-PARITY 7 — one-way/two-way toggle, shown right after picking a
-   * target database (first-time setup) and reachable again later via the
-   * "⚙" affordance next to an already-configured field's chips. Closing this
-   * popup (click-away/Escape) chains straight into `_pickRows` so setup
-   * flows as one motion the first time, without forcing a second click. */
+  private _pickTargetDatabase() {
+    openRelationTargetDatabasePicker(this._host(), (targetId) => this._pickRows(targetId))
+  }
+
   private _configureRelation(targetId: number) {
-    let twoWay = this.property.data$.value.twoWay ?? false
-    const handler = popMenu(popupTargetFromElement(this), {
-      options: {
-        title: { text: 'Relationship' },
-        items: [
-          menu.toggleSwitch({
-            name: 'Two-way',
-            on: twoWay,
-            label: () => html`Show on linked database`,
-            onChange: (on) => {
-              twoWay = on
-              void this._dataSource.setRelationTwoWay(this.property.id, on).catch((err) => {
-                console.error('[relation] failed to toggle two-way sync', err)
-              })
-            },
-          }),
-        ],
-        onClose: () => this._pickRows(targetId),
-      },
-    })
-    this._disposables.add(handler.close)
+    openRelationTypeConfig(this._host(), targetId, (id) => this._pickRows(id))
   }
 
   private _pickRows(targetId: number) {

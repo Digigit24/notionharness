@@ -46,6 +46,24 @@ export interface GenericField {
      * doc comment for the one-way/two-way design. */
     twoWay?: boolean
     mirrorFieldId?: string
+    /** property-popup — only meaningful when `type === 'formula'`. The
+     * formula's expression text, round-tripped through
+     * `UserDatabaseDataSource.propertyDataGet`/`propertyDataSet` (the
+     * `Property.data$`/`dataUpdate` binding `computed-property.ts`'s
+     * `openFormulaConfig` writes through) and read back out by
+     * `UserDatabaseDataSource._computedSpecOf` for `lib/database/computed.ts`
+     * to evaluate. Added here because `_computedSpecOf` already expected it
+     * at runtime (via an `as Record<string, unknown>` cast) despite this
+     * type never having declared it — the getter/setter had no branch for
+     * `formula`/`rollup` at all, so a configured expression was silently
+     * discarded on write and always read back empty. */
+    expression?: string
+    /** property-popup — only meaningful when `type === 'rollup'`; same
+     * round-trip and same pre-existing gap as `expression` above. See
+     * `computed-property.ts`'s `RollupPropertyData` for what each answers. */
+    relationPropertyId?: string
+    targetPropertyId?: string
+    aggregation?: string
   }
   /** This field is the backend's own "primary"/title column, if it has that
    * concept (Teable does; a plain user database may not). Used to seed the
